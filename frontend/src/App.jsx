@@ -1551,7 +1551,7 @@ function AssessmentLanding({ onStart }) {
           <svg viewBox="0 0 400 50" className="check-ecg-svg" fill="none">
             <polyline
               points="0,30 60,30 80,30 90,10 100,45 110,18 120,35 140,30 200,30 210,30 220,8 230,42 240,20 250,35 260,30 320,30 340,30 350,12 360,44 370,20 380,33 400,30"
-              stroke="rgba(255,255,255,0.35)"
+              stroke="#2E8B57"
               strokeWidth="2"
               strokeLinecap="round"
               strokeLinejoin="round"
