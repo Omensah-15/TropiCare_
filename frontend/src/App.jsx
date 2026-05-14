@@ -1540,6 +1540,11 @@ function AssessmentLanding({ onStart }) {
             </div>
           </div>
           <div className="check-hero-text">
+            <div
+              style={{
+              textAlign: "center",
+              }}
+             >
             <div className="t-display" style={{ color: "#000", fontSize: 28 }}>Symptom Assessment</div>
             <div style={{ color: "rgba(0,0,0,0.72)", fontSize: 14, marginTop: 6, lineHeight: 1.5 }}>
               Answer a short set of questions to receive a result
