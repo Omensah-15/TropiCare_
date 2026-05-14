@@ -1513,11 +1513,9 @@ function HomeScreen({ user, onStart, onNav }) {
 }
 
 // ─────────────────────────────────────────────
-// ASSESSMENT LANDING — animated, beautiful
+// ASSESSMENT LANDING — clean static hero
 // ─────────────────────────────────────────────
 function AssessmentLanding({ onStart }) {
-  const [visible, setVisible] = useState(false);
-  useEffect(() => { const t = setTimeout(() => setVisible(true), 60); return () => clearTimeout(t); }, []);
 
   const features = [
     { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "#0d9488", bg: "#f0fdfa" },
@@ -1527,25 +1525,39 @@ function AssessmentLanding({ onStart }) {
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      {/* Animated hero */}
+      
+      {/* Static hero */}
       <div className="check-hero">
         <div className="check-hero-bg" />
-        <div className={`check-hero-content${visible ? " visible" : ""}`}>
+
+        <div className="check-hero-content">
           <div className="check-doctor-wrap">
-            <div className="check-pulse-ring check-pulse-1" />
-            <div className="check-pulse-ring check-pulse-2" />
-            <div className="check-pulse-ring check-pulse-3" />
             <div className="check-doctor-circle">
               <IllusDoctor />
             </div>
           </div>
+
           <div className="check-hero-text" style={{ textAlign: "center" }}>
-            <div className="t-display" style={{ color: "#000", fontSize: 28 }}>Symptom Assessment</div>
-            <div style={{ color: "rgba(0,0,0,0.72)", fontSize: 14, marginTop: 6, lineHeight: 1.5 }}>
+            <div
+              className="t-display"
+              style={{ color: "#000", fontSize: 28 }}
+            >
+              Symptom Assessment
+            </div>
+
+            <div
+              style={{
+                color: "rgba(0,0,0,0.72)",
+                fontSize: 14,
+                marginTop: 6,
+                lineHeight: 1.5,
+              }}
+            >
               Answer a short set of questions to receive a result
             </div>
           </div>
         </div>
+
         {/* ECG line decoration */}
         <div className="check-ecg-wrap">
           <svg viewBox="0 0 400 50" className="check-ecg-svg" fill="none">
