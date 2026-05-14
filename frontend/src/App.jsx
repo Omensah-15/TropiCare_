@@ -1235,7 +1235,6 @@ function AuthScreen({ onLogin, toast }) {
 
         <div className="auth-foot">
           TropiCare · Symptom Checker for Tropical Diseases<br />
-          For informational purposes only — not a substitute for medical advice
         </div>
       </div>
     </div>
