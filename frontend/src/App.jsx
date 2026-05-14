@@ -10,8 +10,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 // ─────────────────────────────────────────────
 const API_BASE = "https://tropicare.onrender.com/api/v1";
 
-import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
-
 // ─────────────────────────────────────────────
 // API CLIENT
 // ─────────────────────────────────────────────
@@ -430,9 +428,12 @@ const injectStyles = () => {
 
     .disease-grid { display: flex; flex-wrap: wrap; gap: 6px; }
 
-    .landing-illus { text-align: center; padding: 12px 0 24px; }
-    .landing-illus svg { animation: float 3s ease-in-out infinite; }
-    @keyframes float { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-9px);} }
+    /* Assessment landing */
+    .al-hero { background: linear-gradient(135deg, var(--teal-xl) 0%, #e0f2fe 100%); border-radius: var(--radius-l); padding: 28px 24px 24px; margin-bottom: 16px; display: flex; gap: 20px; align-items: center; }
+    @media (max-width: 480px) { .al-hero { flex-direction: column; text-align: center; } }
+    .al-hero-text { flex: 1; }
+    .al-hero-illus { flex-shrink: 0; width: 120px; height: 140px; }
+
     .feat-list { display: flex; flex-direction: column; gap: 0; }
     .feat-row  { display: flex; align-items: flex-start; gap: 14px; padding: 14px 0; }
     .feat-row + .feat-row { border-top: 1px solid var(--border); }
@@ -447,7 +448,6 @@ const injectStyles = () => {
     .q-body     { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 20px; }
     .q-cat-pill { display: inline-flex; padding: 4px 12px; background: var(--teal-xl); color: var(--teal); border-radius: 99px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 20px; }
     .q-illus    { width: 160px; height: 160px; margin-bottom: 24px; }
-    .q-illus img { width: 100%; height: 100%; object-fit: contain; border-radius: var(--radius); }
     .q-illus-svg { width: 100%; height: 100%; }
     .q-text     { font-family: var(--display); font-size: 22px; font-weight: 700; color: var(--ink); text-align: center; line-height: 1.35; margin-bottom: 32px; max-width: 320px; }
     .q-answers  { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 340px; }
@@ -547,80 +547,117 @@ const injectStyles = () => {
 
 // ─────────────────────────────────────────────
 // MEDICAL HEART LOGO SVG
-// Minimal, clean ECG-heart hybrid mark
 // ─────────────────────────────────────────────
 function MedicalHeartMark({ size = 22, color = "#fff" }) {
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      {/* Heart path */}
-      <path
-        d="M12 21C12 21 3 14.5 3 8.5C3 5.42 5.42 3 8.5 3C10.24 3 11.91 3.81 13 5.08C14.09 3.81 15.76 3 17.5 3C20.58 3 23 5.42 23 8.5C23 14.5 12 21 12 21Z"
-        fill={color}
-        opacity="0.92"
-      />
-      {/* ECG pulse line across heart */}
-      <polyline
-        points="6,12 8.5,12 9.5,9 10.5,15 11.5,10.5 12.5,13 13.2,12 15.5,12 17.5,12"
-        stroke="#0d9488"
-        strokeWidth="1.3"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 21C12 21 3 14.5 3 8.5C3 5.42 5.42 3 8.5 3C10.24 3 11.91 3.81 13 5.08C14.09 3.81 15.76 3 17.5 3C20.58 3 23 5.42 23 8.5C23 14.5 12 21 12 21Z" fill={color} opacity="0.92" />
+      <polyline points="6,12 8.5,12 9.5,9 10.5,15 11.5,10.5 12.5,13 13.2,12 15.5,12 17.5,12" stroke="#0d9488" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
     </svg>
   );
 }
 
-// Larger version for auth screen
 function MedicalHeartLarge({ size = 32, color = "#fff" }) {
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 32 32"
-      fill="none"
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      <path
-        d="M16 28C16 28 4 19.5 4 11.5C4 7.36 7.36 4 11.5 4C13.72 4 15.78 5.01 17.2 6.66C18.62 5.01 20.68 4 22.9 4C27.04 4 30.4 7.36 30.4 11.5C30.4 19.5 16 28 16 28Z"
-        fill={color}
-        opacity="0.9"
-      />
-      <polyline
-        points="8,16 11,16 12.5,12 14,20 15.5,14 16.5,17 17.5,16 20,16 23,16"
-        stroke="#0d9488"
-        strokeWidth="1.6"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M16 28C16 28 4 19.5 4 11.5C4 7.36 7.36 4 11.5 4C13.72 4 15.78 5.01 17.2 6.66C18.62 5.01 20.68 4 22.9 4C27.04 4 30.4 7.36 30.4 11.5C30.4 19.5 16 28 16 28Z" fill={color} opacity="0.9" />
+      <polyline points="8,16 11,16 12.5,12 14,20 15.5,14 16.5,17 17.5,16 20,16 23,16" stroke="#0d9488" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
     </svg>
   );
 }
 
-// Splash screen version
 function MedicalHeartSplash() {
   return (
     <svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path
-        d="M22 38C22 38 6 27 6 16C6 10.48 10.48 6 16 6C18.9 6 21.56 7.38 23.2 9.6C24.84 7.38 27.5 6 30.4 6C35.92 6 40 10.48 40 16C40 27 22 38 22 38Z"
-        fill="white"
-        opacity="0.9"
-      />
-      <polyline
-        points="10,22 15,22 17,16 19,28 21,19 23,24 25,22 29,22 34,22"
-        stroke="#0d9488"
-        strokeWidth="2"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        fill="none"
-      />
+      <path d="M22 38C22 38 6 27 6 16C6 10.48 10.48 6 16 6C18.9 6 21.56 7.38 23.2 9.6C24.84 7.38 27.5 6 30.4 6C35.92 6 40 10.48 40 16C40 27 22 38 22 38Z" fill="white" opacity="0.9" />
+      <polyline points="10,22 15,22 17,16 19,28 21,19 23,24 25,22 29,22 34,22" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────
+// HEALTH PROFESSIONAL SVG ILLUSTRATION
+// A detailed, clean doctor/clinician figure
+// ─────────────────────────────────────────────
+function HealthProfessionalIllus({ width = 120, height = 140 }) {
+  return (
+    <svg width={width} height={height} viewBox="0 0 120 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+      {/* Background circle */}
+      <circle cx="60" cy="70" r="58" fill="#e0f2f1" />
+
+      {/* Lab coat / body */}
+      <rect x="30" y="72" width="60" height="60" rx="18" fill="#ffffff" />
+      {/* Coat lapels */}
+      <path d="M60 72 L45 80 L45 110 L60 104 L75 110 L75 80 Z" fill="#f0fdfa" stroke="#b2dfdb" strokeWidth="1" />
+      {/* Coat left panel */}
+      <rect x="30" y="72" width="30" height="60" rx="0" fill="#ffffff" opacity="0.5" />
+
+      {/* Stethoscope */}
+      <path d="M48 82 Q44 90 44 98 Q44 106 52 106 Q60 106 60 98" stroke="#0d9488" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+      <circle cx="60" cy="99" r="5" fill="#0d9488" />
+      <circle cx="60" cy="99" r="2.5" fill="#ccfbf1" />
+      {/* Earpieces */}
+      <line x1="48" y1="82" x2="45" y2="78" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" />
+      <line x1="45" y1="78" x2="42" y2="76" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="42" cy="75" r="2" fill="#0d9488" />
+
+      {/* ID badge */}
+      <rect x="64" y="84" width="18" height="12" rx="3" fill="#e0f2f1" stroke="#b2dfdb" strokeWidth="1" />
+      <rect x="66" y="86" width="10" height="2" rx="1" fill="#0d9488" opacity="0.6" />
+      <rect x="66" y="90" width="7" height="1.5" rx="0.75" fill="#94a3b8" />
+      <rect x="66" y="93" width="9" height="1.5" rx="0.75" fill="#94a3b8" />
+
+      {/* Neck */}
+      <rect x="53" y="58" width="14" height="18" rx="5" fill="#f5cba7" />
+
+      {/* Head */}
+      <ellipse cx="60" cy="46" rx="22" ry="24" fill="#f5cba7" />
+
+      {/* Hair */}
+      <path d="M38 42 Q38 22 60 22 Q82 22 82 42 Q82 34 60 32 Q38 34 38 42 Z" fill="#4a3728" />
+      {/* Hair sides */}
+      <path d="M38 42 Q36 48 38 54 Q40 44 42 42 Z" fill="#4a3728" />
+      <path d="M82 42 Q84 48 82 54 Q80 44 78 42 Z" fill="#4a3728" />
+
+      {/* Eyes */}
+      <ellipse cx="52" cy="46" rx="3.5" ry="4" fill="#fff" />
+      <ellipse cx="68" cy="46" rx="3.5" ry="4" fill="#fff" />
+      <circle cx="53" cy="47" r="2" fill="#3d2b1f" />
+      <circle cx="69" cy="47" r="2" fill="#3d2b1f" />
+      <circle cx="54" cy="46" r="0.7" fill="#fff" />
+      <circle cx="70" cy="46" r="0.7" fill="#fff" />
+
+      {/* Eyebrows */}
+      <path d="M49 41 Q52 39 56 41" stroke="#4a3728" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+      <path d="M65 41 Q68 39 72 41" stroke="#4a3728" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+
+      {/* Nose */}
+      <path d="M59 50 Q57 54 59 56 Q61 56 63 54 Q61 53 59 50 Z" fill="#e8a87c" opacity="0.7" />
+
+      {/* Smile */}
+      <path d="M53 60 Q60 65 67 60" stroke="#c9785c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+
+      {/* Ears */}
+      <ellipse cx="38" cy="48" rx="4" ry="6" fill="#f5cba7" />
+      <ellipse cx="82" cy="48" rx="4" ry="6" fill="#f5cba7" />
+
+      {/* Arms */}
+      <rect x="18" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1" />
+      <rect x="88" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1" />
+      {/* Hands */}
+      <ellipse cx="25" cy="118" rx="7" ry="6" fill="#f5cba7" />
+      <ellipse cx="95" cy="118" rx="7" ry="6" fill="#f5cba7" />
+
+      {/* Clipboard in right hand */}
+      <rect x="87" y="100" width="18" height="22" rx="3" fill="#fff" stroke="#0d9488" strokeWidth="1.5" />
+      <rect x="92" y="97" width="8" height="5" rx="2" fill="#0d9488" />
+      <line x1="90" y1="107" x2="102" y2="107" stroke="#94a3b8" strokeWidth="1" />
+      <line x1="90" y1="111" x2="102" y2="111" stroke="#94a3b8" strokeWidth="1" />
+      <line x1="90" y1="115" x2="98" y2="115" stroke="#94a3b8" strokeWidth="1" />
+
+      {/* Cross on coat */}
+      <rect x="56" y="88" width="8" height="2.5" rx="1.25" fill="#0d9488" opacity="0.8" />
+      <rect x="58.75" y="85.25" width="2.5" height="8" rx="1.25" fill="#0d9488" opacity="0.8" />
     </svg>
   );
 }
@@ -755,18 +792,6 @@ const CATEGORY_ILLUS = {
 // QUESTION ILLUSTRATION
 // ─────────────────────────────────────────────
 function QuestionIllus({ question }) {
-  const imgPath = question ? SYMPTOM_IMAGES[question.id] : null;
-  const catPath = question ? getCategoryImage(question.category) : null;
-  const src = imgPath || catPath;
-
-  if (src) {
-    return (
-      <div className="q-illus">
-        <img src={src} alt={question?.category || "symptom"} />
-      </div>
-    );
-  }
-
   const Comp = question ? (CATEGORY_ILLUS[question.category] || IllusDoctor) : IllusDoctor;
   return (
     <div className="q-illus">
@@ -776,27 +801,24 @@ function QuestionIllus({ question }) {
 }
 
 // ─────────────────────────────────────────────
-// ICONS — proper Lucide-style SVG icons, no emojis
+// ICONS
 // ─────────────────────────────────────────────
 function Icon({ name, size = 18, color = "currentColor", className = "" }) {
   const s = { width: size, height: size, flexShrink: 0 };
   const props = { viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", style: s, className };
 
   switch (name) {
-    // Home — solid house with chimney feel
     case "home": return (
       <svg {...props}>
         <path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z" />
         <path d="M9 21V12h6v9" />
       </svg>
     );
-    // Stethoscope for Check/Assessment
     case "activity": return (
       <svg {...props}>
         <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
       </svg>
     );
-    // Stethoscope icon
     case "stethoscope": return (
       <svg {...props}>
         <path d="M4.8 2.3A.3.3 0 105 2H4a2 2 0 00-2 2v5a6 6 0 006 6 6 6 0 006-6V4a2 2 0 00-2-2h-1a.2.2 0 10.3.3" />
@@ -804,7 +826,6 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <circle cx="20" cy="10" r="2" />
       </svg>
     );
-    // Clipboard with lines — Records
     case "clipboard": return (
       <svg {...props}>
         <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
@@ -812,27 +833,23 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <path d="M12 11h4M12 16h4M8 11h.01M8 16h.01" />
       </svg>
     );
-    // User with circle head
     case "user": return (
       <svg {...props}>
         <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
         <circle cx="12" cy="7" r="4" />
       </svg>
     );
-    // Settings gear with spokes
     case "settings": return (
       <svg {...props}>
         <circle cx="12" cy="12" r="3" />
         <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
       </svg>
     );
-    // Heart
     case "heart": return (
       <svg {...props}>
         <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
       </svg>
     );
-    // Alert triangle
     case "alert": return (
       <svg {...props}>
         <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
@@ -840,7 +857,6 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <line x1="12" y1="17" x2="12.01" y2="17" />
       </svg>
     );
-    // Info circle
     case "info": return (
       <svg {...props}>
         <circle cx="12" cy="12" r="10" />
@@ -848,20 +864,17 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <line x1="12" y1="8" x2="12.01" y2="8" />
       </svg>
     );
-    // Check mark
     case "check": return (
       <svg {...props}>
         <polyline points="20 6 9 17 4 12" />
       </svg>
     );
-    // X / close
     case "x": return (
       <svg {...props}>
         <line x1="18" y1="6" x2="6" y2="18" />
         <line x1="6" y1="6" x2="18" y2="18" />
       </svg>
     );
-    // Log out
     case "logout": return (
       <svg {...props}>
         <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
@@ -869,26 +882,22 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <line x1="21" y1="12" x2="9" y2="12" />
       </svg>
     );
-    // Chevron right
     case "chevR": return (
       <svg {...props}>
         <polyline points="9 18 15 12 9 6" />
       </svg>
     );
-    // Chevron left
     case "chevL": return (
       <svg {...props}>
         <polyline points="15 18 9 12 15 6" />
       </svg>
     );
-    // Edit / pencil
     case "edit": return (
       <svg {...props}>
         <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
         <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
       </svg>
     );
-    // Trash
     case "trash": return (
       <svg {...props}>
         <polyline points="3 6 5 6 21 6" />
@@ -897,20 +906,17 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <path d="M9 6V4h6v2" />
       </svg>
     );
-    // Search
     case "search": return (
       <svg {...props}>
         <circle cx="11" cy="11" r="8" />
         <line x1="21" y1="21" x2="16.65" y2="16.65" />
       </svg>
     );
-    // Shield
     case "shield": return (
       <svg {...props}>
         <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
       </svg>
     );
-    // Database
     case "database": return (
       <svg {...props}>
         <ellipse cx="12" cy="5" rx="9" ry="3" />
@@ -918,21 +924,18 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
       </svg>
     );
-    // Bell
     case "bell": return (
       <svg {...props}>
         <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
         <path d="M13.73 21a2 2 0 01-3.46 0" />
       </svg>
     );
-    // Eye
     case "eye": return (
       <svg {...props}>
         <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
         <circle cx="12" cy="12" r="3" />
       </svg>
     );
-    // Eye off
     case "eyeOff": return (
       <svg {...props}>
         <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94" />
@@ -940,7 +943,6 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <line x1="1" y1="1" x2="23" y2="23" />
       </svg>
     );
-    // Calendar
     case "calendar": return (
       <svg {...props}>
         <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
@@ -949,13 +951,11 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <line x1="3" y1="10" x2="21" y2="10" />
       </svg>
     );
-    // Pulse / waveform for Check tab
     case "pulse": return (
       <svg {...props}>
         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
       </svg>
     );
-    // File text for Records
     case "file-text": return (
       <svg {...props}>
         <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
@@ -965,7 +965,6 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <polyline points="10 9 9 9 8 9" />
       </svg>
     );
-    // Sliders for settings
     case "sliders": return (
       <svg {...props}>
         <line x1="4" y1="21" x2="4" y2="14" />
@@ -979,7 +978,6 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
         <line x1="17" y1="16" x2="23" y2="16" />
       </svg>
     );
-    // plus
     case "plus": return (
       <svg {...props}>
         <line x1="12" y1="5" x2="12" y2="19" />
@@ -1034,7 +1032,6 @@ export default function App() {
   const [notif,      setNotif]      = useState("");
   const [detailRec,  setDetailRec]  = useState(null);
 
-  // Assessment state
   const [assActive,  setAssActive]  = useState(false);
   const [answers,    setAnswers]    = useState({});
   const [asked,      setAsked]      = useState([]);
@@ -1052,7 +1049,6 @@ export default function App() {
     _notifTimer = setTimeout(() => setNotif(""), 2600);
   }, []);
 
-  // Restore session on mount
   useEffect(() => {
     const t1 = setTimeout(() => setSplashFade(true), 1900);
     const t2 = setTimeout(() => {
@@ -1082,7 +1078,6 @@ export default function App() {
     toast("Signed out successfully.");
   };
 
-  // ── Assessment ──
   const startAssessment = async () => {
     setAnswers({}); setAsked([]); setQIdx(0);
     setResult(null); setAnalyzing(false); setSessionId(null);
@@ -1158,7 +1153,6 @@ export default function App() {
     setPage("home");
   };
 
-  // ── Render ──
   if (splash) {
     return (
       <div className={`splash${splashFade ? " fading" : ""}`}>
@@ -1219,7 +1213,6 @@ export default function App() {
     <div className="shell">
       <Notif msg={notif} />
 
-      {/* Sidebar — desktop */}
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="brand-mark">
@@ -1254,12 +1247,10 @@ export default function App() {
         </div>
       </aside>
 
-      {/* Main content */}
       <main className="main">
         <div className="page">{renderPage()}</div>
       </main>
 
-      {/* Bottom nav — mobile */}
       <nav className="bottom-nav">
         {navItems.map((n) => (
           <button
@@ -1334,45 +1325,24 @@ function AuthScreen({ onLogin, toast }) {
           {mode === "register" && (
             <div className="field">
               <label className="field-label">Full Name</label>
-              <input
-                className="field-input"
-                placeholder="e.g. Kofi Mensah"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
+              <input className="field-input" placeholder="e.g. Kofi Mensah" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
           )}
 
           <div className="field">
             <label className="field-label">Email Address</label>
-            <input
-              className="field-input"
-              type="email"
-              placeholder="you@email.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
+            <input className="field-input" type="email" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
 
           {mode === "register" && (
             <div className="grid-2">
               <div className="field">
                 <label className="field-label">Age</label>
-                <input
-                  className="field-input"
-                  type="number"
-                  placeholder="25"
-                  value={age}
-                  onChange={(e) => setAge(e.target.value)}
-                />
+                <input className="field-input" type="number" placeholder="25" value={age} onChange={(e) => setAge(e.target.value)} />
               </div>
               <div className="field">
                 <label className="field-label">Gender</label>
-                <select
-                  className="field-input field-select"
-                  value={gender}
-                  onChange={(e) => setGender(e.target.value)}
-                >
+                <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
                   <option value="">Select</option>
                   <option>Male</option>
                   <option>Female</option>
@@ -1400,17 +1370,13 @@ function AuthScreen({ onLogin, toast }) {
             </div>
           </div>
 
-          <button
-            className="btn btn-primary btn-full btn-lg mt-2"
-            onClick={submit}
-            disabled={loading}
-          >
+          <button className="btn btn-primary btn-full btn-lg mt-2" onClick={submit} disabled={loading}>
             {loading ? "Please wait..." : mode === "login" ? "Sign In" : "Create Account"}
           </button>
         </div>
 
         <div className="auth-foot">
-          TropiCare · Symptom Checker for Tropical Diseases<br />
+          TropiCare · Symptom Checker for Tropical Diseases
         </div>
       </div>
     </div>
@@ -1447,7 +1413,6 @@ function HomeScreen({ user, onStart, onNav }) {
         <div className="avatar">{(user?.name || "P")[0].toUpperCase()}</div>
       </div>
 
-      {/* Hero */}
       <div className="hero-card">
         <div className="hero-bg-icon">
           <Icon name="heart" size={110} color="#fff" />
@@ -1460,7 +1425,6 @@ function HomeScreen({ user, onStart, onNav }) {
         </button>
       </div>
 
-      {/* Stats */}
       <div className="stats-row">
         {stats.map((s) => (
           <div key={s.label} className="stat-card">
@@ -1473,7 +1437,6 @@ function HomeScreen({ user, onStart, onNav }) {
         ))}
       </div>
 
-      {/* Recent assessments */}
       {records.length > 0 && (
         <div className="section">
           <div className="section-ttl">Recent Assessments</div>
@@ -1494,7 +1457,6 @@ function HomeScreen({ user, onStart, onNav }) {
         </div>
       )}
 
-      {/* Disease coverage */}
       <div className="section">
         <div className="section-ttl">Disease Coverage</div>
         <div className="card card-p">
@@ -1513,93 +1475,6 @@ function HomeScreen({ user, onStart, onNav }) {
 }
 
 // ─────────────────────────────────────────────
-// HEALTH PROFESSIONAL SVG ILLUSTRATION
-// A detailed, clean doctor/clinician figure
-// ─────────────────────────────────────────────
-function HealthProfessionalIllus({ width = 120, height = 140 }) {
-  return (
-    <svg width={width} height={height} viewBox="0 0 120 140" fill="none" xmlns="http://www.w3.org/2000/svg">
-      {/* Background circle */}
-      <circle cx="60" cy="70" r="58" fill="#e0f2f1" />
- 
-      {/* Lab coat / body */}
-      <rect x="30" y="72" width="60" height="60" rx="18" fill="#ffffff" />
-      {/* Coat lapels */}
-      <path d="M60 72 L45 80 L45 110 L60 104 L75 110 L75 80 Z" fill="#f0fdfa" stroke="#b2dfdb" strokeWidth="1" />
-      {/* Coat left panel */}
-      <rect x="30" y="72" width="30" height="60" rx="0" fill="#ffffff" opacity="0.5" />
- 
-      {/* Stethoscope */}
-      <path d="M48 82 Q44 90 44 98 Q44 106 52 106 Q60 106 60 98" stroke="#0d9488" strokeWidth="2.5" fill="none" strokeLinecap="round" />
-      <circle cx="60" cy="99" r="5" fill="#0d9488" />
-      <circle cx="60" cy="99" r="2.5" fill="#ccfbf1" />
-      {/* Earpieces */}
-      <line x1="48" y1="82" x2="45" y2="78" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" />
-      <line x1="45" y1="78" x2="42" y2="76" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" />
-      <circle cx="42" cy="75" r="2" fill="#0d9488" />
- 
-      {/* ID badge */}
-      <rect x="64" y="84" width="18" height="12" rx="3" fill="#e0f2f1" stroke="#b2dfdb" strokeWidth="1" />
-      <rect x="66" y="86" width="10" height="2" rx="1" fill="#0d9488" opacity="0.6" />
-      <rect x="66" y="90" width="7" height="1.5" rx="0.75" fill="#94a3b8" />
-      <rect x="66" y="93" width="9" height="1.5" rx="0.75" fill="#94a3b8" />
- 
-      {/* Neck */}
-      <rect x="53" y="58" width="14" height="18" rx="5" fill="#f5cba7" />
- 
-      {/* Head */}
-      <ellipse cx="60" cy="46" rx="22" ry="24" fill="#f5cba7" />
- 
-      {/* Hair */}
-      <path d="M38 42 Q38 22 60 22 Q82 22 82 42 Q82 34 60 32 Q38 34 38 42 Z" fill="#4a3728" />
-      {/* Hair sides */}
-      <path d="M38 42 Q36 48 38 54 Q40 44 42 42 Z" fill="#4a3728" />
-      <path d="M82 42 Q84 48 82 54 Q80 44 78 42 Z" fill="#4a3728" />
- 
-      {/* Eyes */}
-      <ellipse cx="52" cy="46" rx="3.5" ry="4" fill="#fff" />
-      <ellipse cx="68" cy="46" rx="3.5" ry="4" fill="#fff" />
-      <circle cx="53" cy="47" r="2" fill="#3d2b1f" />
-      <circle cx="69" cy="47" r="2" fill="#3d2b1f" />
-      <circle cx="54" cy="46" r="0.7" fill="#fff" />
-      <circle cx="70" cy="46" r="0.7" fill="#fff" />
- 
-      {/* Eyebrows */}
-      <path d="M49 41 Q52 39 56 41" stroke="#4a3728" strokeWidth="1.5" strokeLinecap="round" fill="none" />
-      <path d="M65 41 Q68 39 72 41" stroke="#4a3728" strokeWidth="1.5" strokeLinecap="round" fill="none" />
- 
-      {/* Nose */}
-      <path d="M59 50 Q57 54 59 56 Q61 56 63 54 Q61 53 59 50 Z" fill="#e8a87c" opacity="0.7" />
- 
-      {/* Smile */}
-      <path d="M53 60 Q60 65 67 60" stroke="#c9785c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
- 
-      {/* Ears */}
-      <ellipse cx="38" cy="48" rx="4" ry="6" fill="#f5cba7" />
-      <ellipse cx="82" cy="48" rx="4" ry="6" fill="#f5cba7" />
- 
-      {/* Arms */}
-      <rect x="18" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1" />
-      <rect x="88" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1" />
-      {/* Hands */}
-      <ellipse cx="25" cy="118" rx="7" ry="6" fill="#f5cba7" />
-      <ellipse cx="95" cy="118" rx="7" ry="6" fill="#f5cba7" />
- 
-      {/* Clipboard in right hand */}
-      <rect x="87" y="100" width="18" height="22" rx="3" fill="#fff" stroke="#0d9488" strokeWidth="1.5" />
-      <rect x="92" y="97" width="8" height="5" rx="2" fill="#0d9488" />
-      <line x1="90" y1="107" x2="102" y2="107" stroke="#94a3b8" strokeWidth="1" />
-      <line x1="90" y1="111" x2="102" y2="111" stroke="#94a3b8" strokeWidth="1" />
-      <line x1="90" y1="115" x2="98" y2="115" stroke="#94a3b8" strokeWidth="1" />
- 
-      {/* Cross on coat */}
-      <rect x="56" y="88" width="8" height="2.5" rx="1.25" fill="#0d9488" opacity="0.8" />
-      <rect x="58.75" y="85.25" width="2.5" height="8" rx="1.25" fill="#0d9488" opacity="0.8" />
-    </svg>
-  );
-}
- 
-// ─────────────────────────────────────────────
 // ASSESSMENT LANDING
 // Replaced animated hero with static professional SVG illustration
 // ─────────────────────────────────────────────
@@ -1609,7 +1484,7 @@ function AssessmentLanding({ onStart }) {
     { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "#3b82f6", bg: "#eff6ff" },
     { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.", color: "#8b5cf6", bg: "#f5f3ff" },
   ];
- 
+
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       {/* Hero panel with professional illustration */}
@@ -1643,7 +1518,7 @@ function AssessmentLanding({ onStart }) {
           <HealthProfessionalIllus width={120} height={140} />
         </div>
       </div>
- 
+
       <div className="page-body" style={{ flex: 1 }}>
         <div className="card card-p mb-4">
           <div className="section-ttl mb-1">How it works</div>
@@ -1664,7 +1539,7 @@ function AssessmentLanding({ onStart }) {
             This tool provides informational guidance only and does not replace a clinical diagnosis.
           </div>
         </div>
- 
+
         <button className="btn btn-primary btn-full btn-lg" onClick={onStart}>
           <Icon name="activity" size={18} color="#fff" />
           Begin Assessment
@@ -1674,7 +1549,7 @@ function AssessmentLanding({ onStart }) {
     </div>
   );
 }
- 
+
 // ─────────────────────────────────────────────
 // QUESTION SCREEN
 // ─────────────────────────────────────────────
@@ -1771,48 +1646,30 @@ function ResultScreen({ result, onReset, onNewCheck }) {
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
-      {/* Header */}
       <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Your Result</div>
-        <button
-          onClick={onReset}
-          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: "8px", cursor: "pointer", display: "flex" }}
-        >
+        <button onClick={onReset} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: "8px", cursor: "pointer", display: "flex" }}>
           <Icon name="x" size={16} color="var(--muted)" />
         </button>
       </div>
 
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "24px 16px 64px" }}>
-        {/* Risk ring */}
         <div className="text-c mb-4">
           <div className={`result-ring result-ring-${risk}`}>
-            <Icon
-              name={risk === "High" ? "alert" : risk === "Medium" ? "info" : "check"}
-              size={44}
-              color={color}
-            />
+            <Icon name={risk === "High" ? "alert" : risk === "Medium" ? "info" : "check"} size={44} color={color} />
           </div>
           <span className={`badge badge-${risk}`} style={{ fontSize: 12, padding: "4px 14px" }}>
             {risk} Risk
           </span>
         </div>
 
-        {/* Disease + confidence */}
         <div className="card card-p mb-3 text-c">
           <div className="t-label mb-2">Predicted Condition</div>
           <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12 }}>
             {result.disease}
           </div>
           <div style={{ height: 6, background: "var(--border-l)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
-            <div
-              style={{
-                height: "100%",
-                width: `${Math.round(result.confidence * 100)}%`,
-                background: `linear-gradient(90deg, ${color}80, ${color})`,
-                borderRadius: 99,
-                transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)",
-              }}
-            />
+            <div style={{ height: "100%", width: `${Math.round(result.confidence * 100)}%`, background: `linear-gradient(90deg, ${color}80, ${color})`, borderRadius: 99, transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)" }} />
           </div>
           <div style={{ fontSize: 13, fontWeight: 700, color }}>
             {Math.round(result.confidence * 100)}% match
@@ -1824,30 +1681,14 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           )}
         </div>
 
-        {/* Recommendations */}
         <div className="section-ttl mb-2">What to Do</div>
         <div className="rec-bubbles mb-4">
-          <RecBubble
-            icon="heart"     label="Home Care"         text={rec.home_care}
-            accent="#16a34a" bg="#f0fdf4"
-          />
-          <RecBubble
-            icon="clipboard" label="Recommended Test"  text={rec.test}
-            accent="#2563eb" bg="#eff6ff"
-          />
-          <RecBubble
-            icon="user"      label="Doctor Visit"      text={rec.doctor}
-            accent={color}   bg={bg}
-          />
-          {rec.safety && (
-            <RecBubble
-              icon="alert"     label="Important"         text={rec.safety}
-              accent="#dc2626" bg="#fef2f2"
-            />
-          )}
+          <RecBubble icon="heart"     label="Home Care"         text={rec.home_care} accent="#16a34a" bg="#f0fdf4" />
+          <RecBubble icon="clipboard" label="Recommended Test"  text={rec.test}      accent="#2563eb" bg="#eff6ff" />
+          <RecBubble icon="user"      label="Doctor Visit"      text={rec.doctor}    accent={color}   bg={bg} />
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />}
         </div>
 
-        {/* Other possibilities */}
         {scores.length > 0 && (
           <div className="card card-p mb-4">
             <div className="section-ttl mb-3">Other Possibilities</div>
@@ -1863,13 +1704,11 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           </div>
         )}
 
-        {/* Disclaimer */}
         <div className="disclaimer mb-4">
           <Icon name="alert" size={14} color="var(--amber)" />
           <p>This result is for informational purposes only. It does not replace a clinical diagnosis. Consult a qualified healthcare professional before making any medical decisions.</p>
         </div>
 
-        {/* Actions */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>
             Start New Assessment
@@ -1921,12 +1760,7 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
       <div className="page-body">
         <div className="search-wrap">
           <span className="search-icon"><Icon name="search" size={15} /></span>
-          <input
-            className="search-input"
-            placeholder="Search records..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <input className="search-input" placeholder="Search records..." value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
 
         <div className="chip-row">
@@ -1976,10 +1810,7 @@ function RecordDetail({ record, onBack }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-        <button
-          onClick={onBack}
-          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
-        >
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Assessment Detail</div>
@@ -1988,11 +1819,7 @@ function RecordDetail({ record, onBack }) {
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
         <div className="card card-p text-c mb-3">
           <div className={`result-ring result-ring-${record.risk}`} style={{ width: 90, height: 90 }}>
-            <Icon
-              name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"}
-              size={36}
-              color={color}
-            />
+            <Icon name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"} size={36} color={color} />
           </div>
           <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px" }}>{record.disease}</div>
           <span className={`badge badge-${record.risk}`}>{record.risk} Risk</span>
@@ -2022,10 +1849,7 @@ function RecordDetail({ record, onBack }) {
             <div className="section-ttl mb-2">Reported Symptoms ({syms.length})</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {syms.map((s) => (
-                <span
-                  key={s}
-                  style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal)" }}
-                >
+                <span key={s} style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal)" }}>
                   {s}
                 </span>
               ))}
@@ -2124,7 +1948,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           )}
         </div>
 
-        {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
           <div className="stat-card">
             <div className="stat-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
@@ -2136,7 +1959,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         </div>
 
-        {/* Menu */}
         <div className="card card-p mb-3">
           <div className="menu-list">
             {[
@@ -2211,10 +2033,7 @@ function SettingsScreen({ onBack, toast }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button
-          onClick={onBack}
-          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
-        >
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Settings</div>
@@ -2341,16 +2160,12 @@ function AdminScreen({ onBack, toast }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button
-          onClick={onBack}
-          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
-        >
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Database</div>
       </div>
       <div className="page-body">
-        {/* Stats */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
           {[["High", "#ef4444"], ["Medium", "#f59e0b"], ["Low", "#22c55e"]].map(([r, c]) => (
             <div key={r} className="stat-card">
@@ -2360,7 +2175,6 @@ function AdminScreen({ onBack, toast }) {
           ))}
         </div>
 
-        {/* Danger zone */}
         <div className="danger-zone mb-4">
           <div style={{ fontWeight: 700, color: "#ef4444", marginBottom: 4 }}>Clear All Records</div>
           <div className="t-subtitle mb-3">Permanently deletes all assessment data. This cannot be undone.</div>
@@ -2379,16 +2193,10 @@ function AdminScreen({ onBack, toast }) {
           )}
         </div>
 
-        {/* Records list */}
         <div className="section-ttl mb-2">All Records ({records.length})</div>
         <div className="search-wrap mb-3">
           <span className="search-icon"><Icon name="search" size={15} /></span>
-          <input
-            className="search-input"
-            placeholder="Search records..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+          <input className="search-input" placeholder="Search records..." value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
 
         {loading ? (
@@ -2407,10 +2215,7 @@ function AdminScreen({ onBack, toast }) {
                   <div className="t-subtitle" style={{ fontSize: 11 }}>{r.patient_name} · {fmtDate(r.created_at)}</div>
                 </div>
                 <span className={`badge badge-${r.risk}`}>{r.risk}</span>
-                <button
-                  onClick={() => del(r.id)}
-                  style={{ border: "none", background: "#fef2f2", borderRadius: 8, padding: "7px", cursor: "pointer", display: "flex" }}
-                >
+                <button onClick={() => del(r.id)} style={{ border: "none", background: "#fef2f2", borderRadius: 8, padding: "7px", cursor: "pointer", display: "flex" }}>
                   <Icon name="trash" size={13} color="#ef4444" />
                 </button>
               </div>
