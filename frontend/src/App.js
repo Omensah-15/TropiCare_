@@ -11,7 +11,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 // ─────────────────────────────────────────────
 // BACKEND CONFIG — change to your deployed URL
 // ─────────────────────────────────────────────
-const API_BASE = "http://localhost:8000/api/v1";
+const API_BASE = "https://tropicare.onrender.com/api/v1";
 
 // ─────────────────────────────────────────────
 // SYMPTOM IMAGE PATHS
