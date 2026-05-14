@@ -1,25 +1,15 @@
 /*
- * Backend: FastAPI (main.py)
- * API base is set in API_BASE below — change to your deployed URL.
- * No .env file needed for the frontend.
- *
- * All symptom image paths are managed in symptomImages.js (see companion file).
+ * TropiCare — App.jsx
+ * Backend: FastAPI (tropicare.onrender.com)
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
 
 // ─────────────────────────────────────────────
-// BACKEND CONFIG — change to your deployed URL
+// BACKEND CONFIG
 // ─────────────────────────────────────────────
 const API_BASE = "https://tropicare.onrender.com/api/v1";
 
-// ─────────────────────────────────────────────
-// SYMPTOM IMAGE PATHS
-// All paths are centralised here so you can swap
-// in real images without touching component code.
-// Format: { [symptom_id]: "/images/symptoms/filename.png" }
-// See symptomImages.js for the full reference file.
-// ─────────────────────────────────────────────
 import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
 
 // ─────────────────────────────────────────────
@@ -56,7 +46,7 @@ const api = {
 };
 
 // ─────────────────────────────────────────────
-// LOCAL SESSION STORE (browser)
+// LOCAL SESSION STORE
 // ─────────────────────────────────────────────
 const Store = {
   get:    (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
@@ -79,8 +69,7 @@ const RISK_BG = {
 };
 
 // ─────────────────────────────────────────────
-// OFFLINE DISEASE / SYMPTOM DATA
-// (mirrors the backend scoring engine exactly)
+// DISEASE / SYMPTOM DATA
 // ─────────────────────────────────────────────
 const DISEASE_SYMPTOM_MAP = {
   Malaria:                ["high_fever","chills","sweating","headache","muscle_pain","vomiting","fatigue","joint_pain","nausea","malaise","loss_of_appetite","fast_heart_rate","confusion","coma"],
@@ -121,9 +110,9 @@ const ALL_QUESTIONS = [
   {id:"high_fever",question:"Do you have a high fever?",category:"General"},
   {id:"mild_fever",question:"Do you have a mild fever?",category:"General"},
   {id:"fatigue",question:"Do you feel unusually tired or weak?",category:"General"},
-  {id:"malaise",question:"Do you feel generally unwell or sick?",category:"General"},
+  {id:"malaise",question:"Do you feel generally unwell?",category:"General"},
   {id:"chills",question:"Do you have chills or shivering?",category:"General"},
-  {id:"sweating",question:"Do you have sweating episodes?",category:"General"},
+  {id:"sweating",question:"Do you have episodes of sweating?",category:"General"},
   {id:"headache",question:"Do you have headaches?",category:"General"},
   {id:"muscle_pain",question:"Do you have muscle pain or body aches?",category:"General"},
   {id:"joint_pain",question:"Do you have joint pain?",category:"General"},
@@ -140,8 +129,8 @@ const ALL_QUESTIONS = [
   {id:"sinus_pressure",question:"Do you have sinus pressure or nasal congestion?",category:"Respiratory"},
   {id:"watering_from_eyes",question:"Do you have watery eyes?",category:"Respiratory"},
   {id:"loss_of_smell",question:"Have you lost your sense of smell?",category:"Respiratory"},
-  {id:"nausea",question:"Do you have nausea?",category:"Digestive"},
-  {id:"vomiting",question:"Do you have vomiting?",category:"Digestive"},
+  {id:"nausea",question:"Do you feel nauseous?",category:"Digestive"},
+  {id:"vomiting",question:"Have you been vomiting?",category:"Digestive"},
   {id:"diarrhoea",question:"Do you have diarrhoea?",category:"Digestive"},
   {id:"stomach_pain",question:"Do you have stomach pain?",category:"Digestive"},
   {id:"abdominal_pain",question:"Do you have abdominal or belly pain?",category:"Digestive"},
@@ -149,59 +138,58 @@ const ALL_QUESTIONS = [
   {id:"distension_of_abdomen",question:"Do you feel bloated or have a distended abdomen?",category:"Digestive"},
   {id:"constipation",question:"Do you have constipation?",category:"Digestive"},
   {id:"passage_of_gases",question:"Do you have excessive gas?",category:"Digestive"},
-  {id:"bloody_stool",question:"Do you have blood in your stool?",category:"Digestive"},
-  {id:"loss_of_appetite",question:"Do you have a loss of appetite?",category:"Digestive"},
+  {id:"bloody_stool",question:"Do you notice blood in your stool?",category:"Digestive"},
+  {id:"loss_of_appetite",question:"Have you lost your appetite?",category:"Digestive"},
   {id:"stomach_bleeding",question:"Do you have stomach bleeding?",category:"Digestive"},
-  {id:"yellowish_skin",question:"Is your skin yellowish or pale?",category:"Liver"},
-  {id:"yellowing_of_eyes",question:"Are your eyes yellow?",category:"Liver"},
+  {id:"yellowish_skin",question:"Is your skin yellowish or jaundiced?",category:"Liver"},
+  {id:"yellowing_of_eyes",question:"Are the whites of your eyes turning yellow?",category:"Liver"},
   {id:"dark_urine",question:"Is your urine dark or tea-coloured?",category:"Liver"},
-  {id:"yellow_urine",question:"Is your urine yellow-coloured?",category:"Liver"},
-  {id:"internal_itching",question:"Do you have internal itching?",category:"Liver"},
+  {id:"yellow_urine",question:"Is your urine unusually yellow?",category:"Liver"},
+  {id:"internal_itching",question:"Do you experience internal itching?",category:"Liver"},
   {id:"acute_liver_failure",question:"Do you have signs of acute liver failure?",category:"Liver"},
-  {id:"fluid_overload",question:"Do you have fluid overload or body swelling?",category:"Liver"},
-  {id:"itching",question:"Do you have itching on your skin?",category:"Skin"},
+  {id:"fluid_overload",question:"Do you have abnormal body swelling or fluid retention?",category:"Liver"},
+  {id:"itching",question:"Do you have itchy skin?",category:"Skin"},
   {id:"skin_rash",question:"Do you have a skin rash?",category:"Skin"},
   {id:"red_spots_over_body",question:"Do you have red spots on your body?",category:"Skin"},
   {id:"nodal_skin_eruptions",question:"Do you have nodules or skin eruptions?",category:"Skin"},
   {id:"dischromic_patches",question:"Do you have discoloured patches on your skin?",category:"Skin"},
-  {id:"redness_of_eyes",question:"Do you have redness in your eyes?",category:"Eyes"},
+  {id:"redness_of_eyes",question:"Do you have red or irritated eyes?",category:"Eyes"},
   {id:"blurred_vision",question:"Do you have blurred or distorted vision?",category:"Eyes"},
   {id:"pain_behind_eyes",question:"Do you have pain behind your eyes?",category:"Eyes"},
   {id:"burning_micturition",question:"Do you feel a burning sensation when urinating?",category:"Urinary"},
-  {id:"urinating_frequently",question:"Do you urinate very frequently?",category:"Urinary"},
-  {id:"continuous_feel_of_urine",question:"Do you have a continuous urge to urinate?",category:"Urinary"},
+  {id:"urinating_frequently",question:"Do you urinate much more than usual?",category:"Urinary"},
+  {id:"continuous_feel_of_urine",question:"Do you have a persistent urge to urinate?",category:"Urinary"},
   {id:"bladder_discomfort",question:"Do you have bladder discomfort?",category:"Urinary"},
-  {id:"foul_smell_of_urine",question:"Does your urine have a foul smell?",category:"Urinary"},
-  {id:"spotting_urination",question:"Do you have spotting during urination?",category:"Urinary"},
+  {id:"foul_smell_of_urine",question:"Does your urine have an unusual smell?",category:"Urinary"},
+  {id:"spotting_urination",question:"Do you notice spotting during urination?",category:"Urinary"},
   {id:"pain_anal_region",question:"Do you have pain in your anal region?",category:"Rectal"},
   {id:"pain_bowel_movements",question:"Do you have pain during bowel movements?",category:"Rectal"},
   {id:"irritation_anus",question:"Do you have irritation around the anus?",category:"Rectal"},
   {id:"restlessness",question:"Do you feel restless or agitated?",category:"Neurological"},
-  {id:"mood_swings",question:"Do you have mood swings?",category:"Neurological"},
+  {id:"mood_swings",question:"Have you been experiencing mood swings?",category:"Neurological"},
   {id:"confusion",question:"Do you feel confused or disoriented?",category:"Neurological"},
-  {id:"coma",question:"Have you lost consciousness or fallen into a coma?",category:"Neurological"},
+  {id:"coma",question:"Have you experienced any loss of consciousness?",category:"Neurological"},
   {id:"excessive_hunger",question:"Are you excessively hungry?",category:"Metabolic"},
   {id:"increased_appetite",question:"Has your appetite increased significantly?",category:"Metabolic"},
   {id:"irregular_sugar_level",question:"Do you have an irregular blood sugar level?",category:"Metabolic"},
-  {id:"polyuria",question:"Do you urinate in very large amounts?",category:"Metabolic"},
+  {id:"polyuria",question:"Do you urinate in unusually large amounts?",category:"Metabolic"},
   {id:"dehydration",question:"Do you feel severely dehydrated?",category:"Metabolic"},
-  {id:"weight_loss",question:"Do you have unexplained weight loss?",category:"Metabolic"},
-  {id:"obesity",question:"Are you obese or significantly overweight?",category:"Metabolic"},
+  {id:"weight_loss",question:"Have you experienced unexplained weight loss?",category:"Metabolic"},
+  {id:"obesity",question:"Are you significantly overweight?",category:"Metabolic"},
   {id:"swelled_lymph_nodes",question:"Do you have swollen lymph nodes?",category:"Infection"},
-  {id:"swelling_stomach",question:"Do you have swelling of your stomach area?",category:"Infection"},
-  {id:"fast_heart_rate",question:"Do you have a fast or irregular heart rate?",category:"Infection"},
-  {id:"toxic_look",question:"Do you look severely ill or toxic-looking?",category:"Infection"},
+  {id:"swelling_stomach",question:"Is your stomach area swollen?",category:"Infection"},
+  {id:"fast_heart_rate",question:"Do you have a fast or irregular heartbeat?",category:"Infection"},
+  {id:"toxic_look",question:"Do you look or feel severely ill?",category:"Infection"},
   {id:"swollen_lymph_neck",question:"Do you have swollen lymph nodes in the neck or armpit?",category:"Infection"},
-  {id:"loss_of_appetite_fever",question:"Do you have loss of appetite alongside fever?",category:"Infection"},
+  {id:"loss_of_appetite_fever",question:"Have you lost your appetite alongside a fever?",category:"Infection"},
   {id:"family_history",question:"Do you have a family history of this condition?",category:"History"},
-  {id:"blood_transfusion",question:"Have you recently received a blood transfusion?",category:"History"},
-  {id:"unsterile_injections",question:"Have you received injections with unsterile equipment?",category:"History"},
-  {id:"alcohol_history",question:"Do you have a history of heavy alcohol consumption?",category:"History"},
+  {id:"blood_transfusion",question:"Have you received a blood transfusion recently?",category:"History"},
+  {id:"unsterile_injections",question:"Have you been injected with unsterile equipment?",category:"History"},
+  {id:"alcohol_history",question:"Do you have a history of heavy alcohol use?",category:"History"},
 ];
 
 const Q_INDEX = Object.fromEntries(ALL_QUESTIONS.map((q) => [q.id, q]));
 
-// Offline scoring engine — mirrors backend predict_with_ml fallback
 function scoreDisease(disease, answers) {
   let score = 0;
   for (const s of DISEASE_SYMPTOM_MAP[disease] || []) {
@@ -251,10 +239,10 @@ function predictOffline(answers) {
     risk,
     explanation: `The reported symptoms are consistent with ${top.d}.`,
     recommendation: {
-      home_care: "Rest and stay hydrated.",
-      test:      "Consult a healthcare provider for appropriate tests.",
-      doctor:    risk === "High" ? "Visit a hospital or clinic immediately." : "See a doctor if symptoms persist or worsen.",
-      safety:    risk === "High" ? "Do not delay — seek medical attention today." : "",
+      home_care: "Rest, stay hydrated, and monitor your symptoms closely.",
+      test:      "Consult a healthcare provider to arrange appropriate diagnostic tests.",
+      doctor:    risk === "High" ? "Visit a hospital or clinic without delay." : "See a doctor if symptoms persist or worsen.",
+      safety:    risk === "High" ? "Do not wait — seek medical attention today." : "",
     },
     all_scores: Object.fromEntries(
       sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])
@@ -264,7 +252,7 @@ function predictOffline(answers) {
 }
 
 // ─────────────────────────────────────────────
-// STYLES — injected once into <head>
+// STYLES
 // ─────────────────────────────────────────────
 const injectStyles = () => {
   if (document.getElementById("tc-styles")) return;
@@ -310,13 +298,11 @@ const injectStyles = () => {
     html, body { height: 100%; font-family: var(--font); background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; }
     #root { height: 100%; }
 
-    /* ── App shell ── */
     .shell    { display: flex; height: 100vh; overflow: hidden; }
     .sidebar  { width: 240px; min-height: 100vh; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; padding: 28px 0; }
     .main     { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
     @media (max-width: 767px) { .sidebar { display: none; } .main { padding-bottom: 72px; } }
 
-    /* ── Sidebar ── */
     .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 0 20px 28px; }
     .brand-mark    { width: 36px; height: 36px; background: var(--teal); border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
     .brand-name    { font-family: var(--display); font-size: 18px; font-weight: 700; color: var(--ink); }
@@ -328,40 +314,35 @@ const injectStyles = () => {
     .nav-icon        { width: 18px; height: 18px; flex-shrink: 0; }
     .sidebar-foot    { padding: 16px 10px 0; border-top: 1px solid var(--border); margin: 0 10px; }
 
-    /* ── Bottom nav (mobile) ── */
     .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--border); display: none; z-index: 100; padding: 8px 0 calc(8px + env(safe-area-inset-bottom)); }
     @media (max-width: 767px) { .bottom-nav { display: flex; } }
     .bnav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 4px; border: none; background: none; font-family: var(--font); font-size: 10px; font-weight: 600; color: var(--muted-l); cursor: pointer; transition: color 0.15s; }
     .bnav-item.active { color: var(--teal); }
     .bnav-item svg { width: 20px; height: 20px; }
 
-    /* ── Page ── */
     .page       { animation: pageIn 0.25s ease; }
     @keyframes pageIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
     .page-head  { padding: 24px 24px 0; }
     .page-body  { padding: 20px 24px 40px; }
     @media (max-width: 767px) { .page-head { padding: 20px 16px 0; } .page-body { padding: 16px 16px 32px; } }
 
-    /* ── Typography ── */
     .t-display   { font-family: var(--display); font-size: 26px; font-weight: 700; color: var(--ink); line-height: 1.2; }
     .t-title     { font-size: 18px; font-weight: 700; color: var(--ink); line-height: 1.3; }
     .t-subtitle  { font-size: 14px; color: var(--muted); font-weight: 400; line-height: 1.55; }
     .t-label     { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
     .t-mono      { font-feature-settings: 'tnum'; }
 
-    /* ── Cards ── */
     .card   { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-s); border: 1px solid var(--border); }
     .card-p { padding: 20px; }
 
-    /* ── Buttons ── */
     .btn        { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 13px 22px; border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; font-weight: 600; cursor: pointer; border: none; transition: all 0.18s; line-height: 1; }
     .btn:active { transform: scale(0.97); }
     .btn:disabled { opacity: 0.55; cursor: not-allowed; }
-    .btn-primary  { background: var(--teal);    color: #fff; box-shadow: 0 4px 14px rgba(13,148,136,0.28); }
+    .btn-primary  { background: var(--teal); color: #fff; box-shadow: 0 4px 14px rgba(13,148,136,0.28); }
     .btn-primary:hover:not(:disabled)  { background: var(--teal-d); box-shadow: 0 6px 18px rgba(13,148,136,0.36); }
     .btn-secondary { background: var(--border-l); color: var(--ink-2); }
     .btn-secondary:hover:not(:disabled) { background: var(--border); }
-    .btn-danger   { background: var(--red);  color: #fff; }
+    .btn-danger   { background: var(--red); color: #fff; }
     .btn-danger:hover:not(:disabled)   { background: #dc2626; }
     .btn-outline  { background: transparent; color: var(--teal); border: 2px solid var(--teal); }
     .btn-outline:hover:not(:disabled) { background: var(--teal-xl); }
@@ -369,7 +350,6 @@ const injectStyles = () => {
     .btn-lg    { padding: 16px 28px; font-size: 15px; border-radius: var(--radius); }
     .btn-sm    { padding: 9px 16px; font-size: 12px; }
 
-    /* ── Form ── */
     .field       { margin-bottom: 14px; }
     .field-label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 6px; }
     .field-input { width: 100%; padding: 12px 14px; border: 2px solid var(--border); border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; color: var(--ink); background: var(--surface); outline: none; transition: border-color 0.18s; }
@@ -377,28 +357,24 @@ const injectStyles = () => {
     .field-input::placeholder { color: var(--muted-l); }
     .field-select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 16px; cursor: pointer; }
 
-    /* ── Badge ── */
     .badge      { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 700; }
-    .badge-High   { background: var(--red-l);    color: var(--red); }
-    .badge-Medium { background: var(--amber-l);  color: #92400e; }
-    .badge-Low    { background: var(--green-l);  color: #15803d; }
-    .badge-teal   { background: var(--teal-xl);  color: var(--teal); }
+    .badge-High   { background: var(--red-l);   color: var(--red); }
+    .badge-Medium { background: var(--amber-l); color: #92400e; }
+    .badge-Low    { background: var(--green-l); color: #15803d; }
+    .badge-teal   { background: var(--teal-xl); color: var(--teal); }
 
-    /* ── Progress ── */
     .prog-track { height: 5px; background: var(--border-l); border-radius: 99px; overflow: hidden; }
     .prog-fill  { height: 100%; background: linear-gradient(90deg, #2dd4bf, var(--teal)); border-radius: 99px; transition: width 0.4s cubic-bezier(0.4,0,0.2,1); }
 
-    /* ── Divider ── */
     .divider { height: 1px; background: var(--border); }
 
-    /* ── Avatar ── */
     .avatar    { width: 38px; height: 38px; border-radius: 99px; background: var(--teal-xl); display: flex; align-items: center; justify-content: center; color: var(--teal); font-weight: 700; font-size: 14px; flex-shrink: 0; }
     .avatar-lg { width: 64px; height: 64px; font-size: 22px; background: linear-gradient(135deg, var(--teal-l), var(--teal-xl)); }
+    .mx-auto   { margin-left: auto; margin-right: auto; }
 
-    /* ── Splash ── */
     .splash { position: fixed; inset: 0; background: linear-gradient(145deg, var(--teal-d) 0%, #0a4f4a 100%); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; transition: opacity 0.45s ease; }
     .splash.fading { opacity: 0; pointer-events: none; }
-    .splash-logo { width: 76px; height: 76px; background: rgba(255,255,255,0.12); border-radius: 22px; display: flex; align-items: center; justify-content: center; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.15); animation: breathe 2.4s ease-in-out infinite; }
+    .splash-logo { width: 76px; height: 76px; background: rgba(255,255,255,0.12); border-radius: 22px; display: flex; align-items: center; justify-content: center; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.18); animation: breathe 2.4s ease-in-out infinite; }
     @keyframes breathe { 0%,100%{transform:scale(1);} 50%{transform:scale(1.04);} }
     .splash-title { font-family: var(--display); font-size: 38px; color: #fff; font-weight: 700; letter-spacing: -0.5px; }
     .splash-sub   { color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 6px; letter-spacing: 0.04em; }
@@ -407,24 +383,21 @@ const injectStyles = () => {
     .splash-dot:nth-child(2) { animation-delay: 0.18s; }
     .splash-dot:nth-child(3) { animation-delay: 0.36s; }
     @keyframes dot-bounce { 0%,80%,100%{transform:scale(0.7);opacity:0.4;} 40%{transform:scale(1.1);opacity:1;} }
-    .splash-badge { position: absolute; bottom: 28px; font-size: 10px; color: rgba(255,255,255,0.3); letter-spacing: 0.12em; text-transform: uppercase; }
 
-    /* ── Auth ── */
     .auth-wrap  { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; background: linear-gradient(160deg, var(--teal-xl) 0%, var(--bg) 55%); }
     .auth-box   { width: 100%; max-width: 420px; }
     .auth-logo  { text-align: center; margin-bottom: 36px; }
     .auth-icon  { width: 60px; height: 60px; background: var(--teal); border-radius: 18px; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
     .auth-title { font-family: var(--display); font-size: 28px; color: var(--ink); font-weight: 700; }
     .auth-hint  { font-size: 13px; color: var(--muted); margin-top: 5px; }
+    .auth-foot  { text-align: center; margin-top: 18px; font-size: 11px; color: var(--muted-l); line-height: 1.7; }
     .tabs       { display: flex; background: var(--border-l); border-radius: var(--radius-s); padding: 4px; margin-bottom: 22px; }
     .tab        { flex: 1; padding: 9px; text-align: center; border-radius: 8px; font-family: var(--font); font-size: 13px; font-weight: 600; cursor: pointer; border: none; background: none; color: var(--muted); transition: all 0.18s; }
     .tab.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-s); }
     .grid-2     { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .pw-wrap    { position: relative; }
     .pw-toggle  { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--muted-l); display: flex; }
-    .auth-foot  { text-align: center; margin-top: 18px; font-size: 11px; color: var(--muted-l); line-height: 1.7; }
 
-    /* ── Home ── */
     .home-header  { display: flex; align-items: center; justify-content: space-between; padding: 24px 24px 16px; }
     @media (max-width: 767px) { .home-header { padding: 20px 16px 14px; } }
     .greeting     { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
@@ -457,7 +430,6 @@ const injectStyles = () => {
 
     .disease-grid { display: flex; flex-wrap: wrap; gap: 6px; }
 
-    /* ── Assessment landing ── */
     .landing-illus { text-align: center; padding: 12px 0 24px; }
     .landing-illus svg { animation: float 3s ease-in-out infinite; }
     @keyframes float { 0%,100%{transform:translateY(0);} 50%{transform:translateY(-9px);} }
@@ -468,7 +440,6 @@ const injectStyles = () => {
     .feat-title { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 2px; }
     .feat-desc  { font-size: 12px; color: var(--muted); line-height: 1.55; }
 
-    /* ── Question screen ── */
     .q-screen   { height: 100vh; display: flex; flex-direction: column; background: var(--bg); }
     .q-topbar   { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
     .q-close    { width: 34px; height: 34px; background: var(--border-l); border-radius: 8px; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
@@ -492,7 +463,6 @@ const injectStyles = () => {
     .q-anim     { animation: qSlide 0.28s cubic-bezier(0.4,0,0.2,1); }
     @keyframes qSlide { from{opacity:0;transform:translateY(14px);} to{opacity:1;transform:none;} }
 
-    /* ── Analyzing ── */
     .analyzing  { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); gap: 0; }
     .spin-ring  { width: 140px; height: 140px; margin-bottom: 28px; animation: spin-slow 3s linear infinite; }
     @keyframes spin-slow { to { transform: rotate(360deg); } }
@@ -501,14 +471,12 @@ const injectStyles = () => {
     .ldot:nth-child(2) { animation-delay: 0.18s; }
     .ldot:nth-child(3) { animation-delay: 0.36s; }
 
-    /* ── Result ── */
     .result-ring     { width: 110px; height: 110px; border-radius: 99px; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; animation: ring-in 0.45s cubic-bezier(0.34,1.56,0.64,1); }
     @keyframes ring-in { from{transform:scale(0.6);opacity:0;} to{transform:scale(1);opacity:1;} }
     .result-ring-High   { background: linear-gradient(135deg, #fee2e2, #fecaca); box-shadow: 0 0 0 10px rgba(239,68,68,0.08); }
     .result-ring-Medium { background: linear-gradient(135deg, #fef3c7, #fde68a); box-shadow: 0 0 0 10px rgba(245,158,11,0.08); }
     .result-ring-Low    { background: linear-gradient(135deg, #dcfce7, #bbf7d0); box-shadow: 0 0 0 10px rgba(34,197,94,0.08); }
 
-    /* ── Recommendation bubbles ── */
     .rec-bubbles    { display: flex; flex-direction: column; gap: 10px; }
     .rec-bubble     { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: var(--radius); border-left: 4px solid transparent; background: var(--surface); box-shadow: var(--shadow-s); animation: bubble-in 0.35s ease both; }
     .rec-bubble:nth-child(1){ animation-delay: 0.05s; }
@@ -529,7 +497,6 @@ const injectStyles = () => {
     .disclaimer { display: flex; gap: 10px; align-items: flex-start; background: var(--amber-l); border: 1px solid #fde68a; border-radius: var(--radius-s); padding: 12px 14px; }
     .disclaimer p { font-size: 12px; color: #78350f; line-height: 1.55; }
 
-    /* ── Records ── */
     .search-wrap { position: relative; margin-bottom: 12px; }
     .search-icon { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--muted-l); }
     .search-input { width: 100%; padding: 11px 14px 11px 40px; border: 1.5px solid var(--border); border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; color: var(--ink); background: var(--surface); outline: none; transition: border-color 0.18s; }
@@ -539,7 +506,6 @@ const injectStyles = () => {
     .chip.on    { border-color: var(--teal); background: var(--teal-xl); color: var(--teal); }
     .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 56px 24px; gap: 10px; text-align: center; }
 
-    /* ── Profile ── */
     .profile-head { text-align: center; padding: 24px 0 20px; }
     .menu-list  { display: flex; flex-direction: column; }
     .menu-item  { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); cursor: pointer; transition: opacity 0.15s; }
@@ -547,7 +513,6 @@ const injectStyles = () => {
     .menu-item:hover { opacity: 0.75; }
     .menu-ico   { width: 34px; height: 34px; background: var(--border-l); border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
-    /* ── Settings ── */
     .toggle-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }
     .toggle     { position: relative; width: 42px; height: 23px; }
     .toggle input { opacity: 0; width: 0; height: 0; }
@@ -556,10 +521,8 @@ const injectStyles = () => {
     .toggle-slider::before { content: ''; position: absolute; height: 17px; width: 17px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.28s; box-shadow: var(--shadow-s); }
     .toggle input:checked + .toggle-slider::before { transform: translateX(19px); }
 
-    /* ── Admin ── */
     .danger-zone { border: 1.5px solid var(--red); border-radius: var(--radius); padding: 18px; margin-bottom: 20px; }
 
-    /* ── Misc utils ── */
     .flex       { display: flex; }
     .items-c    { align-items: center; }
     .justify-b  { justify-content: space-between; }
@@ -583,9 +546,87 @@ const injectStyles = () => {
 };
 
 // ─────────────────────────────────────────────
-// INLINE SVG ILLUSTRATIONS (one per category)
-// These are used as fallback when no image path
-// is configured for a given symptom/category.
+// MEDICAL HEART LOGO SVG
+// Minimal, clean ECG-heart hybrid mark
+// ─────────────────────────────────────────────
+function MedicalHeartMark({ size = 22, color = "#fff" }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      {/* Heart path */}
+      <path
+        d="M12 21C12 21 3 14.5 3 8.5C3 5.42 5.42 3 8.5 3C10.24 3 11.91 3.81 13 5.08C14.09 3.81 15.76 3 17.5 3C20.58 3 23 5.42 23 8.5C23 14.5 12 21 12 21Z"
+        fill={color}
+        opacity="0.92"
+      />
+      {/* ECG pulse line across heart */}
+      <polyline
+        points="6,12 8.5,12 9.5,9 10.5,15 11.5,10.5 12.5,13 13.2,12 15.5,12 17.5,12"
+        stroke="#0d9488"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
+// Larger version for auth screen
+function MedicalHeartLarge({ size = 32, color = "#fff" }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 32 32"
+      fill="none"
+      xmlns="http://www.w3.org/2000/svg"
+    >
+      <path
+        d="M16 28C16 28 4 19.5 4 11.5C4 7.36 7.36 4 11.5 4C13.72 4 15.78 5.01 17.2 6.66C18.62 5.01 20.68 4 22.9 4C27.04 4 30.4 7.36 30.4 11.5C30.4 19.5 16 28 16 28Z"
+        fill={color}
+        opacity="0.9"
+      />
+      <polyline
+        points="8,16 11,16 12.5,12 14,20 15.5,14 16.5,17 17.5,16 20,16 23,16"
+        stroke="#0d9488"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
+// Splash screen version
+function MedicalHeartSplash() {
+  return (
+    <svg width="44" height="44" viewBox="0 0 44 44" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M22 38C22 38 6 27 6 16C6 10.48 10.48 6 16 6C18.9 6 21.56 7.38 23.2 9.6C24.84 7.38 27.5 6 30.4 6C35.92 6 40 10.48 40 16C40 27 22 38 22 38Z"
+        fill="white"
+        opacity="0.9"
+      />
+      <polyline
+        points="10,22 15,22 17,16 19,28 21,19 23,24 25,22 29,22 34,22"
+        stroke="#0d9488"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────
+// CATEGORY ILLUSTRATIONS
 // ─────────────────────────────────────────────
 const IllusGeneral = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
@@ -696,24 +737,22 @@ const IllusDoctor = () => (
 );
 
 const CATEGORY_ILLUS = {
-  General:     IllusGeneral,
-  Respiratory: IllusRespiratory,
-  Digestive:   IllusDigestive,
-  Liver:       IllusLiver,
-  Skin:        IllusSkin,
-  Eyes:        IllusEyes,
-  Urinary:     IllusUrinary,
-  Rectal:      IllusDigestive,
+  General:      IllusGeneral,
+  Respiratory:  IllusRespiratory,
+  Digestive:    IllusDigestive,
+  Liver:        IllusLiver,
+  Skin:         IllusSkin,
+  Eyes:         IllusEyes,
+  Urinary:      IllusUrinary,
+  Rectal:       IllusDigestive,
   Neurological: IllusGeneral,
-  Metabolic:   IllusGeneral,
-  Infection:   IllusDoctor,
-  History:     IllusDoctor,
+  Metabolic:    IllusGeneral,
+  Infection:    IllusDoctor,
+  History:      IllusDoctor,
 };
 
 // ─────────────────────────────────────────────
 // QUESTION ILLUSTRATION
-// Uses image path from symptomImages.js if configured,
-// falls back to inline SVG per category.
 // ─────────────────────────────────────────────
 function QuestionIllus({ question }) {
   const imgPath = question ? SYMPTOM_IMAGES[question.id] : null;
@@ -765,14 +804,6 @@ function Icon({ name, size = 18, color = "currentColor" }) {
     calendar:  "M3 4h18v16H3z M16 2v4 M8 2v4 M3 10h18",
   };
 
-  const extraPaths = {
-    clipboard: ["M8 2h8v4H8z"],
-    user: ["circle cx=12 cy=7 r=4"],
-    database: ["M3 5a9 3 0 0018 0", "M3 12a9 3 0 0018 0"],
-    info: ["M12 16v-4", "M12 8h.01"],
-    alert: ["M12 9v4", "M12 17h.01"],
-  };
-
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
       {(paths[name] || "").split(" M").filter(Boolean).map((d, i) => (
@@ -791,7 +822,7 @@ function Icon({ name, size = 18, color = "currentColor" }) {
 }
 
 // ─────────────────────────────────────────────
-// TOAST NOTIFICATION
+// TOAST
 // ─────────────────────────────────────────────
 let _notifTimer;
 function Notif({ msg }) {
@@ -823,22 +854,22 @@ function RecBubble({ icon, label, text, accent, bg }) {
 export default function App() {
   useEffect(() => { injectStyles(); }, []);
 
-  const [splash,      setSplash]      = useState(true);
-  const [splashFade,  setSplashFade]  = useState(false);
-  const [user,        setUser]        = useState(null);
-  const [page,        setPage]        = useState("home");
-  const [notif,       setNotif]       = useState("");
-  const [detailRec,   setDetailRec]   = useState(null);
+  const [splash,     setSplash]     = useState(true);
+  const [splashFade, setSplashFade] = useState(false);
+  const [user,       setUser]       = useState(null);
+  const [page,       setPage]       = useState("home");
+  const [notif,      setNotif]      = useState("");
+  const [detailRec,  setDetailRec]  = useState(null);
 
   // Assessment state
-  const [assActive,   setAssActive]   = useState(false);
-  const [answers,     setAnswers]     = useState({});
-  const [asked,       setAsked]       = useState([]);
-  const [currentQ,    setCurrentQ]    = useState(null);
-  const [qIdx,        setQIdx]        = useState(0);
-  const [sessionId,   setSessionId]   = useState(null);
-  const [analyzing,   setAnalyzing]   = useState(false);
-  const [result,      setResult]      = useState(null);
+  const [assActive,  setAssActive]  = useState(false);
+  const [answers,    setAnswers]    = useState({});
+  const [asked,      setAsked]      = useState([]);
+  const [currentQ,   setCurrentQ]   = useState(null);
+  const [qIdx,       setQIdx]       = useState(0);
+  const [sessionId,  setSessionId]  = useState(null);
+  const [analyzing,  setAnalyzing]  = useState(false);
+  const [result,     setResult]     = useState(null);
 
   const MAX_Q = 15;
 
@@ -875,7 +906,7 @@ export default function App() {
     setUser(null);
     resetAssessment();
     setPage("home");
-    toast("Signed out.");
+    toast("Signed out successfully.");
   };
 
   // ── Assessment ──
@@ -892,7 +923,7 @@ export default function App() {
       firstQ = data.first_question || ALL_QUESTIONS[0];
       setSessionId(sid);
     } catch {
-      // Offline — questions handled locally
+      // offline fallback
     }
 
     setCurrentQ(firstQ);
@@ -959,16 +990,15 @@ export default function App() {
     return (
       <div className={`splash${splashFade ? " fading" : ""}`}>
         <div className="splash-logo">
-          <Icon name="heart" size={38} color="#fff" />
+          <MedicalHeartSplash />
         </div>
         <div className="splash-title">TropiCare</div>
-        <div className="splash-sub">AI-Powered Symptom Checker</div>
+        <div className="splash-sub">AI-Powered Symptom Assessment</div>
         <div className="splash-dots">
           <div className="splash-dot" />
           <div className="splash-dot" />
           <div className="splash-dot" />
         </div>
-        <div className="splash-badge">KNUST FINAL YEAR PROJECT</div>
       </div>
     );
   }
@@ -1012,10 +1042,13 @@ export default function App() {
   return (
     <div className="shell">
       <Notif msg={notif} />
+
       {/* Sidebar — desktop */}
       <aside className="sidebar">
         <div className="sidebar-brand">
-          <div className="brand-mark"><Icon name="heart" size={18} color="#fff" /></div>
+          <div className="brand-mark">
+            <MedicalHeartMark size={20} color="#fff" />
+          </div>
           <div>
             <div className="brand-name">TropiCare</div>
             <div className="brand-sub">Symptom Checker</div>
@@ -1096,7 +1129,7 @@ function AuthScreen({ onLogin, toast }) {
       }
       onLogin({ ...data.user, token: data.access_token });
     } catch (e) {
-      toast(e.message || "Something went wrong. Try again.");
+      toast(e.message || "Something went wrong. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -1106,14 +1139,16 @@ function AuthScreen({ onLogin, toast }) {
     <div className="auth-wrap">
       <div className="auth-box">
         <div className="auth-logo">
-          <div className="auth-icon"><Icon name="heart" size={30} color="#fff" /></div>
+          <div className="auth-icon">
+            <MedicalHeartLarge size={34} color="#fff" />
+          </div>
           <div className="auth-title">TropiCare</div>
-          <div className="auth-hint">Check your symptoms with AI-guided assessment</div>
+          <div className="auth-hint">AI-guided symptom assessment for tropical diseases</div>
         </div>
 
         <div className="card card-p" style={{ boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
           <div className="tabs mb-3">
-            {["login","register"].map((m) => (
+            {["login", "register"].map((m) => (
               <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => setMode(m)}>
                 {m === "login" ? "Sign In" : "Create Account"}
               </button>
@@ -1123,24 +1158,45 @@ function AuthScreen({ onLogin, toast }) {
           {mode === "register" && (
             <div className="field">
               <label className="field-label">Full Name</label>
-              <input className="field-input" placeholder="John Mensah" value={name} onChange={(e) => setName(e.target.value)} />
+              <input
+                className="field-input"
+                placeholder="e.g. Kofi Mensah"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
             </div>
           )}
 
           <div className="field">
             <label className="field-label">Email Address</label>
-            <input className="field-input" type="email" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input
+              className="field-input"
+              type="email"
+              placeholder="you@email.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
           </div>
 
           {mode === "register" && (
             <div className="grid-2">
               <div className="field">
                 <label className="field-label">Age</label>
-                <input className="field-input" type="number" placeholder="25" value={age} onChange={(e) => setAge(e.target.value)} />
+                <input
+                  className="field-input"
+                  type="number"
+                  placeholder="25"
+                  value={age}
+                  onChange={(e) => setAge(e.target.value)}
+                />
               </div>
               <div className="field">
                 <label className="field-label">Gender</label>
-                <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
+                <select
+                  className="field-input field-select"
+                  value={gender}
+                  onChange={(e) => setGender(e.target.value)}
+                >
                   <option value="">Select</option>
                   <option>Male</option>
                   <option>Female</option>
@@ -1162,20 +1218,24 @@ function AuthScreen({ onLogin, toast }) {
                 onKeyDown={(e) => e.key === "Enter" && submit()}
                 style={{ paddingRight: 46 }}
               />
-              <button className="pw-toggle" onClick={() => setShowPw(!showPw)}>
+              <button className="pw-toggle" onClick={() => setShowPw(!showPw)} type="button">
                 <Icon name={showPw ? "eyeOff" : "eye"} size={17} />
               </button>
             </div>
           </div>
 
-          <button className="btn btn-primary btn-full btn-lg mt-2" onClick={submit} disabled={loading}>
+          <button
+            className="btn btn-primary btn-full btn-lg mt-2"
+            onClick={submit}
+            disabled={loading}
+          >
             {loading ? "Please wait..." : mode === "login" ? "Sign In" : "Create Account"}
           </button>
         </div>
 
         <div className="auth-foot">
-          SCTD · KNUST Final Year Project<br />
-          Mensah Obed · Afrique-Ahali Kekeli · Supervised by Prof. J.J. Kponyo
+          TropiCare · Symptom Checker for Tropical Diseases<br />
+          For informational purposes only — not a substitute for medical advice
         </div>
       </div>
     </div>
@@ -1195,8 +1255,8 @@ function HomeScreen({ user, onStart, onNav }) {
   }, []);
 
   const stats = [
-    { label: "Assessments", val: records.length,                                      icon: "activity", color: "#0d9488" },
-    { label: "High Risk",   val: records.filter((r) => r.risk === "High").length,     icon: "alert",    color: "#ef4444" },
+    { label: "Assessments", val: records.length,                                        icon: "activity", color: "#0d9488" },
+    { label: "High Risk",   val: records.filter((r) => r.risk === "High").length,       icon: "alert",    color: "#ef4444" },
     { label: "Last Check",  val: records[0] ? fmtDate(records[0].created_at) : "None", icon: "calendar", color: "#3b82f6" },
   ];
 
@@ -1217,7 +1277,7 @@ function HomeScreen({ user, onStart, onNav }) {
         <div className="hero-bg-icon">
           <Icon name="heart" size={110} color="#fff" />
         </div>
-        <div className="hero-eyebrow">AI-Powered Diagnosis</div>
+        <div className="hero-eyebrow">AI-Powered Assessment</div>
         <div className="hero-headline">Check your symptoms in under 2 minutes</div>
         <button className="hero-btn" onClick={onStart}>
           Start Assessment
@@ -1268,7 +1328,7 @@ function HomeScreen({ user, onStart, onNav }) {
               <span key={d} className={`badge badge-${r}`}>{d}</span>
             ))}
           </div>
-          <div className="t-subtitle mt-3" style={{ fontSize: 12 }}>22 diseases · 3 risk categories</div>
+          <div className="t-subtitle mt-3" style={{ fontSize: 12 }}>22 diseases · 3 risk levels</div>
         </div>
       </div>
 
@@ -1285,7 +1345,7 @@ function AssessmentLanding({ onStart }) {
     <div>
       <div className="page-head">
         <div className="t-display">Symptom Assessment</div>
-        <div className="t-subtitle mt-1">Answer a short set of questions to get a result</div>
+        <div className="t-subtitle mt-1">Answer a short set of questions to receive a result</div>
       </div>
       <div className="page-body">
         <div className="landing-illus">
@@ -1295,9 +1355,9 @@ function AssessmentLanding({ onStart }) {
         <div className="card card-p mb-4">
           <div className="feat-list">
             {[
-              { icon: "activity", title: "Adaptive Questions",   desc: "Up to 15 questions, each chosen based on your previous answers — no irrelevant questions." },
-              { icon: "shield",   title: "22 Diseases Covered",  desc: "Covers tropical and common diseases relevant to the West African region." },
-              { icon: "info",     title: "Clear Recommendations", desc: "Tells you what to do at home, which test to take, and when to see a doctor." },
+              { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions, each chosen based on your previous answers — no irrelevant ones." },
+              { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa." },
+              { icon: "info",     title: "Clear Recommendations", desc: "Get guidance on home care, what tests to consider, and when to see a doctor." },
             ].map((f) => (
               <div key={f.title} className="feat-row">
                 <div className="feat-icon"><Icon name={f.icon} size={16} color="var(--teal)" /></div>
@@ -1309,7 +1369,7 @@ function AssessmentLanding({ onStart }) {
             ))}
           </div>
           <div className="t-subtitle mt-3 italic" style={{ fontSize: 12 }}>
-            This tool is for informational purposes only and does not replace professional medical advice.
+            This tool provides informational guidance only and does not replace a clinical diagnosis.
           </div>
         </div>
 
@@ -1377,10 +1437,10 @@ function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
 function AnalyzingScreen() {
   const [step, setStep] = useState(0);
   const steps = [
-    "Processing symptom responses...",
+    "Processing your responses...",
     "Running diagnostic models...",
-    "Computing risk level...",
-    "Building your recommendations...",
+    "Calculating risk level...",
+    "Preparing your recommendations...",
   ];
 
   useEffect(() => {
@@ -1421,7 +1481,10 @@ function ResultScreen({ result, onReset, onNewCheck }) {
       {/* Header */}
       <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Your Result</div>
-        <button onClick={onReset} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: "8px", cursor: "pointer", display: "flex" }}>
+        <button
+          onClick={onReset}
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: "8px", cursor: "pointer", display: "flex" }}
+        >
           <Icon name="x" size={16} color="var(--muted)" />
         </button>
       </div>
@@ -1458,7 +1521,9 @@ function ResultScreen({ result, onReset, onNewCheck }) {
               }}
             />
           </div>
-          <div style={{ fontSize: 13, fontWeight: 700, color }}>{Math.round(result.confidence * 100)}% confidence</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color }}>
+            {Math.round(result.confidence * 100)}% match
+          </div>
           {result.explanation && (
             <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)", fontSize: 13, color: "var(--muted)", fontStyle: "italic", lineHeight: 1.6 }}>
               {result.explanation}
@@ -1466,7 +1531,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           )}
         </div>
 
-        {/* Recommendation bubbles */}
+        {/* Recommendations */}
         <div className="section-ttl mb-2">What to Do</div>
         <div className="rec-bubbles mb-4">
           <RecBubble
@@ -1483,7 +1548,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           />
           {rec.safety && (
             <RecBubble
-              icon="alert"     label="Safety Note"       text={rec.safety}
+              icon="alert"     label="Important"         text={rec.safety}
               accent="#dc2626" bg="#fef2f2"
             />
           )}
@@ -1508,7 +1573,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
         {/* Disclaimer */}
         <div className="disclaimer mb-4">
           <Icon name="alert" size={14} color="var(--amber)" />
-          <p>This result is for informational purposes only. It does not replace a clinical diagnosis. Please consult a qualified healthcare professional before making any medical decisions.</p>
+          <p>This result is for informational purposes only. It does not replace a clinical diagnosis. Consult a qualified healthcare professional before making any medical decisions.</p>
         </div>
 
         {/* Actions */}
@@ -1558,7 +1623,7 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
     <div>
       <div className="page-head">
         <div className="t-display">Patient Records</div>
-        <div className="t-subtitle mt-1">{records.length} total assessments</div>
+        <div className="t-subtitle mt-1">{records.length} total assessment{records.length !== 1 ? "s" : ""}</div>
       </div>
       <div className="page-body">
         <div className="search-wrap">
@@ -1618,7 +1683,10 @@ function RecordDetail({ record, onBack }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button
+          onClick={onBack}
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
+        >
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Assessment Detail</div>
@@ -1627,7 +1695,11 @@ function RecordDetail({ record, onBack }) {
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
         <div className="card card-p text-c mb-3">
           <div className={`result-ring result-ring-${record.risk}`} style={{ width: 90, height: 90 }}>
-            <Icon name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"} size={36} color={color} />
+            <Icon
+              name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"}
+              size={36}
+              color={color}
+            />
           </div>
           <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px" }}>{record.disease}</div>
           <span className={`badge badge-${record.risk}`}>{record.risk} Risk</span>
@@ -1635,7 +1707,7 @@ function RecordDetail({ record, onBack }) {
             {record.patient_name} · {new Date(record.created_at).toLocaleString("en-GB")}
           </div>
           <div style={{ fontSize: 13, fontWeight: 700, color, marginTop: 6 }}>
-            {Math.round((record.confidence || 0) * 100)}% confidence
+            {Math.round((record.confidence || 0) * 100)}% match
           </div>
           {record.explanation && (
             <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
@@ -1649,7 +1721,7 @@ function RecordDetail({ record, onBack }) {
           <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16a34a" bg="#f0fdf4" />
           <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#2563eb" bg="#eff6ff" />
           <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}   bg={bg}     />
-          {rec.safety && <RecBubble icon="alert" label="Safety Note" text={rec.safety} accent="#dc2626" bg="#fef2f2" />}
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />}
         </div>
 
         {syms.length > 0 && (
@@ -1657,7 +1729,10 @@ function RecordDetail({ record, onBack }) {
             <div className="section-ttl mb-2">Reported Symptoms ({syms.length})</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {syms.map((s) => (
-                <span key={s} style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal)" }}>
+                <span
+                  key={s}
+                  style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal)" }}
+                >
                   {s}
                 </span>
               ))}
@@ -1674,8 +1749,8 @@ function RecordDetail({ record, onBack }) {
 // ─────────────────────────────────────────────
 function ProfileScreen({ user, onLogout, onNav, toast }) {
   const [editing, setEditing] = useState(false);
-  const [name,    setName]    = useState(user?.name || "");
-  const [age,     setAge]     = useState(user?.age  || "");
+  const [name,    setName]    = useState(user?.name   || "");
+  const [age,     setAge]     = useState(user?.age    || "");
   const [gender,  setGender]  = useState(user?.gender || "");
   const [profile, setProfile] = useState({});
   const [loading, setLoading] = useState(false);
@@ -1732,7 +1807,9 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
                   <label className="field-label">Gender</label>
                   <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
                     <option value="">Select</option>
-                    <option>Male</option><option>Female</option><option>Other</option>
+                    <option>Male</option>
+                    <option>Female</option>
+                    <option>Other</option>
                   </select>
                 </div>
               </div>
@@ -1770,10 +1847,10 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
         <div className="card card-p mb-3">
           <div className="menu-list">
             {[
-              { label: "Settings",            icon: "settings",  action: () => onNav("settings") },
-              { label: "Database Management", icon: "database",  action: () => onNav("admin") },
-              { label: "Privacy and Security",icon: "shield",    action: () => {} },
-              { label: "About TropiCare",     icon: "info",      action: () => {} },
+              { label: "Settings",             icon: "settings", action: () => onNav("settings") },
+              { label: "Database Management",  icon: "database", action: () => onNav("admin") },
+              { label: "Privacy and Security", icon: "shield",   action: () => {} },
+              { label: "About TropiCare",      icon: "info",     action: () => {} },
             ].map((item) => (
               <div key={item.label} className="menu-item" onClick={item.action}>
                 <div className="menu-ico"><Icon name={item.icon} size={16} color="var(--muted)" /></div>
@@ -1790,9 +1867,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
         </button>
 
         <div className="text-c mt-4" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.7 }}>
-          TropiCare v1.0 · KNUST Final Year Project<br />
-          Mensah Obed · Afrique-Ahali Kekeli<br />
-          Supervised by Prof. J.J. Kponyo
+          TropiCare v1.0 · Symptom Checker for Tropical Diseases
         </div>
       </div>
     </div>
@@ -1810,7 +1885,12 @@ function SettingsScreen({ onBack, toast }) {
 
   useEffect(() => {
     const s = Store.get("tc_settings");
-    if (s) { setTheme(s.theme || "light"); setNotifs(s.notifications !== false); setLang(s.language || "en"); setFontSize(s.fontSize || "medium"); }
+    if (s) {
+      setTheme(s.theme || "light");
+      setNotifs(s.notifications !== false);
+      setLang(s.language || "en");
+      setFontSize(s.fontSize || "medium");
+    }
   }, []);
 
   const save = () => {
@@ -1838,7 +1918,10 @@ function SettingsScreen({ onBack, toast }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button
+          onClick={onBack}
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
+        >
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Settings</div>
@@ -1878,7 +1961,12 @@ function SettingsScreen({ onBack, toast }) {
             title: "Language",
             content: (
               <ChipGroup
-                options={[{val:"en",label:"English"},{val:"tw",label:"Twi"},{val:"fr",label:"French"},{val:"ha",label:"Hausa"}]}
+                options={[
+                  {val:"en",label:"English"},
+                  {val:"tw",label:"Twi"},
+                  {val:"fr",label:"French"},
+                  {val:"ha",label:"Hausa"},
+                ]}
                 value={lang} onChange={setLang}
               />
             ),
@@ -1898,7 +1986,7 @@ function SettingsScreen({ onBack, toast }) {
                   <Icon name="check" size={16} color="#22c55e" />
                   <div>
                     <div style={{ fontWeight: 600, fontSize: 13 }}>No Third-Party Sharing</div>
-                    <div className="t-subtitle" style={{ fontSize: 12 }}>Your data is never shared with anyone</div>
+                    <div className="t-subtitle" style={{ fontSize: 12 }}>Your health data is never shared</div>
                   </div>
                 </div>
               </>
@@ -1944,8 +2032,7 @@ function AdminScreen({ onBack, toast }) {
   };
 
   const del = async (id) => {
-    try { await api.delete(`/admin/record/${id}`); }
-    catch {}
+    try { await api.delete(`/admin/record/${id}`); } catch {}
     setRecords((r) => r.filter((x) => x.id !== id));
     toast("Record deleted.");
   };
@@ -1961,7 +2048,10 @@ function AdminScreen({ onBack, toast }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button
+          onClick={onBack}
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
+        >
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Database</div>
@@ -1984,7 +2074,7 @@ function AdminScreen({ onBack, toast }) {
           {confirm && (
             <div className="disclaimer mb-3">
               <Icon name="alert" size={14} color="var(--amber)" />
-              <p>Click again to confirm deletion of {records.length} records.</p>
+              <p>Click again to confirm deletion of {records.length} record{records.length !== 1 ? "s" : ""}.</p>
             </div>
           )}
           <button className="btn btn-danger btn-full" onClick={clearAll} disabled={records.length === 0}>
@@ -2000,7 +2090,12 @@ function AdminScreen({ onBack, toast }) {
         <div className="section-ttl mb-2">All Records ({records.length})</div>
         <div className="search-wrap mb-3">
           <span className="search-icon"><Icon name="search" size={15} /></span>
-          <input className="search-input" placeholder="Search records..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input
+            className="search-input"
+            placeholder="Search records..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
 
         {loading ? (
@@ -2040,8 +2135,4 @@ function AdminScreen({ onBack, toast }) {
 function fmtDate(iso) {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
-}
-
-function mx(...cls) {
-  return cls.filter(Boolean).join(" ");
 }
