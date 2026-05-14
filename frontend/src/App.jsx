@@ -776,49 +776,222 @@ function QuestionIllus({ question }) {
 }
 
 // ─────────────────────────────────────────────
-// ICONS
+// ICONS — proper Lucide-style SVG icons, no emojis
 // ─────────────────────────────────────────────
-function Icon({ name, size = 18, color = "currentColor" }) {
-  const paths = {
-    home:      "M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z",
-    activity:  "M22 12h-4l-3 9L9 3l-3 9H2",
-    clipboard: "M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2",
-    user:      "M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2",
-    settings:  "M12 15a3 3 0 100-6 3 3 0 000 6z",
-    heart:     "M20.8 4.6a5.5 5.5 0 00-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 00-7.8 7.8l1.1 1L12 21l7.7-7.6 1.1-1a5.5 5.5 0 000-7.8z",
-    alert:     "M10.3 3.3L1.7 18a2 2 0 001.7 3h16.2a2 2 0 001.7-3L12.7 3.3a2 2 0 00-3.4 0z",
-    info:      "M12 22a10 10 0 100-20 10 10 0 000 20z",
-    check:     "M20 6L9 13 4 10",
-    x:         "M18 6L6 18 M6 6l12 12",
-    logout:    "M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4 M16 17l5-5-5-5 M21 12H9",
-    chevR:     "M9 18l6-6-6-6",
-    chevL:     "M15 18l-9-6 9-6",
-    edit:      "M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7 M18.5 2.5a2.12 2.12 0 013 3L12 15l-4 1 1-4 9.5-9.5z",
-    trash:     "M3 6h18 M8 6V4h8v2 M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6",
-    search:    "M21 21l-4.35-4.35 M17 11A6 6 0 115 11a6 6 0 0112 0z",
-    shield:    "M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z",
-    database:  "M12 2a9 3 0 019 3v14a9 3 0 01-18 0V5a9 3 0 019-3z",
-    bell:      "M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9 M13.7 21a2 2 0 01-3.4 0",
-    eye:       "M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z M12 9a3 3 0 100 6 3 3 0 000-6z",
-    eyeOff:    "M17.9 17.9A10 10 0 0112 20c-7 0-11-8-11-8a18.5 18.5 0 015.1-5.9 M10.6 5.1A10 10 0 0112 5c7 0 11 8 11 8a18.5 18.5 0 01-2.2 3.2 M1 1l22 22",
-    calendar:  "M3 4h18v16H3z M16 2v4 M8 2v4 M3 10h18",
-  };
+function Icon({ name, size = 18, color = "currentColor", className = "" }) {
+  const s = { width: size, height: size, flexShrink: 0 };
+  const props = { viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", style: s, className };
 
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      {(paths[name] || "").split(" M").filter(Boolean).map((d, i) => (
-        <path key={i} d={`M${d}`} />
-      ))}
-      {name === "user" && <circle cx="12" cy="7" r="4" stroke={color} strokeWidth="2" fill="none" />}
-      {name === "clipboard" && <rect x="8" y="2" width="8" height="4" rx="1" stroke={color} strokeWidth="2" fill="none" />}
-      {name === "database" && <>
-        <path d="M3 5a9 3 0 0018 0" />
-        <path d="M3 12a9 3 0 0018 0" />
-      </>}
-      {name === "info" && <><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" /></>}
-      {name === "alert" && <><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></>}
-    </svg>
-  );
+  switch (name) {
+    // Home — solid house with chimney feel
+    case "home": return (
+      <svg {...props}>
+        <path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z" />
+        <path d="M9 21V12h6v9" />
+      </svg>
+    );
+    // Stethoscope for Check/Assessment
+    case "activity": return (
+      <svg {...props}>
+        <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+      </svg>
+    );
+    // Stethoscope icon
+    case "stethoscope": return (
+      <svg {...props}>
+        <path d="M4.8 2.3A.3.3 0 105 2H4a2 2 0 00-2 2v5a6 6 0 006 6 6 6 0 006-6V4a2 2 0 00-2-2h-1a.2.2 0 10.3.3" />
+        <path d="M8 15v1a6 6 0 006 6v0a6 6 0 006-6v-4" />
+        <circle cx="20" cy="10" r="2" />
+      </svg>
+    );
+    // Clipboard with lines — Records
+    case "clipboard": return (
+      <svg {...props}>
+        <rect x="8" y="2" width="8" height="4" rx="1" ry="1" />
+        <path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2" />
+        <path d="M12 11h4M12 16h4M8 11h.01M8 16h.01" />
+      </svg>
+    );
+    // User with circle head
+    case "user": return (
+      <svg {...props}>
+        <path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2" />
+        <circle cx="12" cy="7" r="4" />
+      </svg>
+    );
+    // Settings gear with spokes
+    case "settings": return (
+      <svg {...props}>
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z" />
+      </svg>
+    );
+    // Heart
+    case "heart": return (
+      <svg {...props}>
+        <path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z" />
+      </svg>
+    );
+    // Alert triangle
+    case "alert": return (
+      <svg {...props}>
+        <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+    );
+    // Info circle
+    case "info": return (
+      <svg {...props}>
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="16" x2="12" y2="12" />
+        <line x1="12" y1="8" x2="12.01" y2="8" />
+      </svg>
+    );
+    // Check mark
+    case "check": return (
+      <svg {...props}>
+        <polyline points="20 6 9 17 4 12" />
+      </svg>
+    );
+    // X / close
+    case "x": return (
+      <svg {...props}>
+        <line x1="18" y1="6" x2="6" y2="18" />
+        <line x1="6" y1="6" x2="18" y2="18" />
+      </svg>
+    );
+    // Log out
+    case "logout": return (
+      <svg {...props}>
+        <path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4" />
+        <polyline points="16 17 21 12 16 7" />
+        <line x1="21" y1="12" x2="9" y2="12" />
+      </svg>
+    );
+    // Chevron right
+    case "chevR": return (
+      <svg {...props}>
+        <polyline points="9 18 15 12 9 6" />
+      </svg>
+    );
+    // Chevron left
+    case "chevL": return (
+      <svg {...props}>
+        <polyline points="15 18 9 12 15 6" />
+      </svg>
+    );
+    // Edit / pencil
+    case "edit": return (
+      <svg {...props}>
+        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+        <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+      </svg>
+    );
+    // Trash
+    case "trash": return (
+      <svg {...props}>
+        <polyline points="3 6 5 6 21 6" />
+        <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6" />
+        <path d="M10 11v6M14 11v6" />
+        <path d="M9 6V4h6v2" />
+      </svg>
+    );
+    // Search
+    case "search": return (
+      <svg {...props}>
+        <circle cx="11" cy="11" r="8" />
+        <line x1="21" y1="21" x2="16.65" y2="16.65" />
+      </svg>
+    );
+    // Shield
+    case "shield": return (
+      <svg {...props}>
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      </svg>
+    );
+    // Database
+    case "database": return (
+      <svg {...props}>
+        <ellipse cx="12" cy="5" rx="9" ry="3" />
+        <path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3" />
+        <path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5" />
+      </svg>
+    );
+    // Bell
+    case "bell": return (
+      <svg {...props}>
+        <path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 01-3.46 0" />
+      </svg>
+    );
+    // Eye
+    case "eye": return (
+      <svg {...props}>
+        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+        <circle cx="12" cy="12" r="3" />
+      </svg>
+    );
+    // Eye off
+    case "eyeOff": return (
+      <svg {...props}>
+        <path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94" />
+        <path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19" />
+        <line x1="1" y1="1" x2="23" y2="23" />
+      </svg>
+    );
+    // Calendar
+    case "calendar": return (
+      <svg {...props}>
+        <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
+        <line x1="16" y1="2" x2="16" y2="6" />
+        <line x1="8" y1="2" x2="8" y2="6" />
+        <line x1="3" y1="10" x2="21" y2="10" />
+      </svg>
+    );
+    // Pulse / waveform for Check tab
+    case "pulse": return (
+      <svg {...props}>
+        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+      </svg>
+    );
+    // File text for Records
+    case "file-text": return (
+      <svg {...props}>
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="16" y1="13" x2="8" y2="13" />
+        <line x1="16" y1="17" x2="8" y2="17" />
+        <polyline points="10 9 9 9 8 9" />
+      </svg>
+    );
+    // Sliders for settings
+    case "sliders": return (
+      <svg {...props}>
+        <line x1="4" y1="21" x2="4" y2="14" />
+        <line x1="4" y1="10" x2="4" y2="3" />
+        <line x1="12" y1="21" x2="12" y2="12" />
+        <line x1="12" y1="8" x2="12" y2="3" />
+        <line x1="20" y1="21" x2="20" y2="16" />
+        <line x1="20" y1="12" x2="20" y2="3" />
+        <line x1="1" y1="14" x2="7" y2="14" />
+        <line x1="9" y1="8" x2="15" y2="8" />
+        <line x1="17" y1="16" x2="23" y2="16" />
+      </svg>
+    );
+    // plus
+    case "plus": return (
+      <svg {...props}>
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+    );
+    default: return (
+      <svg {...props}>
+        <circle cx="12" cy="12" r="4" />
+      </svg>
+    );
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -1025,7 +1198,10 @@ export default function App() {
     { id: "profile",    label: "Profile", icon: "user" },
   ];
 
-  const allNavItems = [...navItems, { id: "settings", label: "Settings", icon: "settings" }];
+  const allNavItems = [
+    ...navItems,
+    { id: "settings", label: "Settings", icon: "settings" },
+  ];
 
   const renderPage = () => {
     switch (page) {
@@ -1337,29 +1513,66 @@ function HomeScreen({ user, onStart, onNav }) {
 }
 
 // ─────────────────────────────────────────────
-// ASSESSMENT LANDING
+// ASSESSMENT LANDING — animated, beautiful
 // ─────────────────────────────────────────────
 function AssessmentLanding({ onStart }) {
-  return (
-    <div>
-      <div className="page-head">
-        <div className="t-display">Symptom Assessment</div>
-        <div className="t-subtitle mt-1">Answer a short set of questions to receive a result</div>
-      </div>
-      <div className="page-body">
-        <div className="landing-illus">
-          <IllusDoctor />
-        </div>
+  const [visible, setVisible] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setVisible(true), 60); return () => clearTimeout(t); }, []);
 
+  const features = [
+    { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "#0d9488", bg: "#f0fdfa" },
+    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "#3b82f6", bg: "#eff6ff" },
+    { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.", color: "#8b5cf6", bg: "#f5f3ff" },
+  ];
+
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+      {/* Animated hero */}
+      <div className="check-hero">
+        <div className="check-hero-bg" />
+        <div className={`check-hero-content${visible ? " visible" : ""}`}>
+          <div className="check-doctor-wrap">
+            <div className="check-pulse-ring check-pulse-1" />
+            <div className="check-pulse-ring check-pulse-2" />
+            <div className="check-pulse-ring check-pulse-3" />
+            <div className="check-doctor-circle">
+              <IllusDoctor />
+            </div>
+          </div>
+          <div className="check-hero-text">
+            <div className="t-display" style={{ color: "#fff", fontSize: 28 }}>Symptom Assessment</div>
+            <div style={{ color: "rgba(255,255,255,0.72)", fontSize: 14, marginTop: 6, lineHeight: 1.5 }}>
+              Answer a short set of questions to receive a result
+            </div>
+          </div>
+        </div>
+        {/* ECG line decoration */}
+        <div className="check-ecg-wrap">
+          <svg viewBox="0 0 400 50" className="check-ecg-svg" fill="none">
+            <polyline
+              points="0,30 60,30 80,30 90,10 100,45 110,18 120,35 140,30 200,30 210,30 220,8 230,42 240,20 250,35 260,30 320,30 340,30 350,12 360,44 370,20 380,33 400,30"
+              stroke="rgba(255,255,255,0.35)"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </div>
+      </div>
+
+      {/* Features */}
+      <div className="page-body" style={{ flex: 1 }}>
         <div className="card card-p mb-4">
           <div className="feat-list">
-            {[
-              { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions, each chosen based on your previous answers — no irrelevant ones." },
-              { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa." },
-              { icon: "info",     title: "Clear Recommendations", desc: "Get guidance on home care, what tests to consider, and when to see a doctor." },
-            ].map((f) => (
-              <div key={f.title} className="feat-row">
-                <div className="feat-icon"><Icon name={f.icon} size={16} color="var(--teal)" /></div>
+            {features.map((f, i) => (
+              <div
+                key={f.title}
+                className={`feat-row check-feat${visible ? " feat-visible" : ""}`}
+                style={{ animationDelay: `${0.15 + i * 0.1}s` }}
+              >
+                <div className="feat-icon" style={{ background: f.bg }}>
+                  <Icon name={f.icon} size={16} color={f.color} />
+                </div>
                 <div>
                   <div className="feat-title">{f.title}</div>
                   <div className="feat-desc">{f.desc}</div>
@@ -1372,9 +1585,10 @@ function AssessmentLanding({ onStart }) {
           </div>
         </div>
 
-        <button className="btn btn-primary btn-full btn-lg" onClick={onStart}>
+        <button className="btn btn-primary btn-full btn-lg check-start-btn" onClick={onStart}>
+          <Icon name="activity" size={18} color="#fff" />
           Begin Assessment
-          <Icon name="chevR" size={16} color="#fff" />
+          <Icon name="chevR" size={16} color="rgba(255,255,255,0.7)" />
         </button>
       </div>
     </div>
