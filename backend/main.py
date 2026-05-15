@@ -1,19 +1,5 @@
 """
-TropiCare API — KNUST Final Year Project
-========================================
-Run locally:
-    uvicorn main:app --reload --port 8000
-
-Deploy (Render / Railway):
-    uvicorn main:app --host 0.0.0.0 --port $PORT
-
-Required .env variables:
-    SECRET_KEY=...
-    OPENROUTER_API_KEY=sk-or-...
-    DATABASE_URL=sqlite:///./tropicare.db   (or postgres URL)
-    ALLOWED_ORIGINS=*                       (comma-separated for production)
-    SITE_URL=http://localhost:8000
-    SITE_NAME=TropiCare
+TropiCare API
 """
 
 import os
