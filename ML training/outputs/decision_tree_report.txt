@@ -17,9 +17,9 @@ Dimorphic hemmorhoids(piles)       1.00      1.00      1.00        24
             Fungal infection       1.00      1.00      1.00        24
                  Hepatitis B       1.00      1.00      1.00        24
                  Hepatitis C       1.00      1.00      1.00        24
-                 Hepatitis D       0.89      1.00      0.94        24
+                 Hepatitis D       1.00      1.00      1.00        24
                  Hepatitis E       1.00      1.00      1.00        24
-                    Jaundice       1.00      0.88      0.93        24
+                    Jaundice       1.00      1.00      1.00        24
                      Malaria       1.00      1.00      1.00        24
          Peptic ulcer diseae       1.00      1.00      1.00        24
                    Pneumonia       1.00      1.00      1.00        24
@@ -28,6 +28,6 @@ Dimorphic hemmorhoids(piles)       1.00      1.00      1.00        24
      Urinary tract infection       1.00      1.00      1.00        24
                  hepatitis A       1.00      1.00      1.00        24
 
-                    accuracy                           0.99       529
-                   macro avg       0.99      0.99      0.99       529
-                weighted avg       0.99      0.99      0.99       529
+                    accuracy                           1.00       529
+                   macro avg       1.00      1.00      1.00       529
+                weighted avg       1.00      1.00      1.00       529
