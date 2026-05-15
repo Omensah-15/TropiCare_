@@ -10,7 +10,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 // ─────────────────────────────────────────────
 const API_BASE = "https://tropicare.onrender.com/api/v1";
 
-import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
 // ─────────────────────────────────────────────
 // API CLIENT
 // ─────────────────────────────────────────────
