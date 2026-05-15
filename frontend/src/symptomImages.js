@@ -1,8 +1,6 @@
 /**
  * TropiCare — Symptom Image Registry
  * ====================================
- * Companion file for App.jsx (KNUST Final Year Project)
- * Mensah Obed · Afrique-Ahali Kekeli
  *
  * HOW IT WORKS
  * ────────────
