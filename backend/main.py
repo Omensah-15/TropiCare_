@@ -1,9 +1,6 @@
 """
 TropiCare API — KNUST Final Year Project
-=========================================
-Every route in this file maps 1-to-1 with a fetch() call in App.jsx.
-No route is missing. No response shape deviates from what the frontend expects.
-
+========================================
 Run locally:
     uvicorn main:app --reload --port 8000
 
@@ -11,136 +8,124 @@ Deploy (Render / Railway):
     uvicorn main:app --host 0.0.0.0 --port $PORT
 
 Required .env variables:
-    SECRET_KEY=<any long random string>
-    OPENROUTER_API_KEY=sk-or-...       (optional — AI recommendations)
-    OPENROUTER_MODEL=mistralai/mistral-7b-instruct:free
-    DATABASE_URL=sqlite:///./tropicare.db
-    ALLOWED_ORIGINS=*
+    SECRET_KEY=...
+    OPENROUTER_API_KEY=sk-or-...
+    DATABASE_URL=sqlite:///./tropicare.db   (or postgres URL)
+    ALLOWED_ORIGINS=*                       (comma-separated for production)
     SITE_URL=http://localhost:8000
     SITE_NAME=TropiCare
 """
 
-from __future__ import annotations
-
+import os
+import json
+import uuid
+import logging
 import asyncio
 import hashlib
-import json
-import logging
-import os
 import secrets
-import uuid
-from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import List, Optional, Dict, Any
 
 import aiohttp
-from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, status
+import numpy as np
+
+try:
+    import joblib
+    JOBLIB_AVAILABLE = True
+except ImportError:
+    JOBLIB_AVAILABLE = False
+
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from jose import JWTError, jwt
-from pydantic import BaseModel, EmailStr, field_validator
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel
 from sqlalchemy import (
-    Boolean,
-    Column,
-    DateTime,
-    Float,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    create_engine,
+    create_engine, Column, Integer, String, Float,
+    Boolean, DateTime, ForeignKey, Text,
 )
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
+from jose import JWTError, jwt
+from dotenv import load_dotenv
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# CONFIG
+# ─────────────────────────────────────────────────────────────
 load_dotenv()
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("tropicare")
 
-SECRET_KEY               = os.getenv("SECRET_KEY", "tropicare-dev-secret-change-in-production-2024")
+SECRET_KEY               = os.getenv("SECRET_KEY", "tropicare-fallback-secret-2024")
 ALGORITHM                = "HS256"
 ACCESS_TOKEN_EXPIRE_DAYS = 7
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
+# Free models — change to any free model on openrouter.ai
 OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
 
 SITE_URL     = os.getenv("SITE_URL", "http://localhost:8000")
 SITE_NAME    = os.getenv("SITE_NAME", "TropiCare")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./tropicare.db")
+MODELS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
-ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",")]
-
-# ─────────────────────────────────────────────────────────────────────────────
-# DATABASE SETUP
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# DATABASE
+# ─────────────────────────────────────────────────────────────
 connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine       = create_engine(DATABASE_URL, connect_args=connect_args, echo=False)
+engine       = create_engine(DATABASE_URL, connect_args=connect_args)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base         = declarative_base()
 
 
-# ──────────────────────────────────────
-# ORM MODELS
-# ──────────────────────────────────────
 class UserModel(Base):
     __tablename__ = "users"
-
     id         = Column(Integer, primary_key=True, index=True)
     email      = Column(String(255), unique=True, index=True, nullable=False)
     name       = Column(String(255), nullable=False)
-    pw_hash    = Column(String(512), nullable=False)
-    age        = Column(String(10),  nullable=True)
-    gender     = Column(String(20),  nullable=True)
+    pw_hash    = Column(String(512), nullable=True)
+    age        = Column(String(10), nullable=True)
+    gender     = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
-class AssessmentSession(Base):
-    __tablename__ = "assessment_sessions"
-
-    id              = Column(Integer, primary_key=True, index=True)
-    session_id      = Column(String(64), unique=True, index=True, nullable=False)
-    user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
-    answers         = Column(Text, default="{}")
-    asked_questions = Column(Text, default="[]")
-    completed       = Column(Boolean, default=False)
-    created_at      = Column(DateTime, default=datetime.utcnow)
-
-
-class DiagnosisRecord(Base):
+class DiagnosisModel(Base):
     __tablename__ = "diagnoses"
-
     id              = Column(Integer, primary_key=True, index=True)
     user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
-    session_id      = Column(String(64), index=True, nullable=True)
-    disease         = Column(String(100), nullable=False)
-    risk            = Column(String(20),  nullable=False)
-    confidence      = Column(Float,       nullable=False)
-    answers         = Column(Text, default="{}")
-    active_symptoms = Column(Text, default="[]")
+    session_id      = Column(String(64), index=True)
+    disease         = Column(String(100))
+    risk            = Column(String(20))
+    confidence      = Column(Float)
+    answers         = Column(Text)           # stored as JSON string
+    active_symptoms = Column(Text)           # stored as JSON string
     rec_home_care   = Column(Text, nullable=True)
     rec_test        = Column(Text, nullable=True)
     rec_doctor      = Column(Text, nullable=True)
     rec_safety      = Column(Text, nullable=True)
-    explanation     = Column(Text, nullable=True)
-    all_scores      = Column(Text, default="{}")
-    method          = Column(String(30), default="scoring")
-    ai_used         = Column(Boolean, default=False)
+    ai_explanation  = Column(Text, nullable=True)
+    ml_scores       = Column(Text, nullable=True)  # stored as JSON string
     created_at      = Column(DateTime, default=datetime.utcnow)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JSON HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-def _load(value: Optional[str], default: Any) -> Any:
-    if not value:
+class SessionModel(Base):
+    __tablename__ = "assessment_sessions"
+    id              = Column(Integer, primary_key=True, index=True)
+    session_id      = Column(String(64), unique=True, index=True)
+    user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
+    answers         = Column(Text, default="{}")       # JSON string
+    asked_questions = Column(Text, default="[]")       # JSON string
+    completed       = Column(Boolean, default=False)
+    created_at      = Column(DateTime, default=datetime.utcnow)
+
+
+# ─────────────────────────────────────────────────────────────
+# DB HELPERS — safe JSON read/write
+# ─────────────────────────────────────────────────────────────
+def _load_json(value: Optional[str], default):
+    """Safely parse a JSON string stored in a Text column."""
+    if value is None:
         return default
     try:
         return json.loads(value)
@@ -148,70 +133,82 @@ def _load(value: Optional[str], default: Any) -> Any:
         return default
 
 
-def _dump(value: Any) -> str:
-    return json.dumps(value, ensure_ascii=False)
+def _dump_json(value) -> str:
+    return json.dumps(value)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DISEASE / SYMPTOM DATA  (mirrors App.jsx exactly)
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# ML MODELS
+# ─────────────────────────────────────────────────────────────
+LOADED_MODELS: Dict[str, Any] = {}
+
+
+def load_ml_models() -> None:
+    if not JOBLIB_AVAILABLE:
+        logger.info("joblib not available — using built-in scoring engine.")
+        return
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    pkl_files = [f for f in os.listdir(MODELS_DIR) if f.endswith(".pkl")]
+    if not pkl_files:
+        logger.info("No .pkl models found in models/ — using built-in scoring engine.")
+        return
+    for fname in pkl_files:
+        key = fname.replace(".pkl", "")
+        try:
+            LOADED_MODELS[key] = joblib.load(os.path.join(MODELS_DIR, fname))
+            logger.info(f"Loaded ML model: {fname}")
+        except Exception as e:
+            logger.error(f"Failed to load {fname}: {e}")
+
+
+# ─────────────────────────────────────────────────────────────
+# DISEASE / SYMPTOM DATA
+# ─────────────────────────────────────────────────────────────
 RISK_MAP: Dict[str, str] = {
-    "Malaria":                   "High",
-    "Typhoid":                   "High",
-    "Dengue":                    "High",
-    "Tuberculosis":              "High",
-    "Hepatitis B":               "High",
-    "Hepatitis C":               "High",
-    "Hepatitis D":               "High",
-    "Pneumonia":                 "High",
-    "Hepatitis A":               "Medium",
-    "Hepatitis E":               "Medium",
-    "Alcoholic Hepatitis":       "Medium",
-    "Jaundice":                  "Medium",
-    "Chicken Pox":               "Medium",
-    "Bronchial Asthma":          "Medium",
-    "Urinary Tract Infection":   "Medium",
-    "Dimorphic Haemorrhoids":    "Medium",
-    "Peptic Ulcer Disease":      "Medium",
-    "Diabetes":                  "Medium",
-    "Fungal Infection":          "Low",
-    "Allergy":                   "Low",
-    "Common Cold":               "Low",
-    "Drug Reaction":             "Low",
+    "Malaria": "High", "Typhoid": "High", "Dengue": "High",
+    "Tuberculosis": "High", "Hepatitis B": "High", "Hepatitis C": "High",
+    "Hepatitis D": "High", "Pneumonia": "High",
+    "Hepatitis A": "Medium", "Hepatitis E": "Medium",
+    "Alcoholic Hepatitis": "Medium", "Jaundice": "Medium",
+    "Chicken Pox": "Medium", "Bronchial Asthma": "Medium",
+    "Urinary Tract Infection": "Medium", "Dimorphic Haemorrhoids": "Medium",
+    "Peptic Ulcer Disease": "Medium", "Diabetes": "Medium",
+    "Fungal Infection": "Low", "Allergy": "Low",
+    "Common Cold": "Low", "Drug Reaction": "Low",
 }
 
 DISEASE_SYMPTOM_MAP: Dict[str, List[str]] = {
-    "Malaria":              ["high_fever","chills","sweating","headache","muscle_pain","vomiting","fatigue","joint_pain","nausea","malaise","loss_of_appetite","fast_heart_rate","confusion","coma"],
-    "Typhoid":              ["high_fever","headache","fatigue","loss_of_appetite","vomiting","constipation","toxic_look","abdominal_pain","diarrhoea","loss_of_appetite_fever","fast_heart_rate","red_spots_over_body","confusion"],
-    "Dengue":               ["high_fever","headache","pain_behind_eyes","muscle_pain","joint_pain","skin_rash","red_spots_over_body","vomiting","fatigue","malaise","fast_heart_rate","swelled_lymph_nodes"],
-    "Tuberculosis":         ["cough","blood_in_sputum","weight_loss","fatigue","sweating","chest_pain","breathlessness","phlegm","loss_of_appetite","high_fever","swollen_lymph_neck","family_history"],
-    "Hepatitis B":          ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","blood_transfusion","unsterile_injections","abdominal_pain","nausea","loss_of_appetite","internal_itching","acute_liver_failure"],
-    "Hepatitis C":          ["yellowing_of_eyes","yellowish_skin","fatigue","nausea","loss_of_appetite","blood_transfusion","dark_urine","weight_loss","internal_itching","abdominal_pain"],
-    "Hepatitis D":          ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","acute_liver_failure","fluid_overload","blood_transfusion","unsterile_injections","swelling_stomach"],
-    "Pneumonia":            ["cough","breathlessness","chest_pain","high_fever","rusty_sputum","chills","fatigue","phlegm","loss_of_appetite","malaise"],
-    "Hepatitis A":          ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","loss_of_appetite","nausea","abdominal_pain","vomiting","mild_fever","malaise","distension_of_abdomen"],
-    "Hepatitis E":          ["yellowing_of_eyes","yellowish_skin","fatigue","loss_of_appetite","nausea","mild_fever","yellow_urine","abdominal_pain","malaise"],
-    "Alcoholic Hepatitis":  ["yellowing_of_eyes","vomiting","abdominal_pain","alcohol_history","swelling_stomach","fluid_overload","yellowish_skin","acute_liver_failure","distension_of_abdomen"],
-    "Jaundice":             ["yellowing_of_eyes","yellowish_skin","dark_urine","yellow_urine","itching","fatigue","abdominal_pain","internal_itching","fluid_overload","distension_of_abdomen"],
-    "Chicken Pox":          ["skin_rash","itching","red_spots_over_body","mild_fever","fatigue","headache","loss_of_appetite","nodal_skin_eruptions"],
-    "Bronchial Asthma":     ["breathlessness","cough","phlegm","chest_pain","fatigue"],
-    "Urinary Tract Infection": ["burning_micturition","urinating_frequently","continuous_feel_of_urine","bladder_discomfort","foul_smell_of_urine","spotting_urination","back_pain"],
+    "Malaria":                ["high_fever","chills","sweating","headache","muscle_pain","vomiting","fatigue","joint_pain","nausea","malaise","loss_of_appetite","fast_heart_rate","confusion","coma"],
+    "Typhoid":                ["high_fever","headache","fatigue","loss_of_appetite","vomiting","constipation","toxic_look","abdominal_pain","diarrhoea","loss_of_appetite_fever","fast_heart_rate","red_spots_over_body","confusion"],
+    "Dengue":                 ["high_fever","headache","pain_behind_eyes","muscle_pain","joint_pain","skin_rash","red_spots_over_body","vomiting","fatigue","malaise","fast_heart_rate","swelled_lymph_nodes"],
+    "Tuberculosis":           ["cough","blood_in_sputum","weight_loss","fatigue","sweating","chest_pain","breathlessness","phlegm","loss_of_appetite","high_fever","swollen_lymph_neck","family_history"],
+    "Hepatitis B":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","blood_transfusion","unsterile_injections","abdominal_pain","nausea","loss_of_appetite","internal_itching","acute_liver_failure"],
+    "Hepatitis C":            ["yellowing_of_eyes","yellowish_skin","fatigue","nausea","loss_of_appetite","blood_transfusion","dark_urine","weight_loss","internal_itching","abdominal_pain"],
+    "Hepatitis D":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","acute_liver_failure","fluid_overload","blood_transfusion","unsterile_injections","swelling_stomach"],
+    "Pneumonia":              ["cough","breathlessness","chest_pain","high_fever","rusty_sputum","chills","fatigue","phlegm","loss_of_appetite","malaise"],
+    "Hepatitis A":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","loss_of_appetite","nausea","abdominal_pain","vomiting","mild_fever","malaise","distension_of_abdomen"],
+    "Hepatitis E":            ["yellowing_of_eyes","yellowish_skin","fatigue","loss_of_appetite","nausea","mild_fever","yellow_urine","abdominal_pain","malaise"],
+    "Alcoholic Hepatitis":    ["yellowing_of_eyes","vomiting","abdominal_pain","alcohol_history","swelling_stomach","fluid_overload","yellowish_skin","acute_liver_failure","distension_of_abdomen"],
+    "Jaundice":               ["yellowing_of_eyes","yellowish_skin","dark_urine","yellow_urine","itching","fatigue","abdominal_pain","internal_itching","fluid_overload","distension_of_abdomen"],
+    "Chicken Pox":            ["skin_rash","itching","red_spots_over_body","mild_fever","fatigue","headache","loss_of_appetite","nodal_skin_eruptions"],
+    "Bronchial Asthma":       ["breathlessness","cough","phlegm","chest_pain","fatigue"],
+    "Urinary Tract Infection":["burning_micturition","urinating_frequently","continuous_feel_of_urine","bladder_discomfort","foul_smell_of_urine","spotting_urination","back_pain"],
     "Dimorphic Haemorrhoids": ["bloody_stool","pain_anal_region","pain_bowel_movements","constipation","passage_of_gases","irritation_anus"],
-    "Peptic Ulcer Disease": ["stomach_pain","indigestion","vomiting","loss_of_appetite","nausea","stomach_bleeding","abdominal_pain","passage_of_gases"],
-    "Diabetes":             ["polyuria","excessive_hunger","irregular_sugar_level","weight_loss","fatigue","blurred_vision","urinating_frequently","increased_appetite","family_history","obesity"],
-    "Fungal Infection":     ["itching","skin_rash","dischromic_patches","nodal_skin_eruptions","irritation_anus"],
-    "Allergy":              ["continuous_sneezing","runny_nose","itching","watering_from_eyes","skin_rash","redness_of_eyes","throat_irritation","mild_fever","joint_pain"],
-    "Common Cold":          ["runny_nose","continuous_sneezing","throat_irritation","mild_fever","cough","headache","sinus_pressure","watering_from_eyes","loss_of_smell"],
-    "Drug Reaction":        ["itching","skin_rash","red_spots_over_body","fatigue","nausea","diarrhoea"],
+    "Peptic Ulcer Disease":   ["stomach_pain","indigestion","vomiting","loss_of_appetite","nausea","stomach_bleeding","abdominal_pain","passage_of_gases"],
+    "Diabetes":               ["polyuria","excessive_hunger","irregular_sugar_level","weight_loss","fatigue","blurred_vision","urinating_frequently","increased_appetite","family_history","obesity"],
+    "Fungal Infection":       ["itching","skin_rash","dischromic_patches","nodal_skin_eruptions","irritation_anus"],
+    "Allergy":                ["continuous_sneezing","runny_nose","itching","watering_from_eyes","skin_rash","redness_of_eyes","throat_irritation","mild_fever","joint_pain"],
+    "Common Cold":            ["runny_nose","continuous_sneezing","throat_irritation","mild_fever","cough","headache","sinus_pressure","watering_from_eyes","loss_of_smell"],
+    "Drug Reaction":          ["itching","skin_rash","red_spots_over_body","fatigue","nausea","diarrhoea"],
 }
 
 ALL_QUESTIONS: List[Dict[str, str]] = [
     {"id":"high_fever","question":"Do you have a high fever?","category":"General"},
     {"id":"mild_fever","question":"Do you have a mild fever?","category":"General"},
     {"id":"fatigue","question":"Do you feel unusually tired or weak?","category":"General"},
-    {"id":"malaise","question":"Do you feel generally unwell?","category":"General"},
+    {"id":"malaise","question":"Do you feel generally unwell or sick?","category":"General"},
     {"id":"chills","question":"Do you have chills or shivering?","category":"General"},
-    {"id":"sweating","question":"Do you have episodes of sweating?","category":"General"},
+    {"id":"sweating","question":"Do you have sweating episodes?","category":"General"},
     {"id":"headache","question":"Do you have headaches?","category":"General"},
     {"id":"muscle_pain","question":"Do you have muscle pain or body aches?","category":"General"},
     {"id":"joint_pain","question":"Do you have joint pain?","category":"General"},
@@ -220,7 +217,7 @@ ALL_QUESTIONS: List[Dict[str, str]] = [
     {"id":"phlegm","question":"Are you coughing up phlegm or mucus?","category":"Respiratory"},
     {"id":"rusty_sputum","question":"Are you coughing up rusty or brown-coloured sputum?","category":"Respiratory"},
     {"id":"blood_in_sputum","question":"Are you coughing up blood?","category":"Respiratory"},
-    {"id":"breathlessness","question":"Do you have difficulty breathing?","category":"Respiratory"},
+    {"id":"breathlessness","question":"Do you have difficulty breathing or shortness of breath?","category":"Respiratory"},
     {"id":"chest_pain","question":"Do you have chest pain?","category":"Respiratory"},
     {"id":"runny_nose","question":"Do you have a runny nose?","category":"Respiratory"},
     {"id":"continuous_sneezing","question":"Do you sneeze frequently?","category":"Respiratory"},
@@ -228,317 +225,244 @@ ALL_QUESTIONS: List[Dict[str, str]] = [
     {"id":"sinus_pressure","question":"Do you have sinus pressure or nasal congestion?","category":"Respiratory"},
     {"id":"watering_from_eyes","question":"Do you have watery eyes?","category":"Respiratory"},
     {"id":"loss_of_smell","question":"Have you lost your sense of smell?","category":"Respiratory"},
-    {"id":"nausea","question":"Do you feel nauseous?","category":"Digestive"},
-    {"id":"vomiting","question":"Have you been vomiting?","category":"Digestive"},
+    {"id":"nausea","question":"Do you have nausea?","category":"Digestive"},
+    {"id":"vomiting","question":"Do you have vomiting?","category":"Digestive"},
     {"id":"diarrhoea","question":"Do you have diarrhoea?","category":"Digestive"},
     {"id":"stomach_pain","question":"Do you have stomach pain?","category":"Digestive"},
     {"id":"abdominal_pain","question":"Do you have abdominal or belly pain?","category":"Digestive"},
     {"id":"indigestion","question":"Do you have indigestion or acidity?","category":"Digestive"},
     {"id":"distension_of_abdomen","question":"Do you feel bloated or have a distended abdomen?","category":"Digestive"},
     {"id":"constipation","question":"Do you have constipation?","category":"Digestive"},
-    {"id":"passage_of_gases","question":"Do you have excessive gas?","category":"Digestive"},
-    {"id":"bloody_stool","question":"Do you notice blood in your stool?","category":"Digestive"},
-    {"id":"loss_of_appetite","question":"Have you lost your appetite?","category":"Digestive"},
+    {"id":"passage_of_gases","question":"Do you have excessive gas or passage of gas?","category":"Digestive"},
+    {"id":"bloody_stool","question":"Do you have blood in your stool?","category":"Digestive"},
+    {"id":"loss_of_appetite","question":"Do you have a loss of appetite?","category":"Digestive"},
     {"id":"stomach_bleeding","question":"Do you have stomach bleeding?","category":"Digestive"},
-    {"id":"yellowish_skin","question":"Is your skin yellowish or jaundiced?","category":"Liver"},
-    {"id":"yellowing_of_eyes","question":"Are the whites of your eyes turning yellow?","category":"Liver"},
+    {"id":"yellowish_skin","question":"Is your skin yellowish or pale?","category":"Liver"},
+    {"id":"yellowing_of_eyes","question":"Are your eyes yellow?","category":"Liver"},
     {"id":"dark_urine","question":"Is your urine dark or tea-coloured?","category":"Liver"},
-    {"id":"yellow_urine","question":"Is your urine unusually yellow?","category":"Liver"},
-    {"id":"internal_itching","question":"Do you experience internal itching?","category":"Liver"},
+    {"id":"yellow_urine","question":"Is your urine yellow-coloured?","category":"Liver"},
+    {"id":"internal_itching","question":"Do you have internal itching?","category":"Liver"},
     {"id":"acute_liver_failure","question":"Do you have signs of acute liver failure?","category":"Liver"},
-    {"id":"fluid_overload","question":"Do you have abnormal body swelling or fluid retention?","category":"Liver"},
-    {"id":"itching","question":"Do you have itchy skin?","category":"Skin"},
+    {"id":"fluid_overload","question":"Do you have fluid overload or swelling in the body?","category":"Liver"},
+    {"id":"itching","question":"Do you have itching on your skin?","category":"Skin"},
     {"id":"skin_rash","question":"Do you have a skin rash?","category":"Skin"},
     {"id":"red_spots_over_body","question":"Do you have red spots on your body?","category":"Skin"},
     {"id":"nodal_skin_eruptions","question":"Do you have nodules or skin eruptions?","category":"Skin"},
     {"id":"dischromic_patches","question":"Do you have discoloured patches on your skin?","category":"Skin"},
-    {"id":"redness_of_eyes","question":"Do you have red or irritated eyes?","category":"Eyes"},
+    {"id":"redness_of_eyes","question":"Do you have redness in your eyes?","category":"Eyes"},
     {"id":"blurred_vision","question":"Do you have blurred or distorted vision?","category":"Eyes"},
     {"id":"pain_behind_eyes","question":"Do you have pain behind your eyes?","category":"Eyes"},
     {"id":"burning_micturition","question":"Do you feel a burning sensation when urinating?","category":"Urinary"},
-    {"id":"urinating_frequently","question":"Do you urinate much more than usual?","category":"Urinary"},
-    {"id":"continuous_feel_of_urine","question":"Do you have a persistent urge to urinate?","category":"Urinary"},
-    {"id":"bladder_discomfort","question":"Do you have bladder discomfort?","category":"Urinary"},
-    {"id":"foul_smell_of_urine","question":"Does your urine have an unusual smell?","category":"Urinary"},
-    {"id":"spotting_urination","question":"Do you notice spotting during urination?","category":"Urinary"},
+    {"id":"urinating_frequently","question":"Do you urinate very frequently?","category":"Urinary"},
+    {"id":"continuous_feel_of_urine","question":"Do you have a continuous urge to urinate?","category":"Urinary"},
+    {"id":"bladder_discomfort","question":"Do you have discomfort in your bladder?","category":"Urinary"},
+    {"id":"foul_smell_of_urine","question":"Does your urine have a foul smell?","category":"Urinary"},
+    {"id":"spotting_urination","question":"Do you have spotting during urination?","category":"Urinary"},
     {"id":"pain_anal_region","question":"Do you have pain in your anal region?","category":"Rectal"},
     {"id":"pain_bowel_movements","question":"Do you have pain during bowel movements?","category":"Rectal"},
     {"id":"irritation_anus","question":"Do you have irritation around the anus?","category":"Rectal"},
     {"id":"restlessness","question":"Do you feel restless or agitated?","category":"Neurological"},
-    {"id":"mood_swings","question":"Have you been experiencing mood swings?","category":"Neurological"},
+    {"id":"mood_swings","question":"Do you have mood swings?","category":"Neurological"},
     {"id":"confusion","question":"Do you feel confused or disoriented?","category":"Neurological"},
-    {"id":"coma","question":"Have you experienced any loss of consciousness?","category":"Neurological"},
+    {"id":"coma","question":"Have you lost consciousness or fallen into a coma?","category":"Neurological"},
     {"id":"excessive_hunger","question":"Are you excessively hungry?","category":"Metabolic"},
     {"id":"increased_appetite","question":"Has your appetite increased significantly?","category":"Metabolic"},
     {"id":"irregular_sugar_level","question":"Do you have an irregular blood sugar level?","category":"Metabolic"},
-    {"id":"polyuria","question":"Do you urinate in unusually large amounts?","category":"Metabolic"},
+    {"id":"polyuria","question":"Do you urinate in very large amounts?","category":"Metabolic"},
     {"id":"dehydration","question":"Do you feel severely dehydrated?","category":"Metabolic"},
-    {"id":"weight_loss","question":"Have you experienced unexplained weight loss?","category":"Metabolic"},
-    {"id":"obesity","question":"Are you significantly overweight?","category":"Metabolic"},
+    {"id":"weight_loss","question":"Do you have unexplained weight loss?","category":"Metabolic"},
+    {"id":"obesity","question":"Are you obese or significantly overweight?","category":"Metabolic"},
     {"id":"swelled_lymph_nodes","question":"Do you have swollen lymph nodes?","category":"Infection"},
-    {"id":"swelling_stomach","question":"Is your stomach area swollen?","category":"Infection"},
-    {"id":"fast_heart_rate","question":"Do you have a fast or irregular heartbeat?","category":"Infection"},
-    {"id":"toxic_look","question":"Do you look or feel severely ill?","category":"Infection"},
+    {"id":"swelling_stomach","question":"Do you have swelling of your stomach area?","category":"Infection"},
+    {"id":"fast_heart_rate","question":"Do you have a fast or irregular heart rate?","category":"Infection"},
+    {"id":"toxic_look","question":"Do you look severely ill or toxic-looking?","category":"Infection"},
     {"id":"swollen_lymph_neck","question":"Do you have swollen lymph nodes in the neck or armpit?","category":"Infection"},
-    {"id":"loss_of_appetite_fever","question":"Have you lost your appetite alongside a fever?","category":"Infection"},
+    {"id":"loss_of_appetite_fever","question":"Do you have a loss of appetite alongside fever?","category":"Infection"},
     {"id":"family_history","question":"Do you have a family history of this condition?","category":"History"},
-    {"id":"blood_transfusion","question":"Have you received a blood transfusion recently?","category":"History"},
-    {"id":"unsterile_injections","question":"Have you been injected with unsterile equipment?","category":"History"},
-    {"id":"alcohol_history","question":"Do you have a history of heavy alcohol use?","category":"History"},
+    {"id":"blood_transfusion","question":"Have you recently received a blood transfusion?","category":"History"},
+    {"id":"unsterile_injections","question":"Have you received injections with unsterile equipment?","category":"History"},
+    {"id":"alcohol_history","question":"Do you have a history of heavy alcohol consumption?","category":"History"},
 ]
 
-Q_INDEX: Dict[str, Dict[str, str]] = {q["id"]: q for q in ALL_QUESTIONS}
+Q_INDEX: Dict[str, Dict] = {q["id"]: q for q in ALL_QUESTIONS}
 
-# Detailed per-disease default recommendations
 DEFAULT_RECS: Dict[str, Dict[str, str]] = {
-    "Malaria": {
-        "home_care": "Rest completely, drink clean water or oral rehydration salts, and keep the patient cool with a damp cloth if the fever is very high.",
-        "test": "Malaria Rapid Diagnostic Test (RDT) or blood smear microscopy.",
-        "doctor": "Visit a clinic or hospital immediately. Malaria requires prescription antimalarial medication.",
-        "safety": "Do not wait — malaria can become life-threatening within 24 to 48 hours if untreated.",
-    },
-    "Typhoid": {
-        "home_care": "Rest, eat soft easily digestible foods, and drink only boiled or bottled water. Avoid raw vegetables and street food.",
-        "test": "Widal test or blood/stool culture for definitive diagnosis.",
-        "doctor": "See a doctor for antibiotic prescription. Typhoid is treatable but requires the correct antibiotic.",
-        "safety": "Wash hands thoroughly after using the toilet to avoid spreading infection to others in the household.",
-    },
-    "Dengue": {
-        "home_care": "Rest completely and drink plenty of fluids including water and oral rehydration salts. Monitor platelet count daily if possible.",
-        "test": "Dengue NS1 antigen test (best in first 5 days) or dengue IgM/IgG antibody test.",
-        "doctor": "Go to a clinic or hospital. If you notice bleeding gums, blood in urine, or severe abdominal pain, go to emergency immediately.",
-        "safety": "Do not take aspirin or ibuprofen — they can worsen internal bleeding in dengue. Use paracetamol only for fever.",
-    },
-    "Tuberculosis": {
-        "home_care": "Rest in a well-ventilated room. Cover your mouth when coughing and dispose of tissues carefully. Eat nutritious meals.",
-        "test": "Sputum smear microscopy, GeneXpert (rapid TB test), and chest X-ray.",
-        "doctor": "Visit a TB clinic or public hospital immediately. TB treatment is free at government facilities in Ghana.",
-        "safety": "TB is airborne and contagious. Wear a mask around others until a doctor confirms you are non-infectious.",
-    },
-    "Hepatitis B": {
-        "home_care": "Rest completely and avoid alcohol entirely. Eat a low-fat, high-protein diet. Do not share razors, toothbrushes, or needles.",
-        "test": "Hepatitis B surface antigen (HBsAg) test and liver function tests (LFTs).",
-        "doctor": "See a doctor for evaluation. Chronic hepatitis B requires antiviral medication and regular liver monitoring.",
-        "safety": "Hepatitis B is spread through blood and bodily fluids. Inform close contacts so they can be tested and vaccinated.",
-    },
-    "Hepatitis C": {
-        "home_care": "Rest and avoid alcohol completely. Eat a healthy balanced diet and stay hydrated.",
-        "test": "Hepatitis C antibody test (anti-HCV) and HCV RNA viral load test to confirm active infection.",
-        "doctor": "See a specialist. Hepatitis C is now curable with direct-acting antiviral medications.",
-        "safety": "Do not share needles, syringes, or sharp objects. Inform partners and household members.",
-    },
-    "Hepatitis D": {
-        "home_care": "Stop alcohol immediately and rest. Hepatitis D only occurs alongside Hepatitis B.",
-        "test": "Hepatitis D antibody test (anti-HDV), HBsAg, and liver function tests.",
-        "doctor": "Seek specialist care urgently. Co-infection with Hepatitis B and D can progress rapidly.",
-        "safety": "This is a serious co-infection. Do not delay seeking care.",
-    },
-    "Pneumonia": {
-        "home_care": "Rest, stay warm, and drink warm fluids. Steam inhalation may ease breathing. Sleep with head slightly elevated.",
-        "test": "Chest X-ray is the primary diagnostic test. Sputum culture if available.",
-        "doctor": "Visit a clinic or hospital today. Pneumonia requires antibiotic treatment and may need hospitalisation.",
-        "safety": "Pneumonia can worsen rapidly, especially in children, elderly patients, or those with underlying conditions.",
-    },
-    "Hepatitis A": {
-        "home_care": "Rest and drink only clean safe water. Eat small frequent meals that are easy to digest. Avoid alcohol and fatty foods.",
-        "test": "Hepatitis A IgM antibody test confirms acute infection.",
-        "doctor": "See a doctor to confirm diagnosis and monitor recovery. Most patients recover fully with rest.",
-        "safety": "Hepatitis A is spread through contaminated food and water. Do not share utensils or food with others.",
-    },
-    "Hepatitis E": {
-        "home_care": "Rest and drink only clean safe water. Eat light nutritious meals. Avoid alcohol completely.",
-        "test": "Hepatitis E IgM antibody test.",
-        "doctor": "See a doctor, especially if you are pregnant. Hepatitis E can be dangerous during pregnancy.",
-        "safety": "Pregnant women must seek care immediately — Hepatitis E carries a high risk of acute liver failure in pregnancy.",
-    },
-    "Alcoholic Hepatitis": {
-        "home_care": "Stop all alcohol consumption immediately. Eat a high-calorie, high-protein diet. Take prescribed vitamin supplements if available.",
-        "test": "Liver function tests (LFTs), complete blood count, and ultrasound of the abdomen.",
-        "doctor": "Seek medical care urgently. Severe cases require hospitalisation and specialist management.",
-        "safety": "Continued alcohol consumption with this condition can be fatal. Complete abstinence is non-negotiable.",
-    },
-    "Jaundice": {
-        "home_care": "Rest and drink plenty of clean water. Avoid alcohol, oily food, and medications not prescribed by a doctor.",
-        "test": "Liver function tests, serum bilirubin level, and abdominal ultrasound to identify the cause.",
-        "doctor": "See a doctor promptly. Jaundice is a sign of an underlying condition that must be identified and treated.",
-        "safety": "Jaundice is a symptom, not a disease. The underlying cause — which may be serious — needs diagnosis.",
-    },
-    "Chicken Pox": {
-        "home_care": "Rest at home, apply calamine lotion to blisters to relieve itching, and trim fingernails short to prevent scratching.",
-        "test": "Diagnosis is usually clinical. No test is routinely required.",
-        "doctor": "See a doctor if blisters become infected, fever is very high, or the patient has a weakened immune system.",
-        "safety": "Chicken pox is highly contagious. Stay home and avoid contact with pregnant women, newborns, and immunocompromised individuals.",
-    },
-    "Bronchial Asthma": {
-        "home_care": "Avoid known triggers such as dust, smoke, cold air, and strong odours. Use your prescribed reliever inhaler as directed.",
-        "test": "Spirometry (lung function test) and peak expiratory flow measurement.",
-        "doctor": "See a doctor for a long-term asthma management plan including preventer and reliever medications.",
-        "safety": "Always carry your reliever inhaler. Seek emergency care immediately if breathing becomes severely difficult.",
-    },
-    "Urinary Tract Infection": {
-        "home_care": "Drink at least 2 to 3 litres of clean water daily. Urinate frequently and do not hold urine. Avoid spicy food and caffeine.",
-        "test": "Urine dipstick test and urine culture with sensitivity to guide antibiotic choice.",
-        "doctor": "See a doctor for an antibiotic prescription. UTIs generally resolve quickly with the correct antibiotic.",
-        "safety": "Untreated UTIs can spread to the kidneys. Do not ignore symptoms of fever or back pain alongside urinary symptoms.",
-    },
-    "Dimorphic Haemorrhoids": {
-        "home_care": "Eat a high-fibre diet with fruits, vegetables, and whole grains. Drink plenty of water and avoid straining during bowel movements.",
-        "test": "Diagnosis is usually clinical. Proctoscopy may be recommended by a doctor.",
-        "doctor": "See a doctor if bleeding persists, pain is severe, or haemorrhoids prolapse and cannot be pushed back.",
-        "safety": "Avoid prolonged sitting and heavy lifting. Warm sitz baths can relieve pain and swelling.",
-    },
-    "Peptic Ulcer Disease": {
-        "home_care": "Avoid spicy food, alcohol, caffeine, and acidic drinks. Eat small frequent meals. Do not skip meals.",
-        "test": "H. pylori breath test or stool antigen test. Endoscopy for definitive diagnosis if symptoms are severe.",
-        "doctor": "See a doctor for proton pump inhibitor therapy. If H. pylori is detected, antibiotic treatment is required.",
-        "safety": "Avoid aspirin, ibuprofen, and diclofenac — these medications worsen ulcers and can cause serious bleeding.",
-    },
-    "Diabetes": {
-        "home_care": "Reduce sugar, white rice, white bread, and sweetened drinks from your diet. Walk or exercise for at least 30 minutes daily if possible.",
-        "test": "Fasting blood glucose test and HbA1c (glycated haemoglobin) for long-term glucose control.",
-        "doctor": "See a doctor for a comprehensive diabetes management plan including medication, diet, and monitoring.",
-        "safety": "Check blood sugar regularly if you have a glucometer. Watch for signs of low blood sugar such as dizziness and sweating.",
-    },
-    "Fungal Infection": {
-        "home_care": "Keep the affected skin area clean and dry. Wear loose breathable clothing. Change socks and underwear daily.",
-        "test": "Diagnosis is usually clinical. Skin scraping for microscopy if the diagnosis is unclear.",
-        "doctor": "Visit a pharmacy for an antifungal cream or powder. See a doctor if the infection is widespread or does not improve.",
-        "safety": "Do not share towels, socks, or footwear with others. Fungi spread easily in warm damp environments.",
-    },
-    "Allergy": {
-        "home_care": "Identify and avoid your triggers. Stay indoors during high pollen periods and keep windows closed. Rinse nasal passages with saline.",
-        "test": "Skin prick test or specific IgE blood test for persistent or severe allergies.",
-        "doctor": "See a doctor for antihistamine or nasal corticosteroid prescription. Severe allergies may need specialist referral.",
-        "safety": "If you develop throat swelling, difficulty breathing, or severe hives, go to an emergency room immediately. This may be anaphylaxis.",
-    },
-    "Common Cold": {
-        "home_care": "Rest at home, drink warm fluids, and use saline nasal drops. Honey and lemon in warm water can soothe a sore throat.",
-        "test": "No test is needed. The common cold is diagnosed from symptoms alone.",
-        "doctor": "Visit a clinic only if symptoms persist beyond 7 to 10 days, or if you develop high fever, earache, or difficulty breathing.",
-        "safety": "Wash hands frequently and cover your mouth when sneezing or coughing to avoid spreading the virus.",
-    },
-    "Drug Reaction": {
-        "home_care": "Stop the suspected medication immediately and do not resume it. Apply a cool damp cloth to the affected skin area.",
-        "test": "No specific test is usually needed. A doctor will review your medication history.",
-        "doctor": "See a doctor immediately to confirm the reaction and find a safe alternative medication.",
-        "safety": "If you develop throat swelling, difficulty breathing, or rapidly spreading hives, call for emergency help immediately.",
-    },
+    "Malaria":                {"home_care":"Rest and drink plenty of fluids","test":"Malaria RDT or blood smear","doctor":"Go to clinic immediately for antimalarial treatment","safety":"Do not delay — malaria can become severe quickly"},
+    "Typhoid":                {"home_care":"Rest, eat soft foods, drink clean water only","test":"Widal test or blood culture","doctor":"See a doctor for antibiotic prescription","safety":"Avoid spreading infection — wash hands frequently"},
+    "Dengue":                 {"home_care":"Rest and drink fluids — avoid aspirin or ibuprofen","test":"Dengue NS1 antigen test","doctor":"Seek care immediately if you notice bleeding or severe pain","safety":"Aspirin can worsen bleeding in dengue"},
+    "Tuberculosis":           {"home_care":"Rest, isolate yourself, keep room well-ventilated","test":"Chest X-ray and sputum test","doctor":"Visit a TB clinic immediately","safety":"TB is contagious — wear a mask and avoid crowded places"},
+    "Hepatitis B":            {"home_care":"Rest and avoid alcohol completely","test":"Hepatitis B surface antigen (HBsAg) test","doctor":"See a doctor for antiviral medication evaluation","safety":"Hepatitis B is contagious — avoid sharing needles or razors"},
+    "Hepatitis C":            {"home_care":"Rest and avoid alcohol","test":"Hepatitis C antibody test","doctor":"See a specialist for antiviral treatment","safety":"Avoid sharing sharp objects with others"},
+    "Hepatitis D":            {"home_care":"Rest and stop alcohol completely","test":"Hepatitis D antibody and liver function tests","doctor":"Seek specialist care urgently","safety":"Hepatitis D only occurs with hepatitis B — urgent care needed"},
+    "Pneumonia":              {"home_care":"Rest, keep warm, drink warm fluids","test":"Chest X-ray","doctor":"Visit clinic immediately for antibiotic treatment","safety":"Pneumonia can worsen quickly — do not wait"},
+    "Hepatitis A":            {"home_care":"Rest and drink clean water — eat lightly","test":"Hepatitis A IgM antibody test","doctor":"See a doctor if symptoms worsen","safety":"Avoid sharing food or drinks with others"},
+    "Hepatitis E":            {"home_care":"Rest and drink clean water only","test":"Hepatitis E IgM antibody test","doctor":"See a doctor — especially important if pregnant","safety":"Very dangerous during pregnancy — seek care urgently if pregnant"},
+    "Alcoholic Hepatitis":    {"home_care":"Stop alcohol completely and eat well","test":"Liver function tests (LFTs)","doctor":"Seek medical care urgently","safety":"Continued alcohol use can be fatal with this condition"},
+    "Jaundice":               {"home_care":"Rest and drink clean water","test":"Liver function tests and bilirubin level","doctor":"See a doctor to find the underlying cause","safety":"Jaundice is a sign of another condition — do not ignore it"},
+    "Chicken Pox":            {"home_care":"Rest, avoid scratching, apply calamine lotion","test":"No test usually needed","doctor":"See a doctor if blisters become infected or fever is very high","safety":"Highly contagious — stay home and avoid contact with others"},
+    "Bronchial Asthma":       {"home_care":"Avoid triggers and use your prescribed inhaler","test":"Peak flow measurement or spirometry","doctor":"See a doctor for long-term management plan","safety":"Carry your inhaler at all times"},
+    "Urinary Tract Infection":{"home_care":"Drink plenty of water and avoid spicy food","test":"Urine culture and sensitivity test","doctor":"See a doctor for antibiotic prescription","safety":"Do not hold urine — empty your bladder regularly"},
+    "Dimorphic Haemorrhoids": {"home_care":"Eat high-fibre foods and avoid straining on the toilet","test":"No test usually needed","doctor":"See a doctor if bleeding continues or worsens","safety":"Avoid sitting for long periods"},
+    "Peptic Ulcer Disease":   {"home_care":"Avoid spicy food, alcohol and pain tablets like aspirin","test":"H. pylori breath test or endoscopy if needed","doctor":"See a doctor for antacid or antibiotic treatment","safety":"Avoid aspirin and ibuprofen — they worsen ulcers"},
+    "Diabetes":               {"home_care":"Reduce sugar and refined carbohydrates in your diet","test":"Fasting blood glucose and HbA1c test","doctor":"See a doctor for a diabetes management plan","safety":"Monitor your blood sugar regularly if you have a glucometer"},
+    "Fungal Infection":       {"home_care":"Keep the affected area dry and clean","test":"No test usually needed","doctor":"Visit a pharmacy for antifungal cream","safety":"Avoid sharing personal items like socks or towels"},
+    "Allergy":                {"home_care":"Avoid known triggers and stay indoors during high pollen periods","test":"Allergy skin prick test if symptoms are recurrent","doctor":"See a doctor for antihistamine prescription","safety":"If you have throat swelling or difficulty breathing — go to emergency immediately"},
+    "Common Cold":            {"home_care":"Rest and drink warm fluids","test":"No test needed","doctor":"Visit clinic if symptoms persist beyond 7 days","safety":"Wash hands frequently to avoid spreading"},
+    "Drug Reaction":          {"home_care":"Stop the suspected medication immediately","test":"No test usually needed","doctor":"See a doctor immediately if rash spreads or breathing is affected","safety":"Seek emergency care if you have throat swelling or difficulty breathing"},
 }
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ADAPTIVE QUESTION ENGINE
-# ─────────────────────────────────────────────────────────────────────────────
-def _score_disease(disease: str, answers: Dict[str, bool]) -> float:
+# ─────────────────────────────────────────────────────────────
+# ADAPTIVE ENGINE
+# ─────────────────────────────────────────────────────────────
+def score_disease(disease: str, answers: dict) -> float:
     score = 0.0
-    for sym in DISEASE_SYMPTOM_MAP.get(disease, []):
-        if answers.get(sym) is True:
+    for symptom in DISEASE_SYMPTOM_MAP.get(disease, []):
+        if answers.get(symptom) is True:
             score += 3.0
-        elif answers.get(sym) is False:
+        elif answers.get(symptom) is False:
             score -= 1.0
     return score
 
 
-def _get_next_question(answers: Dict[str, bool], asked: List[str]) -> Optional[Dict[str, str]]:
-    """Return the most diagnostically useful unasked question."""
-    ranked = sorted(
-        DISEASE_SYMPTOM_MAP.keys(),
-        key=lambda d: _score_disease(d, answers),
-        reverse=True,
-    )
-    # Try top-6 candidate diseases first
+def get_next_question(answers: dict, asked: list) -> Optional[dict]:
+    # Rank diseases by current score and pick the best unexplored symptom
+    ranked = sorted(DISEASE_SYMPTOM_MAP.keys(), key=lambda d: score_disease(d, answers), reverse=True)
     for disease in ranked[:6]:
         for sym in DISEASE_SYMPTOM_MAP[disease]:
             if sym not in asked:
                 q = Q_INDEX.get(sym)
                 if q:
                     return q
-    # Fallback: any unanswered question
+    # Fallback: any unasked question
     for q in ALL_QUESTIONS:
         if q["id"] not in asked:
             return q
     return None
 
 
-def _predict(answers: Dict[str, bool]) -> Dict[str, Any]:
-    """Score-based prediction with confidence estimation."""
-    scores = {d: _score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
-    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    best_disease = ranked[0][0]
+def predict_with_ml(answers: dict) -> dict:
+    """Run ML ensemble if available, otherwise fall back to scoring engine."""
+    ensemble = LOADED_MODELS.get("sctd_ensemble")
+    le       = LOADED_MODELS.get("sctd_label_encoder")
+    cols     = LOADED_MODELS.get("sctd_feature_columns")
+    risk_map = LOADED_MODELS.get("sctd_risk_classification") or RISK_MAP
 
-    syms      = DISEASE_SYMPTOM_MAP.get(best_disease, [])
+    if ensemble and le and cols:
+        try:
+            feature_cols = list(cols)
+            vec = np.array(
+                [1.0 if answers.get(c, False) else 0.0 for c in feature_cols]
+            ).reshape(1, -1)
+            proba   = ensemble.predict_proba(vec)[0]
+            idx     = int(np.argmax(proba))
+            disease = le.inverse_transform([idx])[0]
+            confidence = float(proba[idx])
+            all_probs = {
+                le.inverse_transform([i])[0]: round(float(p), 4)
+                for i, p in enumerate(proba)
+            }
+            return {
+                "disease": disease,
+                "confidence": confidence,
+                "risk": risk_map.get(disease, "Medium"),
+                "all_scores": dict(sorted(all_probs.items(), key=lambda x: x[1], reverse=True)),
+                "method": "ml",
+            }
+        except Exception as e:
+            logger.warning(f"ML prediction failed, falling back to scoring: {e}")
+
+    # Scoring fallback
+    scores = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    best_disease, _ = sorted_scores[0]
+
+    syms = DISEASE_SYMPTOM_MAP.get(best_disease, [])
     yes_count = sum(1 for s in syms if answers.get(s) is True)
     confidence = min(0.95, max(0.35, yes_count / max(len(syms), 1)))
 
-    # Build all_scores for top 8 diseases
     all_scores: Dict[str, float] = {}
-    for d, _ in ranked[:8]:
-        d_syms = DISEASE_SYMPTOM_MAP.get(d, [])
-        yc = sum(1 for s in d_syms if answers.get(s) is True)
-        all_scores[d] = round(min(0.95, max(0.01, yc / max(len(d_syms), 1))), 4)
+    for d, _ in sorted_scores[:8]:
+        yc = sum(1 for s in DISEASE_SYMPTOM_MAP.get(d, []) if answers.get(s) is True)
+        tc = max(len(DISEASE_SYMPTOM_MAP.get(d, [])), 1)
+        all_scores[d] = round(min(0.95, max(0.01, yc / tc)), 4)
 
     return {
-        "disease":    best_disease,
-        "confidence": round(confidence, 4),
-        "risk":       RISK_MAP.get(best_disease, "Medium"),
+        "disease": best_disease,
+        "confidence": confidence,
+        "risk": RISK_MAP.get(best_disease, "Medium"),
         "all_scores": all_scores,
-        "method":     "scoring",
+        "method": "scoring",
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# OPENROUTER AI  (optional — graceful fallback on any failure)
-# ─────────────────────────────────────────────────────────────────────────────
-async def _call_openrouter(
+# ─────────────────────────────────────────────────────────────
+# OPENROUTER AI — free model, plain clinical advice
+# ─────────────────────────────────────────────────────────────
+async def call_openrouter(
     disease: str,
     risk: str,
     active_syms: List[str],
     confidence: float,
-) -> Optional[Dict[str, str]]:
+) -> Optional[dict]:
+    """
+    Call OpenRouter with a free model.
+    Returns a dict with keys: explanation, home_care, test, doctor, safety.
+    Returns None on any failure so the caller can use DEFAULT_RECS.
+    """
     if not OPENROUTER_API_KEY:
+        logger.info("OPENROUTER_API_KEY not set — skipping AI call.")
         return None
 
     sym_text = ", ".join(s.replace("_", " ") for s in active_syms[:12]) or "general symptoms"
-    urgency = {
-        "High":   "visit a hospital or clinic today — this is urgent",
-        "Medium": "visit a clinic within 1 to 2 days if symptoms persist",
-        "Low":    "rest at home and visit a clinic only if symptoms worsen",
-    }.get(risk, "visit a clinic")
 
-    prompt = (
-        f"You are a health assistant for patients in Ghana and West Africa.\n\n"
-        f"Patient symptoms: {sym_text}\n"
-        f"Most likely condition: {disease} (confidence: {round(confidence * 100)}%)\n"
-        f"Risk level: {risk} — {urgency}\n\n"
-        f"Reply ONLY with a valid JSON object. No markdown. No extra text.\n"
-        f'{{"explanation":"One sentence explaining why these symptoms suggest {disease}.",'
-        f'"home_care":"1 to 2 practical things the patient can do at home right now.",'
-        f'"test":"One specific diagnostic test to confirm, or No test needed.",'
-        f'"doctor":"One clear instruction about seeking care.",'
-        f'"safety":"One brief safety warning for High risk, or empty string for Low or Medium."}}\n\n'
-        f"Rules: plain simple language, no jargon, one sentence per field, never prescribe drug names or dosages."
-    )
+    # Urgency label for the prompt
+    urgency = {
+        "High": "URGENT — recommend visiting a hospital or clinic today",
+        "Medium": "advise a clinic visit within 1–2 days if symptoms persist",
+        "Low": "advise rest at home and a clinic visit only if symptoms worsen",
+    }.get(risk, "advise a clinic visit")
+
+    prompt = f"""You are a health assistant helping patients in Ghana and West Africa.
+
+Patient symptoms: {sym_text}
+Likely condition: {disease} (confidence: {round(confidence * 100)}%)
+Risk level: {risk} — {urgency}
+
+Reply ONLY with a valid JSON object. No markdown. No extra text. Use this exact format:
+{{
+  "explanation": "One short sentence on why these symptoms suggest {disease}.",
+  "home_care": "1–2 simple things the patient can do at home right now.",
+  "test": "One specific lab test or medical test to confirm, or 'No test needed' if not required.",
+  "doctor": "One clear instruction — visit hospital, clinic, or pharmacy.",
+  "safety": "One brief safety warning if High risk, or empty string if Low/Medium."
+}}
+
+Rules:
+- Use plain, simple language. No medical jargon.
+- Keep each field to one sentence or a short phrase.
+- For High risk: always say to visit a hospital or clinic immediately.
+- Never invent drug names or dosages."""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type":  "application/json",
-        "HTTP-Referer":  SITE_URL,
-        "X-Title":       SITE_NAME,
+        "Content-Type": "application/json",
+        "HTTP-Referer": SITE_URL,
+        "X-Title": SITE_NAME,
     }
     payload = {
-        "model":       OPENROUTER_MODEL,
-        "messages":    [
+        "model": OPENROUTER_MODEL,
+        "messages": [
             {
-                "role":    "system",
+                "role": "system",
                 "content": (
                     "You are a responsible clinical AI assistant for a tropical disease app. "
-                    "Respond with valid JSON only. Never prescribe specific drug names or dosages."
+                    "Always respond with valid JSON only. Never prescribe specific drugs or dosages."
                 ),
             },
             {"role": "user", "content": prompt},
         ],
-        "max_tokens":  350,
-        "temperature": 0.15,
+        "max_tokens": 350,
+        "temperature": 0.2,
     }
 
     try:
@@ -547,108 +471,104 @@ async def _call_openrouter(
                 OPENROUTER_URL,
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=14),
+                timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
                 if resp.status != 200:
                     body = await resp.text()
-                    logger.warning(f"OpenRouter HTTP {resp.status}: {body[:300]}")
+                    logger.warning(f"OpenRouter HTTP {resp.status}: {body[:200]}")
                     return None
-
-                data  = await resp.json()
-                raw   = data["choices"][0]["message"]["content"].strip()
-                # Strip any accidental markdown fences
-                raw   = raw.replace("```json", "").replace("```", "").strip()
-                result: Dict[str, str] = json.loads(raw)
-
+                data = await resp.json()
+                raw = data["choices"][0]["message"]["content"].strip()
+                # Strip markdown fences if model adds them
+                raw = raw.replace("```json", "").replace("```", "").strip()
+                result = json.loads(raw)
+                # Validate expected keys
                 for key in ("explanation", "home_care", "test", "doctor", "safety"):
-                    result.setdefault(key, "")
-
+                    if key not in result:
+                        result[key] = ""
                 return result
-
-    except asyncio.TimeoutError:
-        logger.warning("OpenRouter timed out")
     except json.JSONDecodeError as e:
         logger.warning(f"OpenRouter JSON parse error: {e}")
     except aiohttp.ClientError as e:
         logger.warning(f"OpenRouter connection error: {e}")
     except Exception as e:
         logger.warning(f"OpenRouter unexpected error: {e}")
-
     return None
 
 
-def _build_recommendation(
-    disease: str,
-    risk: str,
-    ai_result: Optional[Dict[str, str]],
-) -> Dict[str, str]:
-    default = DEFAULT_RECS.get(
-        disease,
-        {
-            "home_care": "Rest and stay well hydrated.",
-            "test":      "Consult a healthcare provider for appropriate diagnostic tests.",
-            "doctor":    "Visit a clinic if symptoms persist or worsen.",
-            "safety":    "Seek emergency care if symptoms become severe." if risk == "High" else "",
-        },
-    )
+def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> dict:
+    """Merge AI result with safe defaults. AI fields take priority if non-empty."""
+    default = DEFAULT_RECS.get(disease, {
+        "home_care": "Rest and stay hydrated.",
+        "test": "Consult a healthcare provider for appropriate tests.",
+        "doctor": "Visit a clinic if symptoms persist or worsen.",
+        "safety": "Seek emergency care if symptoms become severe." if risk == "High" else "",
+    })
 
     if ai_result:
         return {
-            "home_care":   ai_result.get("home_care")   or default["home_care"],
-            "test":        ai_result.get("test")        or default["test"],
-            "doctor":      ai_result.get("doctor")      or default["doctor"],
-            "safety":      ai_result.get("safety")      or default.get("safety", ""),
+            "home_care":   ai_result.get("home_care") or default["home_care"],
+            "test":        ai_result.get("test")      or default["test"],
+            "doctor":      ai_result.get("doctor")    or default["doctor"],
+            "safety":      ai_result.get("safety")    or default.get("safety", ""),
             "explanation": ai_result.get("explanation") or f"Your symptoms are consistent with {disease}.",
         }
 
     return {
         **default,
-        "explanation": f"Your reported symptoms are consistent with {disease}.",
+        "explanation": f"Your symptoms are consistent with {disease}.",
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PASSWORD HASHING  (no bcrypt dependency — stdlib only)
-# ─────────────────────────────────────────────────────────────────────────────
-def _hash_password(plain: str) -> str:
-    salt   = secrets.token_hex(16)
-    hashed = hashlib.sha256((salt + plain).encode("utf-8")).hexdigest()
-    return f"{salt}:{hashed}"
+# ─────────────────────────────────────────────────────────────
+# PYDANTIC SCHEMAS
+# ─────────────────────────────────────────────────────────────
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    name: str
+    age: Optional[str] = None
+    gender: Optional[str] = None
 
 
-def _verify_password(plain: str, stored: str) -> bool:
-    try:
-        salt, hashed = stored.split(":", 1)
-        return hashlib.sha256((salt + plain).encode("utf-8")).hexdigest() == hashed
-    except Exception:
-        return False
+class LoginRequest(BaseModel):
+    email: str
+    password: str
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# JWT HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
-def _create_token(user_id: int) -> str:
+class AnswerRequest(BaseModel):
+    question_id: str
+    answer: bool
+
+
+class ProfileUpdate(BaseModel):
+    name: Optional[str] = None
+    age: Optional[str] = None
+    gender: Optional[str] = None
+
+
+# ─────────────────────────────────────────────────────────────
+# AUTH HELPERS
+# ─────────────────────────────────────────────────────────────
+security = HTTPBearer()
+
+
+def create_token(user_id: int) -> str:
     exp = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
     return jwt.encode({"sub": str(user_id), "exp": exp}, SECRET_KEY, algorithm=ALGORITHM)
 
 
-security = HTTPBearer()
-
-
-def _get_user_id(creds: HTTPAuthorizationCredentials = Depends(security)) -> int:
+def verify_token(creds: HTTPAuthorizationCredentials = Depends(security)) -> int:
     try:
         payload = jwt.decode(creds.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        sub = payload.get("sub")
-        if sub is None:
-            raise HTTPException(status_code=401, detail="Invalid token")
-        return int(sub)
+        user_id = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+        return int(user_id)
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# DB SESSION DEPENDENCY
-# ─────────────────────────────────────────────────────────────────────────────
 def get_db():
     db = SessionLocal()
     try:
@@ -657,52 +577,42 @@ def get_db():
         db.close()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PYDANTIC SCHEMAS
-# ─────────────────────────────────────────────────────────────────────────────
-class RegisterRequest(BaseModel):
-    email:    str
-    password: str
-    name:     str
-    age:      Optional[str] = None
-    gender:   Optional[str] = None
+def hash_pw(pw: str) -> str:
+    salt = secrets.token_hex(16)
+    hashed = hashlib.sha256((salt + pw).encode()).hexdigest()
+    return f"{salt}:{hashed}"
 
 
-class LoginRequest(BaseModel):
-    email:    str
-    password: str
+def verify_pw(pw: str, stored: str) -> bool:
+    try:
+        salt, hashed = stored.split(":", 1)
+        return hashlib.sha256((salt + pw).encode()).hexdigest() == hashed
+    except Exception:
+        return False
 
 
-class AnswerRequest(BaseModel):
-    question_id: str
-    answer:      bool
-
-
-class ProfileUpdate(BaseModel):
-    name:   Optional[str] = None
-    age:    Optional[str] = None
-    gender: Optional[str] = None
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# APP STARTUP / SHUTDOWN
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# APP STARTUP
+# ─────────────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
-    logger.info(f"TropiCare API started.")
-    logger.info(f"Database: {DATABASE_URL}")
+    load_ml_models()
+    model_keys = list(LOADED_MODELS.keys()) or ["none — using scoring engine"]
+    logger.info(f"TropiCare started. ML models: {model_keys}")
     logger.info(f"OpenRouter enabled: {bool(OPENROUTER_API_KEY)} | Model: {OPENROUTER_MODEL}")
     yield
-    logger.info("TropiCare API shutting down.")
+    # No cleanup needed
 
 
 app = FastAPI(
     title="TropiCare API",
     version="1.0.0",
-    description="KNUST Final Year Project — AI Tropical Disease Symptom Checker",
+    description="KNUST Final Year Project — AI Tropical Disease Checker",
     lifespan=lifespan,
 )
+
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
 
 app.add_middleware(
     CORSMiddleware,
@@ -713,234 +623,179 @@ app.add_middleware(
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HEALTH CHECK
-# ─────────────────────────────────────────────────────────────────────────────
-@app.get("/api/v1/health", tags=["Health"])
+# ─────────────────────────────────────────────────────────────
+# ROUTES — Health
+# ─────────────────────────────────────────────────────────────
+@app.get("/api/v1/health")
 async def health():
     return {
-        "status":              "healthy",
-        "timestamp":           datetime.utcnow().isoformat(),
-        "openrouter_enabled":  bool(OPENROUTER_API_KEY),
-        "openrouter_model":    OPENROUTER_MODEL,
+        "status": "healthy",
+        "timestamp": datetime.utcnow().isoformat(),
+        "ml_models": list(LOADED_MODELS.keys()),
+        "openrouter_enabled": bool(OPENROUTER_API_KEY),
+        "openrouter_model": OPENROUTER_MODEL,
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# AUTH ROUTES
-# ─────────────────────────────────────────────────────────────────────────────
-@app.post("/api/v1/auth/register", status_code=201, tags=["Auth"])
+# ─────────────────────────────────────────────────────────────
+# ROUTES — Auth
+# ─────────────────────────────────────────────────────────────
+@app.post("/api/v1/auth/register", status_code=201)
 async def register(req: RegisterRequest, db: Session = Depends(get_db)):
-    """
-    Register a new user.
-    Frontend expects: { access_token, token_type, user: { id, email, name } }
-    """
-    if not req.email or not req.password or not req.name:
-        raise HTTPException(status_code=400, detail="Email, password, and name are required.")
-
-    existing = db.query(UserModel).filter(UserModel.email == req.email.strip().lower()).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="An account with this email already exists.")
-
+    if db.query(UserModel).filter(UserModel.email == req.email).first():
+        raise HTTPException(status_code=400, detail="Email already registered")
     user = UserModel(
-        email   = req.email.strip().lower(),
-        name    = req.name.strip(),
-        pw_hash = _hash_password(req.password),
-        age     = req.age or None,
-        gender  = req.gender or None,
+        email=req.email,
+        name=req.name,
+        pw_hash=hash_pw(req.password),
+        age=req.age,
+        gender=req.gender,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
-
-    logger.info(f"New user registered: {user.email} (id={user.id})")
-
     return {
-        "access_token": _create_token(user.id),
-        "token_type":   "bearer",
-        "user": {
-            "id":     user.id,
-            "email":  user.email,
-            "name":   user.name,
-            "age":    user.age,
-            "gender": user.gender,
-        },
+        "access_token": create_token(user.id),
+        "token_type": "bearer",
+        "user": {"id": user.id, "email": user.email, "name": user.name},
     }
 
 
-@app.post("/api/v1/auth/login", tags=["Auth"])
+@app.post("/api/v1/auth/login")
 async def login(req: LoginRequest, db: Session = Depends(get_db)):
-    """
-    Authenticate an existing user.
-    Frontend expects: { access_token, token_type, user: { id, email, name } }
-    """
-    if not req.email or not req.password:
-        raise HTTPException(status_code=400, detail="Email and password are required.")
-
-    user = db.query(UserModel).filter(UserModel.email == req.email.strip().lower()).first()
-    if not user or not _verify_password(req.password, user.pw_hash):
-        raise HTTPException(status_code=401, detail="Incorrect email or password.")
-
-    logger.info(f"User logged in: {user.email} (id={user.id})")
-
+    user = db.query(UserModel).filter(UserModel.email == req.email).first()
+    if not user or not user.pw_hash or not verify_pw(req.password, user.pw_hash):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
     return {
-        "access_token": _create_token(user.id),
-        "token_type":   "bearer",
-        "user": {
-            "id":     user.id,
-            "email":  user.email,
-            "name":   user.name,
-            "age":    user.age,
-            "gender": user.gender,
-        },
+        "access_token": create_token(user.id),
+        "token_type": "bearer",
+        "user": {"id": user.id, "email": user.email, "name": user.name},
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ASSESSMENT ROUTES
-# ─────────────────────────────────────────────────────────────────────────────
-@app.post("/api/v1/symptoms/start", status_code=201, tags=["Assessment"])
+# ─────────────────────────────────────────────────────────────
+# ROUTES — Assessment
+# ─────────────────────────────────────────────────────────────
+@app.post("/api/v1/symptoms/start", status_code=201)
 async def start_assessment(
-    user_id: int = Depends(_get_user_id),
-    db:      Session = Depends(get_db),
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
 ):
-    """
-    Begin a new assessment session.
-    Frontend expects: { session_id, first_question: { id, question, category }, total_questions }
-    """
     sid = str(uuid.uuid4())
-    session = AssessmentSession(
-        session_id      = sid,
-        user_id         = user_id,
-        answers         = _dump({}),
-        asked_questions = _dump([]),
+    session = SessionModel(
+        session_id=sid,
+        user_id=user_id,
+        answers=_dump_json({}),
+        asked_questions=_dump_json([]),
     )
     db.add(session)
     db.commit()
-
     return {
-        "session_id":      sid,
-        "first_question":  ALL_QUESTIONS[0],
+        "session_id": sid,
+        "first_question": ALL_QUESTIONS[0],
         "total_questions": 15,
     }
 
 
-@app.post("/api/v1/symptoms/next", tags=["Assessment"])
+@app.post("/api/v1/symptoms/next")
 async def next_question(
     session_id: str,
-    req:        AnswerRequest,
-    user_id:    int     = Depends(_get_user_id),
-    db:         Session = Depends(get_db),
+    req: AnswerRequest,
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
 ):
-    """
-    Record the current answer and return the next question.
-    Frontend expects:
-      { completed: true }                             — when done
-      { completed: false, next_question: { id, ... }} — when continuing
-    """
-    session = db.query(AssessmentSession).filter(
-        AssessmentSession.session_id == session_id,
-        AssessmentSession.user_id    == user_id,
+    s = db.query(SessionModel).filter(
+        SessionModel.session_id == session_id,
+        SessionModel.user_id == user_id,
     ).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-    if not session:
-        raise HTTPException(status_code=404, detail="Assessment session not found.")
+    answers = _load_json(s.answers, {})
+    asked   = _load_json(s.asked_questions, [])
 
+    # Validate question_id
     if req.question_id not in Q_INDEX:
-        raise HTTPException(status_code=400, detail=f"Unknown question id: {req.question_id}")
-
-    answers = _load(session.answers, {})
-    asked   = _load(session.asked_questions, [])
+        raise HTTPException(status_code=400, detail=f"Unknown question_id: {req.question_id}")
 
     answers[req.question_id] = req.answer
     if req.question_id not in asked:
         asked.append(req.question_id)
 
-    session.answers         = _dump(answers)
-    session.asked_questions = _dump(asked)
+    s.answers         = _dump_json(answers)
+    s.asked_questions = _dump_json(asked)
     db.commit()
 
     if len(asked) >= 15:
-        session.completed = True
+        s.completed = True
         db.commit()
         return {"completed": True}
 
-    next_q = _get_next_question(answers, asked)
+    next_q = get_next_question(answers, asked)
     if not next_q:
-        session.completed = True
+        s.completed = True
         db.commit()
         return {"completed": True}
 
     return {"completed": False, "next_question": next_q}
 
 
-@app.post("/api/v1/diagnosis/analyze", tags=["Assessment"])
+@app.post("/api/v1/diagnosis/analyze")
 async def analyze(
     session_id: str,
-    user_id:    int     = Depends(_get_user_id),
-    db:         Session = Depends(get_db),
+    background_tasks: BackgroundTasks,
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
 ):
-    """
-    Run diagnosis on completed session answers.
-    Frontend expects:
-      { disease, confidence, risk, explanation, all_scores, recommendation: { home_care, test, doctor, safety }, method, ai_used }
-    """
-    session = db.query(AssessmentSession).filter(
-        AssessmentSession.session_id == session_id,
-        AssessmentSession.user_id    == user_id,
+    s = db.query(SessionModel).filter(
+        SessionModel.session_id == session_id,
+        SessionModel.user_id == user_id,
     ).first()
+    if not s:
+        raise HTTPException(status_code=404, detail="Session not found")
 
-    if not session:
-        raise HTTPException(status_code=404, detail="Assessment session not found.")
+    answers = _load_json(s.answers, {})
+    pred    = predict_with_ml(answers)
+    active_syms: List[str] = [k for k, v in answers.items() if v is True]
 
-    answers     = _load(session.answers, {})
-    pred        = _predict(answers)
-    active_syms = [k for k, v in answers.items() if v is True]
-
-    # Attempt AI-enhanced recommendations with timeout
-    ai_result: Optional[Dict[str, str]] = None
+    # Try AI recommendations with a 12-second timeout
+    ai_result: Optional[dict] = None
     try:
         ai_result = await asyncio.wait_for(
-            _call_openrouter(pred["disease"], pred["risk"], active_syms, pred["confidence"]),
+            call_openrouter(pred["disease"], pred["risk"], active_syms, pred["confidence"]),
             timeout=12.0,
         )
     except asyncio.TimeoutError:
-        logger.warning("OpenRouter timed out — using curated defaults")
+        logger.warning("OpenRouter timed out — using default recommendations")
     except Exception as e:
-        logger.warning(f"OpenRouter error: {e} — using curated defaults")
+        logger.warning(f"OpenRouter call failed: {e} — using default recommendations")
 
-    rec = _build_recommendation(pred["disease"], pred["risk"], ai_result)
+    rec = build_recommendation(pred["disease"], pred["risk"], ai_result)
 
-    # Persist diagnosis
-    diag = DiagnosisRecord(
-        user_id         = user_id,
-        session_id      = session_id,
-        disease         = pred["disease"],
-        risk            = pred["risk"],
-        confidence      = pred["confidence"],
-        answers         = _dump(answers),
-        active_symptoms = _dump(active_syms),
-        rec_home_care   = rec["home_care"],
-        rec_test        = rec["test"],
-        rec_doctor      = rec["doctor"],
-        rec_safety      = rec.get("safety", ""),
-        explanation     = rec.get("explanation", ""),
-        all_scores      = _dump(pred.get("all_scores", {})),
-        method          = pred["method"],
-        ai_used         = ai_result is not None,
+    diag = DiagnosisModel(
+        user_id        = user_id,
+        session_id     = session_id,
+        disease        = pred["disease"],
+        risk           = pred["risk"],
+        confidence     = pred["confidence"],
+        answers        = _dump_json(answers),
+        active_symptoms= _dump_json(active_syms),
+        rec_home_care  = rec["home_care"],
+        rec_test       = rec["test"],
+        rec_doctor     = rec["doctor"],
+        rec_safety     = rec.get("safety", ""),
+        ai_explanation = rec.get("explanation", ""),
+        ml_scores      = _dump_json(pred.get("all_scores", {})),
     )
     db.add(diag)
-
-    # Mark session complete
-    session.completed = True
     db.commit()
     db.refresh(diag)
 
     return {
-        "id":         diag.id,
-        "disease":    pred["disease"],
+        "id": diag.id,
+        "disease": pred["disease"],
         "confidence": pred["confidence"],
-        "risk":       pred["risk"],
+        "risk": pred["risk"],
         "explanation": rec.get("explanation", ""),
         "all_scores": pred.get("all_scores", {}),
         "recommendation": {
@@ -949,282 +804,195 @@ async def analyze(
             "doctor":    rec["doctor"],
             "safety":    rec.get("safety", ""),
         },
-        "method":  pred["method"],
+        "method": pred["method"],
         "ai_used": ai_result is not None,
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# PATIENT HISTORY ROUTES
-# ─────────────────────────────────────────────────────────────────────────────
-@app.get("/api/v1/patient/history", tags=["Records"])
+# ─────────────────────────────────────────────────────────────
+# ROUTES — Patient History
+# ─────────────────────────────────────────────────────────────
+@app.get("/api/v1/patient/history")
 async def get_history(
-    user_id: int     = Depends(_get_user_id),
-    db:      Session = Depends(get_db),
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
 ):
-    """
-    Return the authenticated user's assessment history (newest first).
-    Frontend uses this in HomeScreen (stats + recent list) and RecordsScreen.
-    Expected shape per record:
-      { id, disease, risk, confidence, created_at, patient_name,
-        recommendation: { home_care, test, doctor, safety },
-        explanation, active_symptoms }
-    """
-    user = db.query(UserModel).filter(UserModel.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-
     rows = (
-        db.query(DiagnosisRecord)
-        .filter(DiagnosisRecord.user_id == user_id)
-        .order_by(DiagnosisRecord.created_at.desc())
+        db.query(DiagnosisModel)
+        .filter(DiagnosisModel.user_id == user_id)
+        .order_by(DiagnosisModel.created_at.desc())
         .limit(100)
         .all()
     )
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    patient_name = user.name if user else "Unknown"
 
-    return [
-        {
-            "id":           r.id,
-            "disease":      r.disease,
-            "risk":         r.risk,
-            "confidence":   r.confidence,
-            "created_at":   r.created_at.isoformat(),
-            "patient_name": user.name,
+    result = []
+    for d in rows:
+        result.append({
+            "id":           d.id,
+            "disease":      d.disease,
+            "risk":         d.risk,
+            "confidence":   d.confidence,
+            "created_at":   d.created_at.isoformat(),
+            "patient_name": patient_name,
             "recommendation": {
-                "home_care": r.rec_home_care or "",
-                "test":      r.rec_test      or "",
-                "doctor":    r.rec_doctor    or "",
-                "safety":    r.rec_safety    or "",
+                "home_care": d.rec_home_care,
+                "test":      d.rec_test,
+                "doctor":    d.rec_doctor,
+                "safety":    d.rec_safety,
             },
-            "explanation":     r.explanation     or "",
-            "active_symptoms": _load(r.active_symptoms, []),
-        }
-        for r in rows
-    ]
+            "explanation":     d.ai_explanation,
+            "active_symptoms": _load_json(d.active_symptoms, []),
+        })
+    return result
 
 
-@app.get("/api/v1/patient/history/{diag_id}", tags=["Records"])
-async def get_diagnosis_detail(
+@app.get("/api/v1/patient/history/{diag_id}")
+async def get_diagnosis(
     diag_id: int,
-    user_id: int     = Depends(_get_user_id),
-    db:      Session = Depends(get_db),
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
 ):
-    """
-    Return a single diagnosis record in full detail.
-    RecordDetail component uses this shape.
-    """
-    r = db.query(DiagnosisRecord).filter(
-        DiagnosisRecord.id      == diag_id,
-        DiagnosisRecord.user_id == user_id,
+    d = db.query(DiagnosisModel).filter(
+        DiagnosisModel.id == diag_id,
+        DiagnosisModel.user_id == user_id,
     ).first()
-
-    if not r:
-        raise HTTPException(status_code=404, detail="Record not found.")
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
 
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
-
     return {
-        "id":           r.id,
-        "disease":      r.disease,
-        "risk":         r.risk,
-        "confidence":   r.confidence,
-        "created_at":   r.created_at.isoformat(),
+        "id":           d.id,
+        "disease":      d.disease,
+        "risk":         d.risk,
+        "confidence":   d.confidence,
+        "created_at":   d.created_at.isoformat(),
         "patient_name": user.name if user else "Unknown",
-        "answers":      _load(r.answers, {}),
-        "active_symptoms": _load(r.active_symptoms, []),
+        "answers":      _load_json(d.answers, {}),
+        "active_symptoms": _load_json(d.active_symptoms, []),
         "recommendation": {
-            "home_care": r.rec_home_care or "",
-            "test":      r.rec_test      or "",
-            "doctor":    r.rec_doctor    or "",
-            "safety":    r.rec_safety    or "",
+            "home_care": d.rec_home_care,
+            "test":      d.rec_test,
+            "doctor":    d.rec_doctor,
+            "safety":    d.rec_safety,
         },
-        "explanation": r.explanation or "",
-        "all_scores":  _load(r.all_scores, {}),
-        "method":      r.method or "scoring",
-        "ai_used":     r.ai_used or False,
+        "explanation": d.ai_explanation,
+        "ml_scores":   _load_json(d.ml_scores, {}),
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# USER PROFILE ROUTES
-# ─────────────────────────────────────────────────────────────────────────────
-@app.get("/api/v1/user/profile", tags=["Profile"])
+# ─────────────────────────────────────────────────────────────
+# ROUTES — User Profile
+# ─────────────────────────────────────────────────────────────
+@app.get("/api/v1/user/profile")
 async def get_profile(
-    user_id: int     = Depends(_get_user_id),
-    db:      Session = Depends(get_db),
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
 ):
-    """
-    Return user profile including assessment statistics.
-    ProfileScreen expects:
-      { id, email, name, age, gender, joined_at, assessment_count, high_risk_count }
-    """
-    user = db.query(UserModel).filter(UserModel.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-
-    total_count = (
-        db.query(DiagnosisRecord)
-        .filter(DiagnosisRecord.user_id == user_id)
-        .count()
-    )
-    high_count = (
-        db.query(DiagnosisRecord)
-        .filter(DiagnosisRecord.user_id == user_id, DiagnosisRecord.risk == "High")
-        .count()
-    )
-
+    u = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    count = db.query(DiagnosisModel).filter(DiagnosisModel.user_id == user_id).count()
+    high  = db.query(DiagnosisModel).filter(
+        DiagnosisModel.user_id == user_id,
+        DiagnosisModel.risk == "High",
+    ).count()
     return {
-        "id":               user.id,
-        "email":            user.email,
-        "name":             user.name,
-        "age":              user.age,
-        "gender":           user.gender,
-        "joined_at":        user.created_at.isoformat(),
-        "assessment_count": total_count,
-        "high_risk_count":  high_count,
+        "id":               u.id,
+        "email":            u.email,
+        "name":             u.name,
+        "age":              u.age,
+        "gender":           u.gender,
+        "joined_at":        u.created_at.isoformat(),
+        "assessment_count": count,
+        "high_risk_count":  high,
     }
 
 
-@app.put("/api/v1/user/profile", tags=["Profile"])
+@app.put("/api/v1/user/profile")
 async def update_profile(
-    req:     ProfileUpdate,
-    user_id: int     = Depends(_get_user_id),
-    db:      Session = Depends(get_db),
+    req: ProfileUpdate,
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
 ):
-    """
-    Update user profile fields.
-    Frontend sends: { name?, age?, gender? }
-    Returns: { id, name, age, gender }
-    """
-    user = db.query(UserModel).filter(UserModel.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found.")
-
-    if req.name   is not None: user.name   = req.name.strip()
-    if req.age    is not None: user.age    = req.age
-    if req.gender is not None: user.gender = req.gender
-
+    u = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    if req.name   is not None: u.name   = req.name
+    if req.age    is not None: u.age    = req.age
+    if req.gender is not None: u.gender = req.gender
     db.commit()
-    db.refresh(user)
-
-    return {
-        "id":     user.id,
-        "name":   user.name,
-        "age":    user.age,
-        "gender": user.gender,
-    }
+    return {"id": u.id, "name": u.name, "age": u.age, "gender": u.gender}
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# ADMIN ROUTES
-# Note: The frontend AdminScreen does NOT require admin-only auth — it uses
-# the same Bearer token as regular users. This matches the App.jsx api calls
-# which all go through the same api.delete/api.get helpers with the user token.
-# ─────────────────────────────────────────────────────────────────────────────
-@app.get("/api/v1/admin/stats", tags=["Admin"])
-async def admin_stats(
-    user_id: int     = Depends(_get_user_id),
-    db:      Session = Depends(get_db),
-):
-    """
-    Return aggregate statistics across all records.
-    """
+# ─────────────────────────────────────────────────────────────
+# ROUTES — Admin
+# ─────────────────────────────────────────────────────────────
+@app.get("/api/v1/admin/stats")
+async def admin_stats(db: Session = Depends(get_db)):
     return {
         "total_users":     db.query(UserModel).count(),
-        "total_diagnoses": db.query(DiagnosisRecord).count(),
-        "high_risk":       db.query(DiagnosisRecord).filter(DiagnosisRecord.risk == "High").count(),
-        "medium_risk":     db.query(DiagnosisRecord).filter(DiagnosisRecord.risk == "Medium").count(),
-        "low_risk":        db.query(DiagnosisRecord).filter(DiagnosisRecord.risk == "Low").count(),
+        "total_diagnoses": db.query(DiagnosisModel).count(),
+        "high_risk":       db.query(DiagnosisModel).filter(DiagnosisModel.risk == "High").count(),
+        "medium_risk":     db.query(DiagnosisModel).filter(DiagnosisModel.risk == "Medium").count(),
+        "low_risk":        db.query(DiagnosisModel).filter(DiagnosisModel.risk == "Low").count(),
     }
 
 
-@app.get("/api/v1/admin/all-records", tags=["Admin"])
-async def all_records(
-    user_id: int     = Depends(_get_user_id),
-    db:      Session = Depends(get_db),
-):
-    """
-    Return all diagnosis records across all users (for the admin/database screen).
-    Frontend AdminScreen expects per record:
-      { id, disease, risk, confidence, patient_name, created_at }
-    """
+@app.get("/api/v1/admin/all-records")
+async def all_records(db: Session = Depends(get_db)):
     rows = (
-        db.query(DiagnosisRecord)
-        .order_by(DiagnosisRecord.created_at.desc())
+        db.query(DiagnosisModel)
+        .order_by(DiagnosisModel.created_at.desc())
         .limit(500)
         .all()
     )
-
-    # Batch-load user names
-    user_ids = {r.user_id for r in rows}
-    users: Dict[int, str] = {
+    # Batch user lookup
+    user_ids = {d.user_id for d in rows}
+    users = {
         u.id: u.name
         for u in db.query(UserModel).filter(UserModel.id.in_(user_ids)).all()
     }
-
     return [
         {
-            "id":           r.id,
-            "disease":      r.disease,
-            "risk":         r.risk,
-            "confidence":   r.confidence,
-            "patient_name": users.get(r.user_id, "Unknown"),
-            "created_at":   r.created_at.isoformat(),
+            "id":           d.id,
+            "disease":      d.disease,
+            "risk":         d.risk,
+            "confidence":   d.confidence,
+            "patient_name": users.get(d.user_id, "Unknown"),
+            "created_at":   d.created_at.isoformat(),
         }
-        for r in rows
+        for d in rows
     ]
 
 
-@app.delete("/api/v1/admin/clear-database", tags=["Admin"])
-async def clear_database(
-    user_id: int     = Depends(_get_user_id),
-    db:      Session = Depends(get_db),
-):
-    """
-    Delete all diagnosis records and assessment sessions.
-    Frontend AdminScreen calls this on 'Clear All Records' confirmation.
-    """
-    deleted_diag    = db.query(DiagnosisRecord).delete()
-    deleted_session = db.query(AssessmentSession).delete()
+@app.delete("/api/v1/admin/clear-database")
+async def clear_database(db: Session = Depends(get_db)):
+    deleted = db.query(DiagnosisModel).delete()
+    db.query(SessionModel).delete()
     db.commit()
-
-    logger.info(f"Admin clear by user_id={user_id}: {deleted_diag} diagnoses, {deleted_session} sessions deleted")
-
-    return {
-        "message": f"Cleared {deleted_diag} diagnosis record{'s' if deleted_diag != 1 else ''} and {deleted_session} session{'s' if deleted_session != 1 else ''}."
-    }
+    return {"message": f"Cleared {deleted} diagnosis records"}
 
 
-@app.delete("/api/v1/admin/record/{diag_id}", tags=["Admin"])
-async def delete_record(
-    diag_id: int,
-    user_id: int     = Depends(_get_user_id),
-    db:      Session = Depends(get_db),
-):
-    """
-    Delete a single diagnosis record by id.
-    Frontend AdminScreen calls this on the trash icon per row.
-    """
-    record = db.query(DiagnosisRecord).filter(DiagnosisRecord.id == diag_id).first()
-    if not record:
-        raise HTTPException(status_code=404, detail="Record not found.")
-
-    db.delete(record)
+@app.delete("/api/v1/admin/record/{diag_id}")
+async def delete_record(diag_id: int, db: Session = Depends(get_db)):
+    d = db.query(DiagnosisModel).filter(DiagnosisModel.id == diag_id).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    db.delete(d)
     db.commit()
+    return {"message": "Record deleted"}
 
-    return {"message": "Record deleted successfully."}
 
-
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 # ENTRYPOINT
-# ─────────────────────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(
         "main:app",
-        host    = "0.0.0.0",
-        port    = int(os.getenv("PORT", 8000)),
-        reload  = True,
-        workers = 1,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", 8000)),
+        reload=True,
     )
