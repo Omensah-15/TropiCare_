@@ -1,0 +1,33 @@
+SCTD - Symptom Checker for Tropical Diseases
+Model: Decision Tree
+KNUST Final Year Project
+============================================================
+
+                              precision    recall  f1-score   support
+
+         Alcoholic hepatitis       1.00      1.00      1.00        24
+                     Allergy       1.00      1.00      1.00        24
+            Bronchial Asthma       1.00      1.00      1.00        24
+                 Chicken pox       1.00      1.00      1.00        24
+                 Common Cold       1.00      1.00      1.00        24
+                      Dengue       1.00      1.00      1.00        24
+                    Diabetes       1.00      1.00      1.00        25
+Dimorphic hemmorhoids(piles)       1.00      1.00      1.00        24
+               Drug Reaction       1.00      1.00      1.00        24
+            Fungal infection       1.00      1.00      1.00        24
+                 Hepatitis B       1.00      1.00      1.00        24
+                 Hepatitis C       1.00      1.00      1.00        24
+                 Hepatitis D       0.89      1.00      0.94        24
+                 Hepatitis E       1.00      1.00      1.00        24
+                    Jaundice       1.00      0.88      0.93        24
+                     Malaria       1.00      1.00      1.00        24
+         Peptic ulcer diseae       1.00      1.00      1.00        24
+                   Pneumonia       1.00      1.00      1.00        24
+                Tuberculosis       1.00      1.00      1.00        24
+                     Typhoid       1.00      1.00      1.00        24
+     Urinary tract infection       1.00      1.00      1.00        24
+                 hepatitis A       1.00      1.00      1.00        24
+
+                    accuracy                           0.99       529
+                   macro avg       0.99      0.99      0.99       529
+                weighted avg       0.99      0.99      0.99       529
