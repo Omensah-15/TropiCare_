@@ -1,7 +1,3 @@
-"""
-TropiCare API
-"""
-
 import os
 import json
 import uuid
