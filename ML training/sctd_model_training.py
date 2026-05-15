@@ -1,10 +1,7 @@
 """
 ========================================================================
 SCTD - Symptom Checker for Tropical Diseases
-Production ML Pipeline  |  KNUST Final Year Project
-
-Supervised by : Prof. J.J. Kponyo
-Authors       : MENSAH OBED, AFRIQUE-AHALI KEKELI
+Production ML Pipeline
 
 Architecture
 ------------
