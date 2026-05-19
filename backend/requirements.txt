@@ -9,3 +9,4 @@ numpy
 joblib
 pydantic
 python-multipart
+psycopg2-binary
