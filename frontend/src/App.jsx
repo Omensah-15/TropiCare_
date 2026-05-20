@@ -1871,11 +1871,11 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
   const [gender,  setGender]  = useState(user?.gender || "");
   const [profile, setProfile] = useState({});
   const [loading, setLoading] = useState(false);
- 
+
   useEffect(() => {
     api.get("/user/profile").then(setProfile).catch(() => setProfile(user || {}));
   }, []);
- 
+
   const saveProfile = async () => {
     setLoading(true);
     try {
@@ -1891,620 +1891,99 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
       setLoading(false);
     }
   };
- 
-  const cancelEdit = () => {
-    setName(user?.name || "");
-    setAge(user?.age || "");
-    setGender(user?.gender || "");
-    setEditing(false);
-  };
- 
+
   const p = { ...user, ...profile };
- 
-  const menuItems = [
-    { label: "Settings",           icon: "settings", action: () => onNav("settings") },
-    { label: "Privacy & Security", icon: "shield",   action: () => onNav("privacy") },
-    { label: "About TropiCare",    icon: "info",     action: () => onNav("about") },
-    { label: "Database",           icon: "database", action: () => onNav("admin") },
-  ];
- 
+
   return (
     <div>
       <div className="page-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div className="t-display">Profile</div>
-        {!editing && (
-          <button className="btn btn-secondary btn-sm" onClick={() => setEditing(true)}>
-            <Icon name="edit" size={13} />
-            Edit
-          </button>
-        )}
+        <button className="btn btn-secondary btn-sm" onClick={() => setEditing(!editing)}>
+          <Icon name="edit" size={13} />
+          {editing ? "Cancel" : "Edit"}
+        </button>
       </div>
- 
+
       <div className="page-body">
- 
-        {/* Identity card — only shown when NOT editing */}
-        {!editing && (
-          <div className="card card-p text-c mb-3">
-            <div className="avatar avatar-lg mx-auto mb-3">
-              {(p.name || "P")[0].toUpperCase()}
-            </div>
-            <div className="t-title">{p.name}</div>
-            <div className="t-subtitle mt-1">{p.email}</div>
-            {(p.age || p.gender) && (
-              <div className="t-subtitle">
-                {[p.age && `${p.age} yrs`, p.gender].filter(Boolean).join(" · ")}
-              </div>
-            )}
-            <div className="mt-2">
-              <span className="badge badge-teal">
-                Member since {new Date(p.joined_at || Date.now()).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
-              </span>
-            </div>
+        <div className="card card-p text-c mb-3">
+          <div className="avatar avatar-lg mx-auto mb-3">
+            {(p.name || "P")[0].toUpperCase()}
           </div>
-        )}
- 
-        {/* Edit panel — only shown when editing */}
-        {editing && (
-          <div className="edit-panel mb-3">
-            <div className="edit-panel-title">Edit Profile</div>
-            <div className="field">
-              <label className="field-label">Full Name</label>
-              <input className="field-input" value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div className="grid-2">
+          {editing ? (
+            <div style={{ textAlign: "left" }}>
               <div className="field">
-                <label className="field-label">Age</label>
-                <input className="field-input" type="number" value={age} onChange={(e) => setAge(e.target.value)} />
+                <label className="field-label">Full Name</label>
+                <input className="field-input" value={name} onChange={(e) => setName(e.target.value)} />
               </div>
-              <div className="field">
-                <label className="field-label">Gender</label>
-                <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
-                  <option value="">Select</option>
-                  <option>Male</option>
-                  <option>Female</option>
-                  <option>Other</option>
-                </select>
+              <div className="grid-2">
+                <div className="field">
+                  <label className="field-label">Age</label>
+                  <input className="field-input" type="number" value={age} onChange={(e) => setAge(e.target.value)} />
+                </div>
+                <div className="field">
+                  <label className="field-label">Gender</label>
+                  <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
+                    <option value="">Select</option>
+                    <option>Male</option>
+                    <option>Female</option>
+                    <option>Other</option>
+                  </select>
+                </div>
               </div>
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-primary" style={{ flex: 1 }} onClick={saveProfile} disabled={loading}>
+              <button className="btn btn-primary btn-full" onClick={saveProfile} disabled={loading}>
                 {loading ? "Saving..." : "Save Changes"}
               </button>
-              <button className="btn btn-secondary" onClick={cancelEdit}>
-                Cancel
-              </button>
             </div>
+          ) : (
+            <>
+              <div className="t-title">{p.name}</div>
+              <div className="t-subtitle mt-1">{p.email}</div>
+              {p.age && <div className="t-subtitle">{p.age} years · {p.gender}</div>}
+              <div className="mt-2">
+                <span className="badge badge-teal">
+                  Member since {new Date(p.joined_at || Date.now()).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
+                </span>
+              </div>
+            </>
+          )}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 16 }}>
+          <div className="stat-card">
+            <div className="stat-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
+            <div className="stat-lbl">Assessments</div>
           </div>
-        )}
- 
-        {/* Stats */}
-        <div className="profile-stat-grid">
-          <div className="ps-card">
-            <div className="ps-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
-            <div className="ps-lbl">Assessments</div>
-          </div>
-          <div className="ps-card">
-            <div className="ps-val" style={{ color: "#ef4444" }}>{p.high_risk_count || 0}</div>
-            <div className="ps-lbl">High Risk</div>
+          <div className="stat-card">
+            <div className="stat-val" style={{ color: "#ef4444" }}>{p.high_risk_count || 0}</div>
+            <div className="stat-lbl">High Risk</div>
           </div>
         </div>
- 
-        {/* Menu */}
+
         <div className="card card-p mb-3">
           <div className="menu-list">
-            {menuItems.map((item) => (
+            {[
+              { label: "Settings",             icon: "settings", action: () => onNav("settings") },
+              { label: "Database Management",  icon: "database", action: () => onNav("admin") },
+              { label: "Privacy and Security", icon: "shield",   action: () => {} },
+              { label: "About TropiCare",      icon: "info",     action: () => {} },
+            ].map((item) => (
               <div key={item.label} className="menu-item" onClick={item.action}>
-                <div className="menu-ico">
-                  <Icon name={item.icon} size={16} color="var(--muted)" />
-                </div>
+                <div className="menu-ico"><Icon name={item.icon} size={16} color="var(--muted)" /></div>
                 <span style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>{item.label}</span>
                 <Icon name="chevR" size={14} color="var(--muted-l)" />
               </div>
             ))}
           </div>
         </div>
- 
+
         <button className="btn btn-danger btn-full" onClick={onLogout}>
           <Icon name="logout" size={15} color="#fff" />
           Sign Out
         </button>
- 
+
         <div className="text-c mt-4" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.7 }}>
           TropiCare v1.0 · Symptom Checker for Tropical Diseases
         </div>
-      </div>
-    </div>
-  );
-}
- 
- 
-// ─────────────────────────────────────────────
-// PRIVACY & SECURITY SCREEN (new)
-// ─────────────────────────────────────────────
-function PrivacySecurityScreen({ onBack, toast, user }) {
-  const [currentPw,  setCurrentPw]  = useState("");
-  const [newPw,      setNewPw]      = useState("");
-  const [confirmPw,  setConfirmPw]  = useState("");
-  const [showCur,    setShowCur]    = useState(false);
-  const [showNew,    setShowNew]    = useState(false);
-  const [showCon,    setShowCon]    = useState(false);
-  const [pwLoading,  setPwLoading]  = useState(false);
-  const [pwExpanded, setPwExpanded] = useState(false);
- 
-  const [deleteConfirm, setDeleteConfirm] = useState(false);
-  const [deleteLoading, setDeleteLoading] = useState(false);
- 
-  const changePassword = async () => {
-    if (!currentPw || !newPw || !confirmPw) {
-      toast("Please fill in all password fields.");
-      return;
-    }
-    if (newPw.length < 8) {
-      toast("New password must be at least 8 characters.");
-      return;
-    }
-    if (newPw !== confirmPw) {
-      toast("New passwords do not match.");
-      return;
-    }
-    if (currentPw === newPw) {
-      toast("New password must be different from the current one.");
-      return;
-    }
-    setPwLoading(true);
-    try {
-      await api.put("/user/change-password", {
-        current_password: currentPw,
-        new_password: newPw,
-      });
-      toast("Password changed successfully.");
-      setCurrentPw(""); setNewPw(""); setConfirmPw("");
-      setPwExpanded(false);
-    } catch (e) {
-      toast(e.message || "Could not change password. Check your current password.");
-    } finally {
-      setPwLoading(false);
-    }
-  };
- 
-  const deleteAccount = async () => {
-    if (!deleteConfirm) {
-      setDeleteConfirm(true);
-      setTimeout(() => setDeleteConfirm(false), 6000);
-      return;
-    }
-    setDeleteLoading(true);
-    try {
-      await api.delete("/user/account");
-      Store.remove("tc_user");
-      api.setToken(null);
-      window.location.reload();
-    } catch {
-      toast("Could not delete account. Please try again.");
-    } finally {
-      setDeleteLoading(false);
-    }
-  };
- 
-  const privacyPoints = [
-    {
-      icon: "shield",
-      color: "#22c55e",
-      bg: "#f0fdf4",
-      label: "Local data only",
-      desc: "Your assessment history is stored in a secured database tied to your account only.",
-    },
-    {
-      icon: "user",
-      color: "#3b82f6",
-      bg: "#eff6ff",
-      label: "No third-party sharing",
-      desc: "Your personal health data is never sold or shared with advertisers or third parties.",
-    },
-    {
-      icon: "database",
-      color: "#8b5cf6",
-      bg: "#f5f3ff",
-      label: "Encrypted in transit",
-      desc: "All data sent between your device and our servers is encrypted using HTTPS.",
-    },
-    {
-      icon: "trash",
-      color: "#ef4444",
-      bg: "#fef2f2",
-      label: "Right to delete",
-      desc: "You can permanently delete your account and all associated data at any time.",
-    },
-  ];
- 
-  return (
-    <div>
-      {/* Header */}
-      <div style={{
-        display: "flex", alignItems: "center", gap: 10,
-        padding: "20px 20px 0",
-      }}>
-        <button
-          onClick={onBack}
-          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
-        >
-          <Icon name="chevL" size={16} color="var(--ink)" />
-        </button>
-        <div className="t-display">Privacy & Security</div>
-      </div>
- 
-      <div className="page-body">
- 
-        {/* Change Password */}
-        <div className="sec-section">
-          <div className="sec-section-title">Account Security</div>
-          <div className="card card-p">
-            <div className="sec-row" style={{ paddingTop: 0 }}>
-              <div className="sec-row-icon" style={{ background: "#eff6ff" }}>
-                <Icon name="edit" size={16} color="#3b82f6" />
-              </div>
-              <div className="sec-row-body">
-                <div className="sec-row-label">Change Password</div>
-                <div className="sec-row-hint">Update your account password</div>
-              </div>
-              <button
-                className={`btn btn-sm ${pwExpanded ? "btn-secondary" : "btn-outline"}`}
-                onClick={() => {
-                  setPwExpanded(!pwExpanded);
-                  if (pwExpanded) {
-                    setCurrentPw(""); setNewPw(""); setConfirmPw("");
-                  }
-                }}
-              >
-                {pwExpanded ? "Cancel" : "Change"}
-              </button>
-            </div>
- 
-            {pwExpanded && (
-              <div className="sec-field-wrap">
-                {/* Current password */}
-                <div className="field">
-                  <label className="field-label">Current Password</label>
-                  <div className="pw-wrap">
-                    <input
-                      className="field-input"
-                      type={showCur ? "text" : "password"}
-                      placeholder="Enter current password"
-                      value={currentPw}
-                      onChange={(e) => setCurrentPw(e.target.value)}
-                      style={{ paddingRight: 46 }}
-                    />
-                    <button className="pw-toggle" type="button" onClick={() => setShowCur(!showCur)}>
-                      <Icon name={showCur ? "eyeOff" : "eye"} size={16} />
-                    </button>
-                  </div>
-                </div>
- 
-                {/* New password */}
-                <div className="field">
-                  <label className="field-label">New Password</label>
-                  <div className="pw-wrap">
-                    <input
-                      className="field-input"
-                      type={showNew ? "text" : "password"}
-                      placeholder="Min. 8 characters"
-                      value={newPw}
-                      onChange={(e) => setNewPw(e.target.value)}
-                      style={{ paddingRight: 46 }}
-                    />
-                    <button className="pw-toggle" type="button" onClick={() => setShowNew(!showNew)}>
-                      <Icon name={showNew ? "eyeOff" : "eye"} size={16} />
-                    </button>
-                  </div>
-                </div>
- 
-                {/* Confirm password */}
-                <div className="field" style={{ marginBottom: 14 }}>
-                  <label className="field-label">Confirm New Password</label>
-                  <div className="pw-wrap">
-                    <input
-                      className="field-input"
-                      type={showCon ? "text" : "password"}
-                      placeholder="Repeat new password"
-                      value={confirmPw}
-                      onChange={(e) => setConfirmPw(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && changePassword()}
-                      style={{ paddingRight: 46 }}
-                    />
-                    <button className="pw-toggle" type="button" onClick={() => setShowCon(!showCon)}>
-                      <Icon name={showCon ? "eyeOff" : "eye"} size={16} />
-                    </button>
-                  </div>
-                </div>
- 
-                {/* Strength hint */}
-                {newPw.length > 0 && (
-                  <div style={{
-                    display: "flex", alignItems: "center", gap: 8,
-                    marginBottom: 14, padding: "8px 12px",
-                    background: newPw.length < 8 ? "#fef2f2" : "#f0fdf4",
-                    borderRadius: 8,
-                    border: `1px solid ${newPw.length < 8 ? "#fecaca" : "#bbf7d0"}`,
-                  }}>
-                    <Icon
-                      name={newPw.length < 8 ? "alert" : "check"}
-                      size={13}
-                      color={newPw.length < 8 ? "#ef4444" : "#22c55e"}
-                    />
-                    <span style={{
-                      fontSize: 12, fontWeight: 600,
-                      color: newPw.length < 8 ? "#ef4444" : "#16a34a",
-                    }}>
-                      {newPw.length < 8
-                        ? `${8 - newPw.length} more character${8 - newPw.length !== 1 ? "s" : ""} needed`
-                        : "Password length is good"}
-                    </span>
-                  </div>
-                )}
- 
-                <button
-                  className="btn btn-primary btn-full"
-                  onClick={changePassword}
-                  disabled={pwLoading}
-                >
-                  {pwLoading ? "Updating..." : "Update Password"}
-                </button>
-              </div>
-            )}
- 
-            {/* Email row */}
-            <div className="sec-row">
-              <div className="sec-row-icon" style={{ background: "var(--teal-xl)" }}>
-                <Icon name="user" size={16} color="var(--teal)" />
-              </div>
-              <div className="sec-row-body">
-                <div className="sec-row-label">Email Address</div>
-                <div className="sec-row-hint">{user?.email || "—"}</div>
-              </div>
-              <span className="badge badge-teal" style={{ fontSize: 10 }}>Verified</span>
-            </div>
-          </div>
-        </div>
- 
-        {/* Privacy info */}
-        <div className="sec-section">
-          <div className="sec-section-title">Your Privacy</div>
-          <div className="card card-p">
-            {privacyPoints.map((p, i) => (
-              <div
-                key={p.label}
-                className="sec-row"
-                style={{ paddingTop: i === 0 ? 0 : 14 }}
-              >
-                <div className="sec-row-icon" style={{ background: p.bg }}>
-                  <Icon name={p.icon} size={16} color={p.color} />
-                </div>
-                <div className="sec-row-body">
-                  <div className="sec-row-label">{p.label}</div>
-                  <div className="sec-row-hint">{p.desc}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
- 
-        {/* Danger zone */}
-        <div className="sec-section">
-          <div className="sec-section-title">Danger Zone</div>
-          <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
-            <div style={{ fontWeight: 700, color: "#ef4444", marginBottom: 4, fontSize: 14 }}>
-              Delete Account
-            </div>
-            <div className="t-subtitle mb-3" style={{ fontSize: 13 }}>
-              Permanently removes your account and all health records. This cannot be undone.
-            </div>
- 
-            {deleteConfirm && (
-              <div className="disclaimer mb-3">
-                <Icon name="alert" size={13} color="var(--amber)" />
-                <p>Tap again to confirm. All your data will be deleted permanently.</p>
-              </div>
-            )}
- 
-            <button
-              className="btn btn-danger btn-full"
-              onClick={deleteAccount}
-              disabled={deleteLoading}
-            >
-              <Icon name="trash" size={14} color="#fff" />
-              {deleteLoading ? "Deleting..." : deleteConfirm ? "Confirm Delete Account" : "Delete My Account"}
-            </button>
- 
-            {deleteConfirm && (
-              <button
-                className="btn btn-secondary btn-full mt-2"
-                onClick={() => setDeleteConfirm(false)}
-              >
-                Cancel
-              </button>
-            )}
-          </div>
-        </div>
- 
-      </div>
-    </div>
-  );
-}
- 
- 
-// ─────────────────────────────────────────────
-// ABOUT SCREEN (new)
-// ─────────────────────────────────────────────
-function AboutScreen({ onBack }) {
-  const features = [
-    {
-      icon: "activity",
-      color: "#0d9488",
-      bg: "var(--teal-xl)",
-      title: "Adaptive Symptom Assessment",
-      desc: "Questions adjust in real time based on your answers — no irrelevant questions, no wasted time.",
-    },
-    {
-      icon: "database",
-      color: "#3b82f6",
-      bg: "#eff6ff",
-      title: "Machine Learning Diagnosis",
-      desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 23 tropical and common diseases.",
-    },
-    {
-      icon: "shield",
-      color: "#8b5cf6",
-      bg: "#f5f3ff",
-      title: "Risk Stratification",
-      desc: "Every result is classified as High, Medium, or Low risk — with clear, actionable next steps for each level.",
-    },
-    {
-      icon: "heart",
-      color: "#ef4444",
-      bg: "#fef2f2",
-      title: "AI-Powered Recommendations",
-      desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms.",
-    },
-    {
-      icon: "clipboard",
-      color: "#f59e0b",
-      bg: "#fffbeb",
-      title: "Assessment History",
-      desc: "All past results are stored securely so you and your care provider can track changes over time.",
-    },
-    {
-      icon: "user",
-      color: "#22c55e",
-      bg: "#f0fdf4",
-      title: "Built for West Africa",
-      desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa.",
-    },
-  ];
- 
-  const team = [
-    { initials: "OA", name: "Obed Agyemang", role: "Lead Developer · Frontend & ML Integration", color: "#0d9488", bg: "var(--teal-xl)" },
-    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Co-Developer · Backend & Data Pipeline",    color: "#3b82f6", bg: "#eff6ff" },
-    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                color: "#8b5cf6", bg: "#f5f3ff" },
-  ];
- 
-  const versionInfo = [
-    { key: "Version",     val: "1.0.0" },
-    { key: "Release",     val: "May 2026" },
-    { key: "Platform",    val: "Web · Mobile" },
-    { key: "Institution", val: "KNUST, Ghana" },
-    { key: "License",     val: "Academic use only" },
-  ];
- 
-  return (
-    <div>
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button
-          onClick={onBack}
-          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
-        >
-          <Icon name="chevL" size={16} color="var(--ink)" />
-        </button>
-        <div className="t-display">About TropiCare</div>
-      </div>
- 
-      <div className="page-body">
- 
-        {/* Hero */}
-        <div className="about-hero">
-          <div className="about-hero-bg">
-            <Icon name="heart" size={160} color="#fff" />
-          </div>
-          <div className="about-hero-eyebrow">Final Year Project · KNUST 2026</div>
-          <div className="about-hero-title">TropiCare</div>
-          <div className="about-hero-sub">
-            An AI-powered symptom checker built to help patients and clinicians identify tropical diseases
-            faster — with clear risk levels and personalised recommendations.
-          </div>
-        </div>
- 
-        {/* Mission */}
-        <div className="about-mission mb-4">
-          <div className="about-mission-label">Our Mission</div>
-          <div className="about-mission-text">
-            TropiCare was built to bridge the gap between symptom onset and clinical attention in
-            resource-constrained settings. By combining machine learning with adaptive questioning,
-            it provides structured, risk-stratified guidance to patients and triage staff before a
-            doctor is available.
-          </div>
-        </div>
- 
-        {/* Stats */}
-        <div className="about-fact-grid mb-4">
-          {[
-            { val: "22", lbl: "Diseases covered" },
-            { val: "76",  lbl: "Tracked symptoms" },
-            { val: "15",  lbl: "Max questions" },
-            { val: "2",   lbl: "ML algorithms" },
-          ].map((f) => (
-            <div key={f.lbl} className="about-fact">
-              <div className="about-fact-val">{f.val}</div>
-              <div className="about-fact-lbl">{f.lbl}</div>
-            </div>
-          ))}
-        </div>
- 
-        {/* Features */}
-        <div className="section-ttl mb-2">What TropiCare Does</div>
-        <div className="card card-p mb-4">
-          {features.map((f) => (
-            <div key={f.title} className="about-feature-row">
-              <div className="about-feature-icon" style={{ background: f.bg }}>
-                <Icon name={f.icon} size={17} color={f.color} />
-              </div>
-              <div>
-                <div className="about-feature-title">{f.title}</div>
-                <div className="about-feature-desc">{f.desc}</div>
-              </div>
-            </div>
-          ))}
-        </div>
- 
-        {/* Disclaimer */}
-        <div className="disclaimer mb-4">
-          <Icon name="alert" size={14} color="var(--amber)" />
-          <p>
-            TropiCare is an informational tool only. It does not replace a clinical examination
-            or a qualified healthcare professional. Always consult a doctor for a definitive diagnosis.
-          </p>
-        </div>
- 
-        {/* Team */}
-        <div className="section-ttl mb-2">The Team</div>
-        {team.map((t) => (
-          <div key={t.name} className="about-team-card">
-            <div className="about-team-avatar" style={{ background: t.bg, color: t.color }}>
-              {t.initials}
-            </div>
-            <div>
-              <div className="about-team-name">{t.name}</div>
-              <div className="about-team-role">{t.role}</div>
-            </div>
-          </div>
-        ))}
- 
-        {/* Version info */}
-        <div className="section-ttl mt-4 mb-2">Version Info</div>
-        <div className="card card-p mb-4">
-          {versionInfo.map((v) => (
-            <div key={v.key} className="about-version-strip">
-              <span className="about-version-key">{v.key}</span>
-              <span className="about-version-val">{v.val}</span>
-            </div>
-          ))}
-        </div>
- 
-        <div className="text-c" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.8 }}>
-          TropiCare · Symptom Checker for Tropical Diseases{"\n"}
-          Kwame Nkrumah University of Science and Technology
-        </div>
- 
-        <div style={{ height: 24 }} />
       </div>
     </div>
   );
