@@ -44,7 +44,6 @@ ACCESS_TOKEN_EXPIRE_DAYS = 7
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
-# Free models — change to any free model on openrouter.ai
 OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
 
 SITE_URL     = os.getenv("SITE_URL", "http://localhost:8000")
@@ -80,14 +79,14 @@ class DiagnosisModel(Base):
     disease         = Column(String(100))
     risk            = Column(String(20))
     confidence      = Column(Float)
-    answers         = Column(Text)           # stored as JSON string
-    active_symptoms = Column(Text)           # stored as JSON string
+    answers         = Column(Text)
+    active_symptoms = Column(Text)
     rec_home_care   = Column(Text, nullable=True)
     rec_test        = Column(Text, nullable=True)
     rec_doctor      = Column(Text, nullable=True)
     rec_safety      = Column(Text, nullable=True)
     ai_explanation  = Column(Text, nullable=True)
-    ml_scores       = Column(Text, nullable=True)  # stored as JSON string
+    ml_scores       = Column(Text, nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
 
@@ -96,17 +95,16 @@ class SessionModel(Base):
     id              = Column(Integer, primary_key=True, index=True)
     session_id      = Column(String(64), unique=True, index=True)
     user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
-    answers         = Column(Text, default="{}")       # JSON string
-    asked_questions = Column(Text, default="[]")       # JSON string
+    answers         = Column(Text, default="{}")
+    asked_questions = Column(Text, default="[]")
     completed       = Column(Boolean, default=False)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
 
 # ─────────────────────────────────────────────────────────────
-# DB HELPERS — safe JSON read/write
+# DB HELPERS
 # ─────────────────────────────────────────────────────────────
 def _load_json(value: Optional[str], default):
-    """Safely parse a JSON string stored in a Text column."""
     if value is None:
         return default
     try:
@@ -307,7 +305,6 @@ def score_disease(disease: str, answers: dict) -> float:
 
 
 def get_next_question(answers: dict, asked: list) -> Optional[dict]:
-    # Rank diseases by current score and pick the best unexplored symptom
     ranked = sorted(DISEASE_SYMPTOM_MAP.keys(), key=lambda d: score_disease(d, answers), reverse=True)
     for disease in ranked[:6]:
         for sym in DISEASE_SYMPTOM_MAP[disease]:
@@ -315,7 +312,6 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
                 q = Q_INDEX.get(sym)
                 if q:
                     return q
-    # Fallback: any unasked question
     for q in ALL_QUESTIONS:
         if q["id"] not in asked:
             return q
@@ -323,7 +319,6 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
 
 
 def predict_with_ml(answers: dict) -> dict:
-    """Run ML ensemble if available, otherwise fall back to scoring engine."""
     ensemble = LOADED_MODELS.get("sctd_ensemble")
     le       = LOADED_MODELS.get("sctd_label_encoder")
     cols     = LOADED_MODELS.get("sctd_feature_columns")
@@ -335,30 +330,29 @@ def predict_with_ml(answers: dict) -> dict:
             vec = np.array(
                 [1.0 if answers.get(c, False) else 0.0 for c in feature_cols]
             ).reshape(1, -1)
-            proba   = ensemble.predict_proba(vec)[0]
-            idx     = int(np.argmax(proba))
-            disease = le.inverse_transform([idx])[0]
+            proba      = ensemble.predict_proba(vec)[0]
+            idx        = int(np.argmax(proba))
+            disease    = le.inverse_transform([idx])[0]
             confidence = float(proba[idx])
-            all_probs = {
+            all_probs  = {
                 le.inverse_transform([i])[0]: round(float(p), 4)
                 for i, p in enumerate(proba)
             }
             return {
-                "disease": disease,
+                "disease":    disease,
                 "confidence": confidence,
-                "risk": risk_map.get(disease, "Medium"),
+                "risk":       risk_map.get(disease, "Medium"),
                 "all_scores": dict(sorted(all_probs.items(), key=lambda x: x[1], reverse=True)),
-                "method": "ml",
+                "method":     "ml",
             }
         except Exception as e:
             logger.warning(f"ML prediction failed, falling back to scoring: {e}")
 
-    # Scoring fallback
-    scores = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
+    scores        = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     best_disease, _ = sorted_scores[0]
 
-    syms = DISEASE_SYMPTOM_MAP.get(best_disease, [])
+    syms      = DISEASE_SYMPTOM_MAP.get(best_disease, [])
     yes_count = sum(1 for s in syms if answers.get(s) is True)
     confidence = min(0.95, max(0.35, yes_count / max(len(syms), 1)))
 
@@ -369,16 +363,16 @@ def predict_with_ml(answers: dict) -> dict:
         all_scores[d] = round(min(0.95, max(0.01, yc / tc)), 4)
 
     return {
-        "disease": best_disease,
+        "disease":    best_disease,
         "confidence": confidence,
-        "risk": RISK_MAP.get(best_disease, "Medium"),
+        "risk":       RISK_MAP.get(best_disease, "Medium"),
         "all_scores": all_scores,
-        "method": "scoring",
+        "method":     "scoring",
     }
 
 
 # ─────────────────────────────────────────────────────────────
-# OPENROUTER AI — free model, plain clinical advice
+# OPENROUTER AI
 # ─────────────────────────────────────────────────────────────
 async def call_openrouter(
     disease: str,
@@ -386,22 +380,15 @@ async def call_openrouter(
     active_syms: List[str],
     confidence: float,
 ) -> Optional[dict]:
-    """
-    Call OpenRouter with a free model.
-    Returns a dict with keys: explanation, home_care, test, doctor, safety.
-    Returns None on any failure so the caller can use DEFAULT_RECS.
-    """
     if not OPENROUTER_API_KEY:
         logger.info("OPENROUTER_API_KEY not set — skipping AI call.")
         return None
 
     sym_text = ", ".join(s.replace("_", " ") for s in active_syms[:12]) or "general symptoms"
-
-    # Urgency label for the prompt
-    urgency = {
-        "High": "URGENT — recommend visiting a hospital or clinic today",
+    urgency  = {
+        "High":   "URGENT — recommend visiting a hospital or clinic today",
         "Medium": "advise a clinic visit within 1–2 days if symptoms persist",
-        "Low": "advise rest at home and a clinic visit only if symptoms worsen",
+        "Low":    "advise rest at home and a clinic visit only if symptoms worsen",
     }.get(risk, "advise a clinic visit")
 
     prompt = f"""You are a health assistant helping patients in Ghana and West Africa.
@@ -427,15 +414,15 @@ Rules:
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": SITE_URL,
-        "X-Title": SITE_NAME,
+        "Content-Type":  "application/json",
+        "HTTP-Referer":  SITE_URL,
+        "X-Title":       SITE_NAME,
     }
     payload = {
         "model": OPENROUTER_MODEL,
         "messages": [
             {
-                "role": "system",
+                "role":    "system",
                 "content": (
                     "You are a responsible clinical AI assistant for a tropical disease app. "
                     "Always respond with valid JSON only. Never prescribe specific drugs or dosages."
@@ -443,7 +430,7 @@ Rules:
             },
             {"role": "user", "content": prompt},
         ],
-        "max_tokens": 350,
+        "max_tokens":  350,
         "temperature": 0.2,
     }
 
@@ -459,12 +446,10 @@ Rules:
                     body = await resp.text()
                     logger.warning(f"OpenRouter HTTP {resp.status}: {body[:200]}")
                     return None
-                data = await resp.json()
-                raw = data["choices"][0]["message"]["content"].strip()
-                # Strip markdown fences if model adds them
-                raw = raw.replace("```json", "").replace("```", "").strip()
+                data   = await resp.json()
+                raw    = data["choices"][0]["message"]["content"].strip()
+                raw    = raw.replace("```json", "").replace("```", "").strip()
                 result = json.loads(raw)
-                # Validate expected keys
                 for key in ("explanation", "home_care", "test", "doctor", "safety"):
                     if key not in result:
                         result[key] = ""
@@ -479,54 +464,53 @@ Rules:
 
 
 def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> dict:
-    """Merge AI result with safe defaults. AI fields take priority if non-empty."""
     default = DEFAULT_RECS.get(disease, {
         "home_care": "Rest and stay hydrated.",
-        "test": "Consult a healthcare provider for appropriate tests.",
-        "doctor": "Visit a clinic if symptoms persist or worsen.",
-        "safety": "Seek emergency care if symptoms become severe." if risk == "High" else "",
+        "test":      "Consult a healthcare provider for appropriate tests.",
+        "doctor":    "Visit a clinic if symptoms persist or worsen.",
+        "safety":    "Seek emergency care if symptoms become severe." if risk == "High" else "",
     })
-
     if ai_result:
         return {
-            "home_care":   ai_result.get("home_care") or default["home_care"],
-            "test":        ai_result.get("test")      or default["test"],
-            "doctor":      ai_result.get("doctor")    or default["doctor"],
-            "safety":      ai_result.get("safety")    or default.get("safety", ""),
-            "explanation": ai_result.get("explanation") or f"Your symptoms are consistent with {disease}.",
+            "home_care":   ai_result.get("home_care")    or default["home_care"],
+            "test":        ai_result.get("test")         or default["test"],
+            "doctor":      ai_result.get("doctor")       or default["doctor"],
+            "safety":      ai_result.get("safety")       or default.get("safety", ""),
+            "explanation": ai_result.get("explanation")  or f"Your symptoms are consistent with {disease}.",
         }
-
-    return {
-        **default,
-        "explanation": f"Your symptoms are consistent with {disease}.",
-    }
+    return {**default, "explanation": f"Your symptoms are consistent with {disease}."}
 
 
 # ─────────────────────────────────────────────────────────────
 # PYDANTIC SCHEMAS
 # ─────────────────────────────────────────────────────────────
 class RegisterRequest(BaseModel):
-    email: str
+    email:    str
     password: str
-    name: str
-    age: Optional[str] = None
-    gender: Optional[str] = None
+    name:     str
+    age:      Optional[str] = None
+    gender:   Optional[str] = None
 
 
 class LoginRequest(BaseModel):
-    email: str
+    email:    str
     password: str
 
 
 class AnswerRequest(BaseModel):
     question_id: str
-    answer: bool
+    answer:      bool
 
 
 class ProfileUpdate(BaseModel):
-    name: Optional[str] = None
-    age: Optional[str] = None
+    name:   Optional[str] = None
+    age:    Optional[str] = None
     gender: Optional[str] = None
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password:     str
 
 
 # ─────────────────────────────────────────────────────────────
@@ -560,7 +544,7 @@ def get_db():
 
 
 def hash_pw(pw: str) -> str:
-    salt = secrets.token_hex(16)
+    salt   = secrets.token_hex(16)
     hashed = hashlib.sha256((salt + pw).encode()).hexdigest()
     return f"{salt}:{hashed}"
 
@@ -584,7 +568,6 @@ async def lifespan(app: FastAPI):
     logger.info(f"TropiCare started. ML models: {model_keys}")
     logger.info(f"OpenRouter enabled: {bool(OPENROUTER_API_KEY)} | Model: {OPENROUTER_MODEL}")
     yield
-    # No cleanup needed
 
 
 app = FastAPI(
@@ -611,11 +594,11 @@ app.add_middleware(
 @app.get("/api/v1/health")
 async def health():
     return {
-        "status": "healthy",
-        "timestamp": datetime.utcnow().isoformat(),
-        "ml_models": list(LOADED_MODELS.keys()),
+        "status":             "healthy",
+        "timestamp":          datetime.utcnow().isoformat(),
+        "ml_models":          list(LOADED_MODELS.keys()),
         "openrouter_enabled": bool(OPENROUTER_API_KEY),
-        "openrouter_model": OPENROUTER_MODEL,
+        "openrouter_model":   OPENROUTER_MODEL,
     }
 
 
@@ -638,8 +621,8 @@ async def register(req: RegisterRequest, db: Session = Depends(get_db)):
     db.refresh(user)
     return {
         "access_token": create_token(user.id),
-        "token_type": "bearer",
-        "user": {"id": user.id, "email": user.email, "name": user.name},
+        "token_type":   "bearer",
+        "user":         {"id": user.id, "email": user.email, "name": user.name},
     }
 
 
@@ -650,8 +633,8 @@ async def login(req: LoginRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     return {
         "access_token": create_token(user.id),
-        "token_type": "bearer",
-        "user": {"id": user.id, "email": user.email, "name": user.name},
+        "token_type":   "bearer",
+        "user":         {"id": user.id, "email": user.email, "name": user.name},
     }
 
 
@@ -663,7 +646,7 @@ async def start_assessment(
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    sid = str(uuid.uuid4())
+    sid     = str(uuid.uuid4())
     session = SessionModel(
         session_id=sid,
         user_id=user_id,
@@ -673,8 +656,8 @@ async def start_assessment(
     db.add(session)
     db.commit()
     return {
-        "session_id": sid,
-        "first_question": ALL_QUESTIONS[0],
+        "session_id":      sid,
+        "first_question":  ALL_QUESTIONS[0],
         "total_questions": 15,
     }
 
@@ -696,7 +679,6 @@ async def next_question(
     answers = _load_json(s.answers, {})
     asked   = _load_json(s.asked_questions, [])
 
-    # Validate question_id
     if req.question_id not in Q_INDEX:
         raise HTTPException(status_code=400, detail=f"Unknown question_id: {req.question_id}")
 
@@ -736,11 +718,10 @@ async def analyze(
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    answers = _load_json(s.answers, {})
-    pred    = predict_with_ml(answers)
-    active_syms: List[str] = [k for k, v in answers.items() if v is True]
+    answers     = _load_json(s.answers, {})
+    pred        = predict_with_ml(answers)
+    active_syms = [k for k, v in answers.items() if v is True]
 
-    # Try AI recommendations with a 12-second timeout
     ai_result: Optional[dict] = None
     try:
         ai_result = await asyncio.wait_for(
@@ -755,38 +736,38 @@ async def analyze(
     rec = build_recommendation(pred["disease"], pred["risk"], ai_result)
 
     diag = DiagnosisModel(
-        user_id        = user_id,
-        session_id     = session_id,
-        disease        = pred["disease"],
-        risk           = pred["risk"],
-        confidence     = pred["confidence"],
-        answers        = _dump_json(answers),
-        active_symptoms= _dump_json(active_syms),
-        rec_home_care  = rec["home_care"],
-        rec_test       = rec["test"],
-        rec_doctor     = rec["doctor"],
-        rec_safety     = rec.get("safety", ""),
-        ai_explanation = rec.get("explanation", ""),
-        ml_scores      = _dump_json(pred.get("all_scores", {})),
+        user_id         = user_id,
+        session_id      = session_id,
+        disease         = pred["disease"],
+        risk            = pred["risk"],
+        confidence      = pred["confidence"],
+        answers         = _dump_json(answers),
+        active_symptoms = _dump_json(active_syms),
+        rec_home_care   = rec["home_care"],
+        rec_test        = rec["test"],
+        rec_doctor      = rec["doctor"],
+        rec_safety      = rec.get("safety", ""),
+        ai_explanation  = rec.get("explanation", ""),
+        ml_scores       = _dump_json(pred.get("all_scores", {})),
     )
     db.add(diag)
     db.commit()
     db.refresh(diag)
 
     return {
-        "id": diag.id,
-        "disease": pred["disease"],
-        "confidence": pred["confidence"],
-        "risk": pred["risk"],
+        "id":          diag.id,
+        "disease":     pred["disease"],
+        "confidence":  pred["confidence"],
+        "risk":        pred["risk"],
         "explanation": rec.get("explanation", ""),
-        "all_scores": pred.get("all_scores", {}),
+        "all_scores":  pred.get("all_scores", {}),
         "recommendation": {
             "home_care": rec["home_care"],
             "test":      rec["test"],
             "doctor":    rec["doctor"],
             "safety":    rec.get("safety", ""),
         },
-        "method": pred["method"],
+        "method":  pred["method"],
         "ai_used": ai_result is not None,
     }
 
@@ -806,12 +787,11 @@ async def get_history(
         .limit(100)
         .all()
     )
-    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    user         = db.query(UserModel).filter(UserModel.id == user_id).first()
     patient_name = user.name if user else "Unknown"
 
-    result = []
-    for d in rows:
-        result.append({
+    return [
+        {
             "id":           d.id,
             "disease":      d.disease,
             "risk":         d.risk,
@@ -826,8 +806,9 @@ async def get_history(
             },
             "explanation":     d.ai_explanation,
             "active_symptoms": _load_json(d.active_symptoms, []),
-        })
-    return result
+        }
+        for d in rows
+    ]
 
 
 @app.get("/api/v1/patient/history/{diag_id}")
@@ -908,6 +889,36 @@ async def update_profile(
     return {"id": u.id, "name": u.name, "age": u.age, "gender": u.gender}
 
 
+@app.put("/api/v1/user/change-password")
+async def change_password(
+    req: ChangePasswordRequest,
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    u = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not u.pw_hash or not verify_pw(req.current_password, u.pw_hash):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    u.pw_hash = hash_pw(req.new_password)
+    db.commit()
+    return {"message": "Password updated successfully"}
+
+
+@app.delete("/api/v1/user/account")
+async def delete_account(
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    db.query(DiagnosisModel).filter(DiagnosisModel.user_id == user_id).delete()
+    db.query(SessionModel).filter(SessionModel.user_id == user_id).delete()
+    db.query(UserModel).filter(UserModel.id == user_id).delete()
+    db.commit()
+    return {"message": "Account deleted"}
+
+
 # ─────────────────────────────────────────────────────────────
 # ROUTES — Admin
 # ─────────────────────────────────────────────────────────────
@@ -930,9 +941,8 @@ async def all_records(db: Session = Depends(get_db)):
         .limit(500)
         .all()
     )
-    # Batch user lookup
     user_ids = {d.user_id for d in rows}
-    users = {
+    users    = {
         u.id: u.name
         for u in db.query(UserModel).filter(UserModel.id.in_(user_ids)).all()
     }
