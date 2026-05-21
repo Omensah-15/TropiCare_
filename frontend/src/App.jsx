@@ -1841,8 +1841,8 @@ function AboutScreen({ onBack }) {
   ];
 
   const team = [
-    { initials: "OA", name: "Obed Agyemang",       role: "Lead Developer · Frontend & ML Integration", color: "#0d9488", bg: "var(--teal-xl)" },
-    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Co-Developer · Backend & Data Pipeline",    color: "#3b82f6", bg: "#eff6ff" },
+    { initials: "OA", name: "Obed Mensah",       role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
+    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping",    color: "#3b82f6", bg: "#eff6ff" },
     { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                color: "#8b5cf6", bg: "#f5f3ff" },
   ];
 
