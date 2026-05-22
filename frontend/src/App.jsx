@@ -3,7 +3,7 @@
  * Backend: FastAPI (tropicare.onrender.com)
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 
 // ─────────────────────────────────────────────
 // BACKEND CONFIG
@@ -28,19 +28,30 @@ const api = {
     const res = await fetch(`${API_BASE}${path}`, {
       method,
       headers: api.headers(),
-      body: body ? JSON.stringify(body) : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${res.status}`);
+      let detail = `HTTP ${res.status}`;
+      try {
+        const err = await res.json();
+        if (typeof err.detail === "string") {
+          detail = err.detail;
+        } else if (Array.isArray(err.detail) && err.detail.length > 0) {
+          // Pydantic v2 returns [{loc, msg, type}, ...]
+          detail = err.detail.map((e) => e.msg || String(e)).join(". ");
+        } else if (err.message) {
+          detail = err.message;
+        }
+      } catch (_) { /* leave default */ }
+      throw new Error(detail);
     }
     return res.json();
   },
 
-  get:    (path)       => api.call("GET",    path),
-  post:   (path, body) => api.call("POST",   path, body),
-  put:    (path, body) => api.call("PUT",    path, body),
-  delete: (path)       => api.call("DELETE", path),
+  get:    (path)        => api.call("GET",    path),
+  post:   (path, body)  => api.call("POST",   path, body),
+  put:    (path, body)  => api.call("PUT",    path, body),
+  delete: (path)        => api.call("DELETE", path),
 };
 
 // ─────────────────────────────────────────────
@@ -59,7 +70,7 @@ const RISK_COLOR = { High: "#ef4444", Medium: "#f59e0b", Low: "#22c55e" };
 const RISK_BG    = { High: "#fef2f2", Medium: "#fffbeb", Low: "#f0fdf4" };
 
 // ─────────────────────────────────────────────
-// DISEASE / SYMPTOM DATA
+// DISEASE / SYMPTOM DATA (mirrors backend exactly)
 // ─────────────────────────────────────────────
 const DISEASE_SYMPTOM_MAP = {
   Malaria:                  ["high_fever","chills","sweating","headache","muscle_pain","vomiting","fatigue","joint_pain","nausea","malaise","loss_of_appetite","fast_heart_rate","confusion","coma"],
@@ -190,6 +201,7 @@ function scoreDisease(disease, answers) {
 }
 
 function getNextQuestionOffline(answers, asked) {
+  const askedSet = new Set(asked);
   const ranked = Object.keys(DISEASE_SYMPTOM_MAP)
     .map((d) => ({ d, sc: scoreDisease(d, answers) }))
     .sort((a, b) => b.sc - a.sc)
@@ -198,13 +210,13 @@ function getNextQuestionOffline(answers, asked) {
 
   for (const disease of ranked) {
     for (const sym of DISEASE_SYMPTOM_MAP[disease] || []) {
-      if (!asked.includes(sym)) {
+      if (!askedSet.has(sym)) {
         const q = Q_INDEX[sym];
         if (q) return q;
       }
     }
   }
-  return ALL_QUESTIONS.find((q) => !asked.includes(q.id)) || null;
+  return ALL_QUESTIONS.find((q) => !askedSet.has(q.id)) || null;
 }
 
 function predictOffline(answers) {
@@ -212,7 +224,11 @@ function predictOffline(answers) {
     .map((d) => {
       const syms = DISEASE_SYMPTOM_MAP[d] || [];
       const yes  = syms.filter((s) => answers[s] === true).length;
-      return { d, sc: scoreDisease(d, answers), conf: Math.min(0.95, Math.max(0.35, yes / Math.max(syms.length, 1))) };
+      return {
+        d,
+        sc:   scoreDisease(d, answers),
+        conf: Math.min(0.95, Math.max(0.35, yes / Math.max(syms.length, 1))),
+      };
     })
     .sort((a, b) => b.sc - a.sc);
 
@@ -220,18 +236,23 @@ function predictOffline(answers) {
   const risk = RISK_MAP[top.d] || "Medium";
 
   return {
-    disease:    top.d,
-    confidence: top.conf,
+    disease:     top.d,
+    confidence:  top.conf,
     risk,
-    explanation: `The reported symptoms are consistent with ${top.d}.`,
+    explanation: `The reported symptoms are most consistent with ${top.d}.`,
     recommendation: {
       home_care: "Rest, stay hydrated, and monitor your symptoms closely.",
       test:      "Consult a healthcare provider to arrange appropriate diagnostic tests.",
-      doctor:    risk === "High" ? "Visit a hospital or clinic without delay." : "See a doctor if symptoms persist or worsen.",
-      safety:    risk === "High" ? "Do not wait — seek medical attention today." : "",
+      doctor:    risk === "High"
+        ? "Visit a hospital or clinic without delay."
+        : "See a doctor if symptoms persist or worsen.",
+      safety: risk === "High" ? "Do not wait — seek medical attention today." : "",
     },
-    all_scores: Object.fromEntries(sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])),
-    method: "offline-scoring",
+    all_scores: Object.fromEntries(
+      sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])
+    ),
+    method:  "offline-scoring",
+    ai_used: false,
   };
 }
 
@@ -307,7 +328,7 @@ const injectStyles = () => {
 
     .btn          { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 13px 22px; border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; font-weight: 600; cursor: pointer; border: none; transition: all 0.18s; line-height: 1; }
     .btn:active   { transform: scale(0.97); }
-    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
     .btn-primary  { background: var(--teal); color: #fff; box-shadow: 0 4px 14px rgba(13,148,136,0.28); }
     .btn-primary:hover:not(:disabled)   { background: var(--teal-d); box-shadow: 0 6px 18px rgba(13,148,136,0.36); }
     .btn-secondary { background: var(--border-l); color: var(--ink-2); }
@@ -364,7 +385,7 @@ const injectStyles = () => {
     .tab.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-s); }
     .grid-2     { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
     .pw-wrap    { position: relative; }
-    .pw-toggle  { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--muted-l); display: flex; }
+    .pw-toggle  { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--muted-l); display: flex; padding: 4px; }
 
     .home-header { display: flex; align-items: center; justify-content: space-between; padding: 24px 24px 16px; }
     @media (max-width: 767px) { .home-header { padding: 20px 16px 14px; } }
@@ -414,9 +435,9 @@ const injectStyles = () => {
     .q-topbar  { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
     .q-close   { width: 34px; height: 34px; background: var(--border-l); border-radius: 8px; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
     .q-counter { font-size: 12px; font-weight: 700; color: var(--muted); width: 38px; text-align: right; flex-shrink: 0; }
-    .q-body    { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 20px; }
+    .q-body    { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 20px; overflow-y: auto; }
     .q-cat-pill { display: inline-flex; padding: 4px 12px; background: var(--teal-xl); color: var(--teal); border-radius: 99px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 20px; }
-    .q-illus   { width: 160px; height: 160px; margin-bottom: 24px; }
+    .q-illus   { width: 160px; height: 160px; margin-bottom: 24px; flex-shrink: 0; }
     .q-illus-svg { width: 100%; height: 100%; }
     .q-text    { font-family: var(--display); font-size: 22px; font-weight: 700; color: var(--ink); text-align: center; line-height: 1.35; margin-bottom: 32px; max-width: 320px; }
     .q-answers { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 340px; }
@@ -432,7 +453,7 @@ const injectStyles = () => {
     .q-anim    { animation: qSlide 0.28s cubic-bezier(0.4,0,0.2,1); }
     @keyframes qSlide { from{opacity:0;transform:translateY(14px);} to{opacity:1;transform:none;} }
 
-    .analyzing  { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); }
+    .analyzing  { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); gap: 0; }
     .spin-ring  { width: 140px; height: 140px; margin-bottom: 28px; animation: spin-slow 3s linear infinite; }
     @keyframes spin-slow { to { transform: rotate(360deg); } }
     .loading-dots { display: flex; gap: 7px; margin-top: 24px; }
@@ -458,16 +479,16 @@ const injectStyles = () => {
     .rec-bubble-text  { font-size: 13px; color: var(--ink-2); line-height: 1.5; font-weight: 500; }
 
     .score-bar-row   { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
-    .score-bar-name  { font-size: 12px; color: var(--muted); width: 150px; flex-shrink: 0; }
+    .score-bar-name  { font-size: 12px; color: var(--muted); width: 150px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .score-bar-track { flex: 1; height: 4px; background: var(--border-l); border-radius: 99px; overflow: hidden; }
-    .score-bar-fill  { height: 100%; background: var(--border); border-radius: 99px; }
+    .score-bar-fill  { height: 100%; background: var(--teal-l); border-radius: 99px; }
     .score-bar-pct   { font-size: 12px; color: var(--muted); width: 30px; text-align: right; }
 
     .disclaimer   { display: flex; gap: 10px; align-items: flex-start; background: var(--amber-l); border: 1px solid #fde68a; border-radius: var(--radius-s); padding: 12px 14px; }
     .disclaimer p { font-size: 12px; color: #78350f; line-height: 1.55; }
 
     .search-wrap  { position: relative; margin-bottom: 12px; }
-    .search-icon  { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--muted-l); }
+    .search-icon  { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--muted-l); pointer-events: none; }
     .search-input { width: 100%; padding: 11px 14px 11px 40px; border: 1.5px solid var(--border); border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; color: var(--ink); background: var(--surface); outline: none; transition: border-color 0.18s; }
     .search-input:focus { border-color: var(--teal); }
     .chip-row { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
@@ -482,14 +503,12 @@ const injectStyles = () => {
     .menu-ico   { width: 34px; height: 34px; background: var(--border-l); border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 
     .toggle-row    { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }
-    .toggle        { position: relative; width: 42px; height: 23px; }
+    .toggle        { position: relative; width: 42px; height: 23px; cursor: pointer; }
     .toggle input  { opacity: 0; width: 0; height: 0; }
-    .toggle-slider { position: absolute; inset: 0; background: var(--border); border-radius: 99px; cursor: pointer; transition: 0.28s; }
+    .toggle-slider { position: absolute; inset: 0; background: var(--border); border-radius: 99px; transition: 0.28s; }
     .toggle input:checked + .toggle-slider { background: var(--teal); }
     .toggle-slider::before { content: ''; position: absolute; height: 17px; width: 17px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.28s; box-shadow: var(--shadow-s); }
     .toggle input:checked + .toggle-slider::before { transform: translateX(19px); }
-
-    .danger-zone { border: 1.5px solid var(--red); border-radius: var(--radius); padding: 18px; margin-bottom: 20px; }
 
     .flex      { display: flex; }
     .items-c   { align-items: center; }
@@ -501,7 +520,7 @@ const injectStyles = () => {
     .w-full  { width: 100%; }
     .text-c  { text-align: center; }
     .italic  { font-style: italic; }
-    .notif   { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); background: var(--ink-2); color: #fff; padding: 10px 22px; border-radius: var(--radius-s); font-size: 13px; font-weight: 500; z-index: 9999; animation: notif-in 0.3s ease; white-space: nowrap; }
+    .notif   { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); background: var(--ink-2); color: #fff; padding: 10px 22px; border-radius: var(--radius-s); font-size: 13px; font-weight: 500; z-index: 9999; animation: notif-in 0.3s ease; white-space: nowrap; max-width: calc(100vw - 32px); text-align: center; }
     @keyframes notif-in { from{opacity:0;transform:translateX(-50%) translateY(-12px);} to{opacity:1;transform:translateX(-50%) translateY(0);} }
 
     /* Profile */
@@ -549,6 +568,9 @@ const injectStyles = () => {
     .about-version-strip:last-child { border-bottom: none; }
     .about-version-key { font-size: 13px; color: var(--muted); }
     .about-version-val { font-size: 13px; font-weight: 600; color: var(--ink); }
+
+    /* Admin */
+    .danger-zone { border: 1.5px solid var(--red); border-radius: var(--radius); padding: 18px; margin-bottom: 20px; }
   `;
   document.head.appendChild(el);
 };
@@ -727,35 +749,35 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
   const s = { width: size, height: size, flexShrink: 0 };
   const p = { viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", style: s, className };
   switch (name) {
-    case "home":       return <svg {...p}><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>;
-    case "activity":   return <svg {...p}><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
-    case "clipboard":  return <svg {...p}><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/></svg>;
-    case "user":       return <svg {...p}><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
-    case "settings":   return <svg {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>;
-    case "heart":      return <svg {...p}><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>;
-    case "alert":      return <svg {...p}><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
-    case "info":       return <svg {...p}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>;
-    case "check":      return <svg {...p}><polyline points="20 6 9 17 4 12"/></svg>;
-    case "x":          return <svg {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
-    case "logout":     return <svg {...p}><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>;
-    case "chevR":      return <svg {...p}><polyline points="9 18 15 12 9 6"/></svg>;
-    case "chevL":      return <svg {...p}><polyline points="15 18 9 12 15 6"/></svg>;
-    case "edit":       return <svg {...p}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
-    case "trash":      return <svg {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>;
-    case "search":     return <svg {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
-    case "shield":     return <svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>;
-    case "database":   return <svg {...p}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>;
-    case "eye":        return <svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
-    case "eyeOff":     return <svg {...p}><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>;
-    case "calendar":   return <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
-    default:           return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
+    case "home":      return <svg {...p}><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>;
+    case "activity":  return <svg {...p}><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
+    case "clipboard": return <svg {...p}><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/></svg>;
+    case "user":      return <svg {...p}><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+    case "settings":  return <svg {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>;
+    case "heart":     return <svg {...p}><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>;
+    case "alert":     return <svg {...p}><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+    case "info":      return <svg {...p}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>;
+    case "check":     return <svg {...p}><polyline points="20 6 9 17 4 12"/></svg>;
+    case "x":         return <svg {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
+    case "logout":    return <svg {...p}><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>;
+    case "chevR":     return <svg {...p}><polyline points="9 18 15 12 9 6"/></svg>;
+    case "chevL":     return <svg {...p}><polyline points="15 18 9 12 15 6"/></svg>;
+    case "edit":      return <svg {...p}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+    case "trash":     return <svg {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>;
+    case "search":    return <svg {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
+    case "shield":    return <svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>;
+    case "database":  return <svg {...p}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>;
+    case "eye":       return <svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
+    case "eyeOff":    return <svg {...p}><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>;
+    case "calendar":  return <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
+    default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
 
 // ─────────────────────────────────────────────
 // TOAST
 // ─────────────────────────────────────────────
-let _notifTimer;
+let _notifTimer = null;
 function Notif({ msg }) {
   if (!msg) return null;
   return <div className="notif">{msg}</div>;
@@ -771,12 +793,24 @@ function RecBubble({ icon, label, text, accent, bg }) {
       <div className="rec-bubble-icon" style={{ background: `${accent}18` }}>
         <Icon name={icon} size={16} color={accent} />
       </div>
-      <div>
+      <div style={{ flex: 1, minWidth: 0 }}>
         <div className="rec-bubble-label" style={{ color: accent }}>{label}</div>
         <div className="rec-bubble-text">{text}</div>
       </div>
     </div>
   );
+}
+
+// ─────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────
+function fmtDate(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function initials(name) {
+  return (name || "P")[0].toUpperCase();
 }
 
 // ─────────────────────────────────────────────
@@ -804,94 +838,154 @@ export default function App() {
 
   const toast = useCallback((msg) => {
     setNotif(msg);
-    clearTimeout(_notifTimer);
-    _notifTimer = setTimeout(() => setNotif(""), 2600);
+    if (_notifTimer) clearTimeout(_notifTimer);
+    _notifTimer = setTimeout(() => setNotif(""), 3000);
   }, []);
 
+  // Splash + restore session
   useEffect(() => {
     const t1 = setTimeout(() => setSplashFade(true), 1900);
     const t2 = setTimeout(() => {
       setSplash(false);
       const saved = Store.get("tc_user");
-      if (saved) { api.setToken(saved.token || null); setUser(saved); }
+      if (saved && saved.token) {
+        api.setToken(saved.token);
+        setUser(saved);
+      }
     }, 2300);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
-  const login = (u) => {
+  const login = useCallback((u) => {
     Store.set("tc_user", u);
     api.setToken(u.token || null);
     setUser(u);
     setPage("home");
-  };
+  }, []);
 
-  const logout = () => {
+  const logout = useCallback(() => {
     Store.remove("tc_user");
     api.setToken(null);
     setUser(null);
-    setAssActive(false); setResult(null); setAnalyzing(false);
-    setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0); setSessionId(null);
+    setAssActive(false);
+    setResult(null);
+    setAnalyzing(false);
+    setAnswers({});
+    setAsked([]);
+    setCurrentQ(null);
+    setQIdx(0);
+    setSessionId(null);
+    setDetailRec(null);
     setPage("home");
     toast("Signed out successfully.");
-  };
+  }, [toast]);
 
-  const startAssessment = async () => {
-    setAnswers({}); setAsked([]); setQIdx(0);
-    setResult(null); setAnalyzing(false); setSessionId(null);
+  const startAssessment = useCallback(async () => {
+    setAnswers({});
+    setAsked([]);
+    setQIdx(0);
+    setResult(null);
+    setAnalyzing(false);
+    setSessionId(null);
+
     let firstQ = ALL_QUESTIONS[0];
     let sid    = null;
+
     try {
       const data = await api.post("/symptoms/start", {});
       sid    = data.session_id;
       firstQ = data.first_question || ALL_QUESTIONS[0];
       setSessionId(sid);
-    } catch { /* offline fallback */ }
+    } catch {
+      // Offline fallback: proceed without a session
+    }
+
     setCurrentQ(firstQ);
     setAssActive(true);
     setPage("assessment");
-  };
+  }, []);
 
-  const handleAnswer = async (val) => {
+  const handleAnswer = useCallback(async (val) => {
     const newAnswers = { ...answers, [currentQ.id]: val };
     const newAsked   = [...asked, currentQ.id];
     setAnswers(newAnswers);
     setAsked(newAsked);
-    if (newAsked.length >= MAX_Q) { finishAssessment(newAnswers); return; }
+
+    if (newAsked.length >= MAX_Q) {
+      finishAssessment(newAnswers);
+      return;
+    }
+
     let next = null;
+
     if (sessionId) {
       try {
-        const res = await api.post(`/symptoms/next?session_id=${sessionId}`, { question_id: currentQ.id, answer: val });
-        if (res.completed) { finishAssessment(newAnswers); return; }
-        next = res.next_question;
-      } catch { next = getNextQuestionOffline(newAnswers, newAsked); }
+        const res = await api.post(
+          `/symptoms/next?session_id=${sessionId}`,
+          { question_id: currentQ.id, answer: val }
+        );
+        if (res.completed) {
+          finishAssessment(newAnswers);
+          return;
+        }
+        next = res.next_question || null;
+      } catch {
+        next = getNextQuestionOffline(newAnswers, newAsked);
+      }
     } else {
       next = getNextQuestionOffline(newAnswers, newAsked);
     }
-    if (!next) { finishAssessment(newAnswers); return; }
-    setCurrentQ(next);
-    setQIdx(qIdx + 1);
-  };
 
-  const finishAssessment = async (finalAnswers) => {
+    if (!next) {
+      finishAssessment(newAnswers);
+      return;
+    }
+
+    setCurrentQ(next);
+    setQIdx((i) => i + 1);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answers, asked, currentQ, sessionId]);
+
+  const finishAssessment = useCallback(async (finalAnswers) => {
     setAssActive(false);
     setAnalyzing(true);
-    await new Promise((r) => setTimeout(r, 2400));
+
+    // Minimum display time so the analyzing screen is visible
+    const minWait = new Promise((r) => setTimeout(r, 2400));
+
     let pred = null;
+
     if (sessionId) {
-      try { pred = await api.post(`/diagnosis/analyze?session_id=${sessionId}`, {}); } catch {}
+      try {
+        pred = await api.post(`/diagnosis/analyze?session_id=${sessionId}`, {});
+      } catch {
+        pred = null;
+      }
     }
+
+    await minWait;
+
     if (!pred) pred = predictOffline(finalAnswers);
+
     setResult(pred);
     setAnalyzing(false);
     setPage("result");
-  };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId]);
 
-  const resetAssessment = () => {
-    setAssActive(false); setResult(null); setAnalyzing(false);
-    setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0); setSessionId(null);
+  const resetAssessment = useCallback(() => {
+    setAssActive(false);
+    setResult(null);
+    setAnalyzing(false);
+    setAnswers({});
+    setAsked([]);
+    setCurrentQ(null);
+    setQIdx(0);
+    setSessionId(null);
     setPage("home");
-  };
+  }, []);
 
+  // ── Render guards ──
   if (splash) {
     return (
       <div className={`splash${splashFade ? " fading" : ""}`}>
@@ -907,9 +1001,30 @@ export default function App() {
 
   if (!user) return <AuthScreen onLogin={login} toast={toast} />;
   if (analyzing) return <AnalyzingScreen />;
-  if (page === "result" && result) return <ResultScreen result={result} onReset={resetAssessment} onNewCheck={startAssessment} />;
-  if (assActive && currentQ) return <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />;
 
+  if (page === "result" && result) {
+    return (
+      <ResultScreen
+        result={result}
+        onReset={resetAssessment}
+        onNewCheck={startAssessment}
+      />
+    );
+  }
+
+  if (assActive && currentQ) {
+    return (
+      <QuestionScreen
+        question={currentQ}
+        qIdx={qIdx}
+        total={MAX_Q}
+        onAnswer={handleAnswer}
+        onQuit={resetAssessment}
+      />
+    );
+  }
+
+  // ── Shell layout ──
   const navItems = [
     { id: "home",       label: "Home",    icon: "home" },
     { id: "assessment", label: "Check",   icon: "activity" },
@@ -917,23 +1032,36 @@ export default function App() {
     { id: "profile",    label: "Profile", icon: "user" },
   ];
 
+  const handleNav = (id) => {
+    setPage(id);
+    if (id !== "assessment") setAssActive(false);
+  };
+
   const renderPage = () => {
     switch (page) {
-      case "home":       return <HomeScreen user={user} onStart={startAssessment} onNav={setPage} />;
+      case "home":       return <HomeScreen user={user} onStart={startAssessment} onNav={handleNav} />;
       case "assessment": return <AssessmentLanding onStart={startAssessment} />;
-      case "records":    return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
+      case "records":    return (
+        <RecordsScreen
+          toast={toast}
+          onDetail={setDetailRec}
+          detail={detailRec}
+          onClearDetail={() => setDetailRec(null)}
+        />
+      );
       case "profile":    return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
       case "settings":   return <SettingsScreen onBack={() => setPage("profile")} toast={toast} />;
       case "privacy":    return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} />;
       case "about":      return <AboutScreen onBack={() => setPage("profile")} />;
       case "admin":      return <AdminScreen onBack={() => setPage("profile")} toast={toast} />;
-      default:           return <HomeScreen user={user} onStart={startAssessment} onNav={setPage} />;
+      default:           return <HomeScreen user={user} onStart={startAssessment} onNav={handleNav} />;
     }
   };
 
   return (
     <div className="shell">
       <Notif msg={notif} />
+
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="brand-mark"><MedicalHeartMark size={20} color="#fff" /></div>
@@ -942,28 +1070,43 @@ export default function App() {
             <div className="brand-sub">Symptom Checker</div>
           </div>
         </div>
+
         <nav className="sidebar-nav">
           {[...navItems, { id: "settings", label: "Settings", icon: "settings" }].map((n) => (
-            <button key={n.id} className={`nav-item${page === n.id ? " active" : ""}`} onClick={() => setPage(n.id)}>
+            <button
+              key={n.id}
+              className={`nav-item${page === n.id ? " active" : ""}`}
+              onClick={() => handleNav(n.id)}
+            >
               <Icon name={n.icon} size={17} />
               {n.label}
             </button>
           ))}
         </nav>
+
         <div className="sidebar-foot" style={{ marginTop: "auto" }}>
-          <button className="nav-item" style={{ color: "#ef4444", width: "100%" }} onClick={logout}>
+          <button
+            className="nav-item"
+            style={{ color: "#ef4444", width: "100%" }}
+            onClick={logout}
+          >
             <Icon name="logout" size={16} color="#ef4444" />
             Sign Out
           </button>
         </div>
       </aside>
+
       <main className="main">
-        <div className="page">{renderPage()}</div>
+        <div className="page" key={page}>{renderPage()}</div>
       </main>
+
       <nav className="bottom-nav">
         {navItems.map((n) => (
-          <button key={n.id} className={`bnav-item${page === n.id ? " active" : ""}`}
-            onClick={() => { setPage(n.id); if (n.id !== "assessment") setAssActive(false); }}>
+          <button
+            key={n.id}
+            className={`bnav-item${page === n.id ? " active" : ""}`}
+            onClick={() => handleNav(n.id)}
+          >
             <Icon name={n.icon} size={20} />
             <span>{n.label}</span>
           </button>
@@ -986,16 +1129,34 @@ function AuthScreen({ onLogin, toast }) {
   const [showPw,  setShowPw]  = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const switchMode = (m) => {
+    setMode(m);
+    setName(""); setEmail(""); setPw(""); setAge(""); setGender("");
+  };
+
   const submit = async () => {
-    if (!email.trim() || !pw.trim()) { toast("Please fill in all required fields."); return; }
-    if (mode === "register" && !name.trim()) { toast("Please enter your full name."); return; }
+    const emailVal = email.trim().toLowerCase();
+    if (!emailVal || !pw.trim()) {
+      toast("Please fill in all required fields.");
+      return;
+    }
+    if (mode === "register") {
+      if (!name.trim()) { toast("Please enter your full name."); return; }
+      if (pw.length < 8) { toast("Password must be at least 8 characters."); return; }
+    }
     setLoading(true);
     try {
       let data;
       if (mode === "register") {
-        data = await api.post("/auth/register", { email: email.trim(), password: pw, name: name.trim(), age, gender });
+        data = await api.post("/auth/register", {
+          email: emailVal,
+          password: pw,
+          name: name.trim(),
+          age:  age  || undefined,
+          gender: gender || undefined,
+        });
       } else {
-        data = await api.post("/auth/login", { email: email.trim(), password: pw });
+        data = await api.post("/auth/login", { email: emailVal, password: pw });
       }
       onLogin({ ...data.user, token: data.access_token });
     } catch (e) {
@@ -1005,6 +1166,8 @@ function AuthScreen({ onLogin, toast }) {
     }
   };
 
+  const onKey = (e) => { if (e.key === "Enter" && !loading) submit(); };
+
   return (
     <div className="auth-wrap">
       <div className="auth-box">
@@ -1013,54 +1176,98 @@ function AuthScreen({ onLogin, toast }) {
           <div className="auth-title">TropiCare</div>
           <div className="auth-hint">AI-guided symptom assessment for tropical diseases</div>
         </div>
+
         <div className="card card-p" style={{ boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
           <div className="tabs mb-3">
             {["login","register"].map((m) => (
-              <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => setMode(m)}>
+              <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => switchMode(m)}>
                 {m === "login" ? "Sign In" : "Create Account"}
               </button>
             ))}
           </div>
+
           {mode === "register" && (
             <div className="field">
               <label className="field-label">Full Name</label>
-              <input className="field-input" placeholder="e.g. Kofi Mensah" value={name} onChange={(e) => setName(e.target.value)} />
+              <input
+                className="field-input"
+                placeholder="e.g. Kofi Mensah"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={onKey}
+              />
             </div>
           )}
+
           <div className="field">
             <label className="field-label">Email Address</label>
-            <input className="field-input" type="email" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input
+              className="field-input"
+              type="email"
+              placeholder="you@email.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              onKeyDown={onKey}
+            />
           </div>
+
           {mode === "register" && (
             <div className="grid-2">
               <div className="field">
                 <label className="field-label">Age</label>
-                <input className="field-input" type="number" placeholder="25" value={age} onChange={(e) => setAge(e.target.value)} />
+                <input
+                  className="field-input"
+                  type="number"
+                  placeholder="25"
+                  value={age}
+                  onChange={(e) => setAge(e.target.value)}
+                  min="1"
+                  max="120"
+                />
               </div>
               <div className="field">
                 <label className="field-label">Gender</label>
-                <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
+                <select
+                  className="field-input field-select"
+                  value={gender}
+                  onChange={(e) => setGender(e.target.value)}
+                >
                   <option value="">Select</option>
-                  <option>Male</option><option>Female</option><option>Other</option>
+                  <option>Male</option>
+                  <option>Female</option>
+                  <option>Other</option>
                 </select>
               </div>
             </div>
           )}
+
           <div className="field">
-            <label className="field-label">Password</label>
+            <label className="field-label">Password {mode === "register" && <span style={{fontWeight:400,textTransform:"none",letterSpacing:0}}>(min. 8 characters)</span>}</label>
             <div className="pw-wrap">
-              <input className="field-input" type={showPw ? "text" : "password"} placeholder="Enter password"
-                value={pw} onChange={(e) => setPw(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submit()} style={{ paddingRight: 46 }} />
-              <button className="pw-toggle" type="button" onClick={() => setShowPw(!showPw)}>
+              <input
+                className="field-input"
+                type={showPw ? "text" : "password"}
+                placeholder="Enter password"
+                value={pw}
+                onChange={(e) => setPw(e.target.value)}
+                onKeyDown={onKey}
+                style={{ paddingRight: 46 }}
+              />
+              <button className="pw-toggle" type="button" onClick={() => setShowPw((s) => !s)}>
                 <Icon name={showPw ? "eyeOff" : "eye"} size={17} />
               </button>
             </div>
           </div>
-          <button className="btn btn-primary btn-full btn-lg mt-2" onClick={submit} disabled={loading}>
+
+          <button
+            className="btn btn-primary btn-full btn-lg mt-2"
+            onClick={submit}
+            disabled={loading}
+          >
             {loading ? "Please wait..." : mode === "login" ? "Sign In" : "Create Account"}
           </button>
         </div>
+
         <div className="auth-foot">TropiCare · Symptom Checker for Tropical Diseases</div>
       </div>
     </div>
@@ -1069,18 +1276,37 @@ function AuthScreen({ onLogin, toast }) {
 
 // ─────────────────────────────────────────────
 // HOME SCREEN
+// Fixed: stats now come from /user/profile for accurate totals
 // ─────────────────────────────────────────────
 function HomeScreen({ user, onStart, onNav }) {
-  const [records, setRecords] = useState([]);
+  const [recentRecords, setRecentRecords] = useState([]);
+  const [profileStats,  setProfileStats]  = useState({ assessment_count: 0, high_risk_count: 0, last_date: null });
+  const [loaded,        setLoaded]        = useState(false);
 
   useEffect(() => {
-    api.get("/patient/history").then((d) => setRecords(d.slice(0, 3))).catch(() => {});
+    let alive = true;
+    Promise.all([
+      api.get("/patient/history").catch(() => []),
+      api.get("/user/profile").catch(() => ({})),
+    ]).then(([history, profile]) => {
+      if (!alive) return;
+      setRecentRecords(Array.isArray(history) ? history.slice(0, 3) : []);
+      setProfileStats({
+        assessment_count: profile.assessment_count || 0,
+        high_risk_count:  profile.high_risk_count  || 0,
+        last_date:        Array.isArray(history) && history.length > 0
+          ? history[0].created_at
+          : null,
+      });
+      setLoaded(true);
+    });
+    return () => { alive = false; };
   }, []);
 
   const stats = [
-    { label: "Assessments", val: records.length,                                        icon: "activity", color: "#0d9488" },
-    { label: "High Risk",   val: records.filter((r) => r.risk === "High").length,       icon: "alert",    color: "#ef4444" },
-    { label: "Last Check",  val: records[0] ? fmtDate(records[0].created_at) : "None", icon: "calendar", color: "#3b82f6" },
+    { label: "Assessments", val: loaded ? String(profileStats.assessment_count) : "--", icon: "activity", color: "#0d9488" },
+    { label: "High Risk",   val: loaded ? String(profileStats.high_risk_count)  : "--", icon: "alert",    color: "#ef4444" },
+    { label: "Last Check",  val: loaded ? (profileStats.last_date ? fmtDate(profileStats.last_date) : "None") : "--", icon: "calendar", color: "#3b82f6" },
   ];
 
   return (
@@ -1092,7 +1318,7 @@ function HomeScreen({ user, onStart, onNav }) {
             {(user?.name || "Patient").split(" ")[0]}
           </div>
         </div>
-        <div className="avatar">{(user?.name || "P")[0].toUpperCase()}</div>
+        <div className="avatar">{initials(user?.name)}</div>
       </div>
 
       <div className="hero-card">
@@ -1116,14 +1342,14 @@ function HomeScreen({ user, onStart, onNav }) {
         ))}
       </div>
 
-      {records.length > 0 && (
+      {recentRecords.length > 0 && (
         <div className="section">
           <div className="section-ttl">Recent Assessments</div>
           <div className="rec-list">
-            {records.map((r) => (
-              <div key={r.id} className="rec-card">
-                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk]}18` }}>
-                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk]} />
+            {recentRecords.map((r) => (
+              <div key={r.id} className="rec-card" onClick={() => onNav("records")}>
+                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk] || "#64748b"}18` }}>
+                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk] || "#64748b"} />
                 </div>
                 <div className="rec-info">
                   <div className="rec-name">{r.disease}</div>
@@ -1147,6 +1373,7 @@ function HomeScreen({ user, onStart, onNav }) {
           <div className="t-subtitle mt-3" style={{ fontSize: 12 }}>22 diseases · 3 risk levels</div>
         </div>
       </div>
+
       <div style={{ height: 24 }} />
     </div>
   );
@@ -1158,7 +1385,7 @@ function HomeScreen({ user, onStart, onNav }) {
 function AssessmentLanding({ onStart }) {
   const features = [
     { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "#0d9488", bg: "#f0fdfa" },
-    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "#3b82f6", bg: "#eff6ff" },
+    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.",   color: "#3b82f6", bg: "#eff6ff" },
     { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",           color: "#8b5cf6", bg: "#f5f3ff" },
   ];
 
@@ -1221,30 +1448,46 @@ function AssessmentLanding({ onStart }) {
 // ─────────────────────────────────────────────
 function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
   const [animKey, setAnimKey] = useState(0);
-  const progress = (qIdx / total) * 100;
+  const [busy,    setBusy]    = useState(false);
+  const progress = ((qIdx) / total) * 100;
 
-  const answer = (val) => { setAnimKey((k) => k + 1); onAnswer(val); };
+  const answer = async (val) => {
+    if (busy) return;
+    setBusy(true);
+    setAnimKey((k) => k + 1);
+    await onAnswer(val);
+    setBusy(false);
+  };
 
   return (
     <div className="q-screen">
       <div className="q-topbar">
-        <button className="q-close" onClick={onQuit}><Icon name="x" size={16} color="var(--muted)" /></button>
+        <button className="q-close" onClick={onQuit} aria-label="Quit assessment">
+          <Icon name="x" size={16} color="var(--muted)" />
+        </button>
         <div style={{ flex: 1 }}>
-          <div className="prog-track"><div className="prog-fill" style={{ width: `${progress}%` }} /></div>
+          <div className="prog-track">
+            <div className="prog-fill" style={{ width: `${progress}%` }} />
+          </div>
         </div>
         <div className="q-counter">{qIdx + 1}/{total}</div>
       </div>
+
       <div key={animKey} className="q-body q-anim">
         <div className="q-cat-pill">{question.category}</div>
         <QuestionIllus question={question} />
         <div className="q-text">{question.question}</div>
         <div className="q-answers">
-          <button className="ans-btn yes" onClick={() => answer(true)}>
-            <div className="ans-btn-icon ans-yes-icon"><Icon name="check" size={14} color="var(--teal-d)" /></div>
+          <button className="ans-btn yes" onClick={() => answer(true)} disabled={busy}>
+            <div className="ans-btn-icon ans-yes-icon">
+              <Icon name="check" size={14} color="var(--teal-d)" />
+            </div>
             Yes
           </button>
-          <button className="ans-btn no" onClick={() => answer(false)}>
-            <div className="ans-btn-icon ans-no-icon"><Icon name="x" size={14} color="var(--muted)" /></div>
+          <button className="ans-btn no" onClick={() => answer(false)} disabled={busy}>
+            <div className="ans-btn-icon ans-no-icon">
+              <Icon name="x" size={14} color="var(--muted)" />
+            </div>
             No
           </button>
         </div>
@@ -1258,7 +1501,12 @@ function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
 // ─────────────────────────────────────────────
 function AnalyzingScreen() {
   const [step, setStep] = useState(0);
-  const steps = ["Processing your responses...","Running diagnostic models...","Calculating risk level...","Preparing your recommendations..."];
+  const steps = [
+    "Processing your responses...",
+    "Running diagnostic models...",
+    "Calculating risk level...",
+    "Preparing your recommendations...",
+  ];
 
   useEffect(() => {
     const t = setInterval(() => setStep((s) => Math.min(s + 1, steps.length - 1)), 680);
@@ -1268,9 +1516,13 @@ function AnalyzingScreen() {
   return (
     <div className="analyzing">
       <div className="spin-ring"><IllusAnalysis /></div>
-      <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, textAlign: "center" }}>Analysing Results</div>
+      <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, textAlign: "center" }}>
+        Analysing Results
+      </div>
       <div className="t-subtitle mt-2 text-c" style={{ minHeight: 22 }}>{steps[step]}</div>
-      <div className="loading-dots"><div className="ldot" /><div className="ldot" /><div className="ldot" /></div>
+      <div className="loading-dots">
+        <div className="ldot" /><div className="ldot" /><div className="ldot" />
+      </div>
     </div>
   );
 }
@@ -1280,40 +1532,67 @@ function AnalyzingScreen() {
 // ─────────────────────────────────────────────
 function ResultScreen({ result, onReset, onNewCheck }) {
   const risk   = result.risk || "Medium";
-  const color  = RISK_COLOR[risk];
-  const bg     = RISK_BG[risk];
+  const color  = RISK_COLOR[risk]  || "#0d9488";
+  const bg     = RISK_BG[risk]     || "#f0fdfa";
   const rec    = result.recommendation || {};
   const scores = result.all_scores
-    ? Object.entries(result.all_scores).filter(([d]) => d !== result.disease).slice(0, 4)
+    ? Object.entries(result.all_scores)
+        .filter(([d]) => d !== result.disease)
+        .slice(0, 4)
     : [];
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Your Result</div>
-        <button onClick={onReset} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button
+          onClick={onReset}
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
+          aria-label="Close result"
+        >
           <Icon name="x" size={16} color="var(--muted)" />
         </button>
       </div>
 
-      <div style={{ maxWidth: 600, margin: "0 auto", padding: "24px 16px 64px" }}>
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "24px 16px 80px" }}>
         <div className="text-c mb-4">
           <div className={`result-ring result-ring-${risk}`}>
-            <Icon name={risk === "High" ? "alert" : risk === "Medium" ? "info" : "check"} size={44} color={color} />
+            <Icon
+              name={risk === "High" ? "alert" : risk === "Medium" ? "info" : "check"}
+              size={44}
+              color={color}
+            />
           </div>
-          <span className={`badge badge-${risk}`} style={{ fontSize: 12, padding: "4px 14px" }}>{risk} Risk</span>
+          <span className={`badge badge-${risk}`} style={{ fontSize: 12, padding: "4px 14px" }}>
+            {risk} Risk
+          </span>
         </div>
 
         <div className="card card-p mb-3 text-c">
           <div className="t-label mb-2">Predicted Condition</div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12 }}>{result.disease}</div>
-          <div style={{ height: 6, background: "var(--border-l)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
-            <div style={{ height: "100%", width: `${Math.round(result.confidence * 100)}%`, background: `linear-gradient(90deg, ${color}80, ${color})`, borderRadius: 99, transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)" }} />
+          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12 }}>
+            {result.disease}
           </div>
-          <div style={{ fontSize: 13, fontWeight: 700, color }}>{Math.round(result.confidence * 100)}% match</div>
+          <div style={{ height: 6, background: "var(--border-l)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
+            <div style={{
+              height: "100%",
+              width: `${Math.round((result.confidence || 0) * 100)}%`,
+              background: `linear-gradient(90deg, ${color}80, ${color})`,
+              borderRadius: 99,
+              transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)",
+            }} />
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color }}>
+            {Math.round((result.confidence || 0) * 100)}% match
+          </div>
           {result.explanation && (
             <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)", fontSize: 13, color: "var(--muted)", fontStyle: "italic", lineHeight: 1.6 }}>
               {result.explanation}
+            </div>
+          )}
+          {result.ai_used === true && (
+            <div style={{ marginTop: 8, fontSize: 11, color: "var(--teal)", fontWeight: 600 }}>
+              AI-enhanced recommendations
             </div>
           )}
         </div>
@@ -1323,7 +1602,9 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16a34a" bg="#f0fdf4" />
           <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#2563eb" bg="#eff6ff" />
           <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}   bg={bg} />
-          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />}
+          {rec.safety && (
+            <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />
+          )}
         </div>
 
         {scores.length > 0 && (
@@ -1347,8 +1628,12 @@ function ResultScreen({ result, onReset, onNewCheck }) {
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Start New Assessment</button>
-          <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
+          <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>
+            Start New Assessment
+          </button>
+          <button className="btn btn-secondary btn-full" onClick={onReset}>
+            Return to Home
+          </button>
         </div>
       </div>
     </div>
@@ -1368,54 +1653,81 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
 
   const load = async () => {
     setLoading(true);
-    try { setRecords(await api.get("/patient/history")); }
-    catch { setRecords([]); }
-    finally { setLoading(false); }
+    try {
+      const data = await api.get("/patient/history");
+      setRecords(Array.isArray(data) ? data : []);
+    } catch {
+      setRecords([]);
+      toast("Could not load records. Check your connection.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   if (detail) return <RecordDetail record={detail} onBack={onClearDetail} />;
 
   const filtered = records.filter((r) => {
-    const ms = (r.disease || "").toLowerCase().includes(search.toLowerCase())
-            || (r.patient_name || "").toLowerCase().includes(search.toLowerCase());
-    const mf = filter === "All" || r.risk === filter;
-    return ms && mf;
+    const matchSearch =
+      (r.disease || "").toLowerCase().includes(search.toLowerCase()) ||
+      (r.patient_name || "").toLowerCase().includes(search.toLowerCase());
+    const matchFilter = filter === "All" || r.risk === filter;
+    return matchSearch && matchFilter;
   });
 
   return (
     <div>
       <div className="page-head">
         <div className="t-display">Patient Records</div>
-        <div className="t-subtitle mt-1">{records.length} total assessment{records.length !== 1 ? "s" : ""}</div>
+        <div className="t-subtitle mt-1">
+          {records.length} total assessment{records.length !== 1 ? "s" : ""}
+        </div>
       </div>
+
       <div className="page-body">
         <div className="search-wrap">
           <span className="search-icon"><Icon name="search" size={15} /></span>
-          <input className="search-input" placeholder="Search records..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input
+            className="search-input"
+            placeholder="Search records..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
+
         <div className="chip-row">
           {["All","High","Medium","Low"].map((f) => (
-            <button key={f} className={`chip${filter === f ? " on" : ""}`} onClick={() => setFilter(f)}>{f}</button>
+            <button key={f} className={`chip${filter === f ? " on" : ""}`} onClick={() => setFilter(f)}>
+              {f}
+            </button>
           ))}
         </div>
+
         {loading ? (
-          <div className="empty-state"><div className="t-subtitle">Loading records...</div></div>
+          <div className="empty-state">
+            <div className="t-subtitle">Loading records...</div>
+          </div>
         ) : filtered.length === 0 ? (
           <div className="empty-state">
             <div style={{ width: 80, height: 80 }}><IllusDoctor /></div>
             <div className="t-title">No records found</div>
-            <div className="t-subtitle">Complete an assessment to see your results here.</div>
+            <div className="t-subtitle">
+              {records.length === 0
+                ? "Complete an assessment to see your results here."
+                : "No records match your current filter."}
+            </div>
           </div>
         ) : (
           <div className="rec-list">
             {filtered.map((r) => (
               <div key={r.id} className="rec-card" onClick={() => onDetail(r)}>
-                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk]}18` }}>
-                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk]} />
+                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk] || "#64748b"}18` }}>
+                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk] || "#64748b"} />
                 </div>
                 <div className="rec-info">
                   <div className="rec-name">{r.disease}</div>
-                  <div className="rec-meta">{r.patient_name} · {fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}%</div>
+                  <div className="rec-meta">
+                    {r.patient_name} · {fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}%
+                  </div>
                 </div>
                 <span className={`badge badge-${r.risk}`}>{r.risk}</span>
                 <Icon name="chevR" size={14} color="var(--muted-l)" />
@@ -1437,17 +1749,28 @@ function RecordDetail({ record, onBack }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button
+          onClick={onBack}
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
+          aria-label="Back to records"
+        >
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Assessment Detail</div>
       </div>
-      <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
+
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 80px" }}>
         <div className="card card-p text-c mb-3">
           <div className={`result-ring result-ring-${record.risk}`} style={{ width: 90, height: 90 }}>
-            <Icon name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"} size={36} color={color} />
+            <Icon
+              name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"}
+              size={36}
+              color={color}
+            />
           </div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px" }}>{record.disease}</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px" }}>
+            {record.disease}
+          </div>
           <span className={`badge badge-${record.risk}`}>{record.risk} Risk</span>
           <div className="t-subtitle mt-2" style={{ fontSize: 12 }}>
             {record.patient_name} · {new Date(record.created_at).toLocaleString("en-GB")}
@@ -1456,16 +1779,22 @@ function RecordDetail({ record, onBack }) {
             {Math.round((record.confidence || 0) * 100)}% match
           </div>
           {record.explanation && (
-            <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>{record.explanation}</div>
+            <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              {record.explanation}
+            </div>
           )}
         </div>
+
         <div className="section-ttl mb-2">Recommendations</div>
         <div className="rec-bubbles mb-4">
           <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16a34a" bg="#f0fdf4" />
           <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#2563eb" bg="#eff6ff" />
           <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}   bg={bg} />
-          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />}
+          {rec.safety && (
+            <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />
+          )}
         </div>
+
         {syms.length > 0 && (
           <div className="card card-p mb-4">
             <div className="section-ttl mb-2">Reported Symptoms ({syms.length})</div>
@@ -1495,27 +1824,34 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    api.get("/user/profile").then(setProfile).catch(() => setProfile(user || {}));
+    api.get("/user/profile")
+      .then(setProfile)
+      .catch(() => setProfile(user || {}));
   }, []);
 
   const saveProfile = async () => {
+    if (!name.trim()) { toast("Name cannot be empty."); return; }
     setLoading(true);
     try {
-      const data = await api.put("/user/profile", { name, age, gender });
+      const data = await api.put("/user/profile", {
+        name:   name.trim(),
+        age:    age    || undefined,
+        gender: gender || undefined,
+      });
       setProfile((prev) => ({ ...prev, ...data }));
-      Store.set("tc_user", { ...user, name, age, gender });
+      Store.set("tc_user", { ...user, name: data.name, age: data.age, gender: data.gender });
       toast("Profile updated.");
       setEditing(false);
-    } catch {
-      toast("Could not save. Check your connection.");
+    } catch (e) {
+      toast(e.message || "Could not save. Check your connection.");
     } finally {
       setLoading(false);
     }
   };
 
   const cancelEdit = () => {
-    setName(user?.name || "");
-    setAge(user?.age   || "");
+    setName(user?.name   || "");
+    setAge(user?.age     || "");
     setGender(user?.gender || "");
     setEditing(false);
   };
@@ -1541,14 +1877,15 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
       </div>
 
       <div className="page-body">
-        {/* Identity card — hidden while editing */}
         {!editing && (
           <div className="card card-p text-c mb-3">
-            <div className="avatar avatar-lg mx-auto mb-3">{(p.name || "P")[0].toUpperCase()}</div>
+            <div className="avatar avatar-lg mx-auto mb-3">{initials(p.name)}</div>
             <div className="t-title">{p.name}</div>
             <div className="t-subtitle mt-1">{p.email}</div>
             {(p.age || p.gender) && (
-              <div className="t-subtitle">{[p.age && `${p.age} yrs`, p.gender].filter(Boolean).join(" · ")}</div>
+              <div className="t-subtitle">
+                {[p.age && `${p.age} yrs`, p.gender].filter(Boolean).join(" · ")}
+              </div>
             )}
             <div className="mt-2">
               <span className="badge badge-teal">
@@ -1558,29 +1895,50 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         )}
 
-        {/* Edit panel — only visible while editing */}
         {editing && (
           <div className="edit-panel mb-3">
             <div className="edit-panel-title">Edit Profile</div>
             <div className="field">
               <label className="field-label">Full Name</label>
-              <input className="field-input" value={name} onChange={(e) => setName(e.target.value)} />
+              <input
+                className="field-input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+              />
             </div>
             <div className="grid-2">
               <div className="field">
                 <label className="field-label">Age</label>
-                <input className="field-input" type="number" value={age} onChange={(e) => setAge(e.target.value)} />
+                <input
+                  className="field-input"
+                  type="number"
+                  value={age}
+                  onChange={(e) => setAge(e.target.value)}
+                  min="1"
+                  max="120"
+                />
               </div>
               <div className="field">
                 <label className="field-label">Gender</label>
-                <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
+                <select
+                  className="field-input field-select"
+                  value={gender}
+                  onChange={(e) => setGender(e.target.value)}
+                >
                   <option value="">Select</option>
-                  <option>Male</option><option>Female</option><option>Other</option>
+                  <option>Male</option>
+                  <option>Female</option>
+                  <option>Other</option>
                 </select>
               </div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-primary" style={{ flex: 1 }} onClick={saveProfile} disabled={loading}>
+              <button
+                className="btn btn-primary"
+                style={{ flex: 1 }}
+                onClick={saveProfile}
+                disabled={loading}
+              >
                 {loading ? "Saving..." : "Save Changes"}
               </button>
               <button className="btn btn-secondary" onClick={cancelEdit}>Cancel</button>
@@ -1588,19 +1946,17 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         )}
 
-        {/* Stats */}
         <div className="profile-stat-grid">
           <div className="ps-card">
-            <div className="ps-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
+            <div className="ps-val" style={{ color: "var(--teal)" }}>{p.assessment_count ?? 0}</div>
             <div className="ps-lbl">Assessments</div>
           </div>
           <div className="ps-card">
-            <div className="ps-val" style={{ color: "#ef4444" }}>{p.high_risk_count || 0}</div>
+            <div className="ps-val" style={{ color: "#ef4444" }}>{p.high_risk_count ?? 0}</div>
             <div className="ps-lbl">High Risk</div>
           </div>
         </div>
 
-        {/* Menu */}
         <div className="card card-p mb-3">
           <div className="menu-list">
             {menuItems.map((item) => (
@@ -1618,7 +1974,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
         </button>
 
         <div className="text-c mt-4" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.7 }}>
-          TropiCare v1.0 · Symptom Checker for Tropical Diseases
+          TropiCare v2.0 · Symptom Checker for Tropical Diseases
         </div>
       </div>
     </div>
@@ -1639,15 +1995,24 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
   const [pwExpanded,    setPwExpanded]    = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
+  const deleteTimerRef = useRef(null);
+
+  const togglePwPanel = () => {
+    setPwExpanded((v) => !v);
+    setCurrentPw(""); setNewPw(""); setConfirmPw("");
+  };
 
   const changePassword = async () => {
     if (!currentPw || !newPw || !confirmPw) { toast("Please fill in all password fields."); return; }
     if (newPw.length < 8) { toast("New password must be at least 8 characters."); return; }
     if (newPw !== confirmPw) { toast("New passwords do not match."); return; }
-    if (currentPw === newPw) { toast("New password must be different from your current one."); return; }
+    if (currentPw === newPw) { toast("New password must differ from your current one."); return; }
     setPwLoading(true);
     try {
-      await api.put("/user/change-password", { current_password: currentPw, new_password: newPw });
+      await api.put("/user/change-password", {
+        current_password: currentPw,
+        new_password: newPw,
+      });
       toast("Password changed successfully.");
       setCurrentPw(""); setNewPw(""); setConfirmPw(""); setPwExpanded(false);
     } catch (e) {
@@ -1657,38 +2022,49 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
     }
   };
 
-  const deleteAccount = async () => {
-    if (!deleteConfirm) { setDeleteConfirm(true); setTimeout(() => setDeleteConfirm(false), 6000); return; }
+  const triggerDelete = () => {
+    if (!deleteConfirm) {
+      setDeleteConfirm(true);
+      if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+      deleteTimerRef.current = setTimeout(() => setDeleteConfirm(false), 6000);
+      return;
+    }
+    performDelete();
+  };
+
+  const performDelete = async () => {
     setDeleteLoading(true);
     try {
       await api.delete("/user/account");
       Store.remove("tc_user");
       api.setToken(null);
       window.location.reload();
-    } catch {
-      toast("Could not delete account. Please try again.");
+    } catch (e) {
+      toast(e.message || "Could not delete account. Please try again.");
       setDeleteLoading(false);
     }
   };
 
   const privacyPoints = [
-    { icon: "database", color: "#0d9488", bg: "var(--teal-xl)", label: "Local data only",        desc: "Your assessment history is stored in a secured database tied to your account only." },
-    { icon: "user",     color: "#3b82f6", bg: "#eff6ff",        label: "No third-party sharing", desc: "Your personal health data is never sold or shared with advertisers or third parties." },
-    { icon: "shield",   color: "#8b5cf6", bg: "#f5f3ff",        label: "Encrypted in transit",   desc: "All data between your device and our servers is protected using HTTPS encryption." },
-    { icon: "trash",    color: "#ef4444", bg: "#fef2f2",        label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
+    { icon: "database", color: "#0d9488", bg: "var(--teal-xl)", label: "Secured storage",      desc: "Your assessment history is stored in a secured database tied to your account only." },
+    { icon: "user",     color: "#3b82f6", bg: "#eff6ff",        label: "No third-party sharing",desc: "Your personal health data is never sold or shared with advertisers or third parties." },
+    { icon: "shield",   color: "#8b5cf6", bg: "#f5f3ff",        label: "Encrypted in transit",  desc: "All data between your device and our servers is protected using HTTPS encryption." },
+    { icon: "trash",    color: "#ef4444", bg: "#fef2f2",        label: "Right to delete",       desc: "You can permanently delete your account and all associated data at any time." },
   ];
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button
+          onClick={onBack}
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
+        >
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Privacy & Security</div>
       </div>
 
       <div className="page-body">
-        {/* Account Security */}
         <div className="sec-section">
           <div className="sec-section-title">Account Security</div>
           <div className="card card-p">
@@ -1700,61 +2076,63 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
                 <div className="sec-row-label">Change Password</div>
                 <div className="sec-row-hint">Update your account password</div>
               </div>
-              <button className={`btn btn-sm ${pwExpanded ? "btn-secondary" : "btn-outline"}`}
-                onClick={() => { setPwExpanded(!pwExpanded); if (pwExpanded) { setCurrentPw(""); setNewPw(""); setConfirmPw(""); } }}>
+              <button
+                className={`btn btn-sm ${pwExpanded ? "btn-secondary" : "btn-outline"}`}
+                onClick={togglePwPanel}
+              >
                 {pwExpanded ? "Cancel" : "Change"}
               </button>
             </div>
 
             {pwExpanded && (
               <div className="sec-field-wrap">
-                <div className="field">
-                  <label className="field-label">Current Password</label>
-                  <div className="pw-wrap">
-                    <input className="field-input" type={showCur ? "text" : "password"} placeholder="Enter current password"
-                      value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} style={{ paddingRight: 46 }} />
-                    <button className="pw-toggle" type="button" onClick={() => setShowCur(!showCur)}>
-                      <Icon name={showCur ? "eyeOff" : "eye"} size={16} />
-                    </button>
+                {[
+                  { label: "Current Password", val: currentPw, set: setCurrentPw, show: showCur, setShow: setShowCur, placeholder: "Enter current password" },
+                  { label: "New Password",      val: newPw,     set: setNewPw,     show: showNew, setShow: setShowNew, placeholder: "Min. 8 characters" },
+                  { label: "Confirm New",       val: confirmPw, set: setConfirmPw, show: showCon, setShow: setShowCon, placeholder: "Repeat new password" },
+                ].map(({ label, val, set, show, setShow, placeholder }) => (
+                  <div key={label} className="field">
+                    <label className="field-label">{label}</label>
+                    <div className="pw-wrap">
+                      <input
+                        className="field-input"
+                        type={show ? "text" : "password"}
+                        placeholder={placeholder}
+                        value={val}
+                        onChange={(e) => set(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && changePassword()}
+                        style={{ paddingRight: 46 }}
+                      />
+                      <button className="pw-toggle" type="button" onClick={() => setShow((s) => !s)}>
+                        <Icon name={show ? "eyeOff" : "eye"} size={16} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <div className="field">
-                  <label className="field-label">New Password</label>
-                  <div className="pw-wrap">
-                    <input className="field-input" type={showNew ? "text" : "password"} placeholder="Min. 8 characters"
-                      value={newPw} onChange={(e) => setNewPw(e.target.value)} style={{ paddingRight: 46 }} />
-                    <button className="pw-toggle" type="button" onClick={() => setShowNew(!showNew)}>
-                      <Icon name={showNew ? "eyeOff" : "eye"} size={16} />
-                    </button>
-                  </div>
-                </div>
-                <div className="field">
-                  <label className="field-label">Confirm New Password</label>
-                  <div className="pw-wrap">
-                    <input className="field-input" type={showCon ? "text" : "password"} placeholder="Repeat new password"
-                      value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && changePassword()} style={{ paddingRight: 46 }} />
-                    <button className="pw-toggle" type="button" onClick={() => setShowCon(!showCon)}>
-                      <Icon name={showCon ? "eyeOff" : "eye"} size={16} />
-                    </button>
-                  </div>
-                </div>
+                ))}
 
                 {newPw.length > 0 && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "8px 12px", borderRadius: 8,
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8, marginBottom: 10,
+                    padding: "8px 12px", borderRadius: 8,
                     background: newPw.length < 8 ? "#fef2f2" : "#f0fdf4",
-                    border: `1px solid ${newPw.length < 8 ? "#fecaca" : "#bbf7d0"}` }}>
+                    border: `1px solid ${newPw.length < 8 ? "#fecaca" : "#bbf7d0"}`,
+                  }}>
                     <Icon name={newPw.length < 8 ? "alert" : "check"} size={13} color={newPw.length < 8 ? "#ef4444" : "#22c55e"} />
                     <span style={{ fontSize: 12, fontWeight: 600, color: newPw.length < 8 ? "#ef4444" : "#16a34a" }}>
-                      {newPw.length < 8 ? `${8 - newPw.length} more character${8 - newPw.length !== 1 ? "s" : ""} needed` : "Password length is good"}
+                      {newPw.length < 8
+                        ? `${8 - newPw.length} more character${8 - newPw.length !== 1 ? "s" : ""} needed`
+                        : "Password length is good"}
                     </span>
                   </div>
                 )}
 
                 {confirmPw.length > 0 && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", borderRadius: 8,
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
+                    padding: "8px 12px", borderRadius: 8,
                     background: newPw !== confirmPw ? "#fef2f2" : "#f0fdf4",
-                    border: `1px solid ${newPw !== confirmPw ? "#fecaca" : "#bbf7d0"}` }}>
+                    border: `1px solid ${newPw !== confirmPw ? "#fecaca" : "#bbf7d0"}`,
+                  }}>
                     <Icon name={newPw !== confirmPw ? "x" : "check"} size={13} color={newPw !== confirmPw ? "#ef4444" : "#22c55e"} />
                     <span style={{ fontSize: 12, fontWeight: 600, color: newPw !== confirmPw ? "#ef4444" : "#16a34a" }}>
                       {newPw !== confirmPw ? "Passwords do not match" : "Passwords match"}
@@ -1781,7 +2159,6 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
           </div>
         </div>
 
-        {/* Privacy */}
         <div className="sec-section">
           <div className="sec-section-title">Your Privacy</div>
           <div className="card card-p">
@@ -1799,7 +2176,6 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
           </div>
         </div>
 
-        {/* Danger Zone */}
         <div className="sec-section">
           <div className="sec-section-title">Danger Zone</div>
           <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
@@ -1810,15 +2186,20 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
             {deleteConfirm && (
               <div className="disclaimer mb-3">
                 <Icon name="alert" size={13} color="var(--amber)" />
-                <p>Tap again to confirm. All your data will be deleted permanently.</p>
+                <p>Tap again to confirm. All your data will be permanently deleted.</p>
               </div>
             )}
-            <button className="btn btn-danger btn-full" onClick={deleteAccount} disabled={deleteLoading}>
+            <button className="btn btn-danger btn-full" onClick={triggerDelete} disabled={deleteLoading}>
               <Icon name="trash" size={14} color="#fff" />
               {deleteLoading ? "Deleting..." : deleteConfirm ? "Confirm Delete Account" : "Delete My Account"}
             </button>
             {deleteConfirm && (
-              <button className="btn btn-secondary btn-full mt-2" onClick={() => setDeleteConfirm(false)}>Cancel</button>
+              <button
+                className="btn btn-secondary btn-full mt-2"
+                onClick={() => { setDeleteConfirm(false); if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current); }}
+              >
+                Cancel
+              </button>
             )}
           </div>
         </div>
@@ -1833,7 +2214,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
 function AboutScreen({ onBack }) {
   const features = [
     { icon: "activity",  color: "#0d9488", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers — no irrelevant questions, no wasted time." },
-    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 23 tropical and common diseases." },
+    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of tropical and common diseases." },
     { icon: "shield",    color: "#8b5cf6", bg: "#f5f3ff",        title: "Risk Stratification",         desc: "Every result is classified as High, Medium, or Low risk — with clear, actionable next steps." },
     { icon: "heart",     color: "#ef4444", bg: "#fef2f2",        title: "AI-Powered Recommendations",  desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
     { icon: "clipboard", color: "#f59e0b", bg: "#fffbeb",        title: "Assessment History",          desc: "All past results are stored securely so you and your care provider can track changes over time." },
@@ -1841,13 +2222,13 @@ function AboutScreen({ onBack }) {
   ];
 
   const team = [
-    { initials: "OA", name: "Obed Mensah",       role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
-    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping",    color: "#3b82f6", bg: "#eff6ff" },
-    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                color: "#8b5cf6", bg: "#f5f3ff" },
+    { initials: "OA", name: "Obed Mensah",          role: "Full-Stack Developer · Frontend, Backend & ML",    color: "#0d9488", bg: "var(--teal-xl)" },
+    { initials: "AK", name: "Afrique-Ahali Kekeli",  role: "Research Lead · Dataset Curation & Disease Mapping", color: "#3b82f6", bg: "#eff6ff" },
+    { initials: "JK", name: "Prof. J.J. Kponyo",     role: "Project Supervisor · KNUST",                       color: "#8b5cf6", bg: "#f5f3ff" },
   ];
 
   const versionInfo = [
-    { key: "Version",     val: "1.0.0" },
+    { key: "Version",     val: "2.0.0" },
     { key: "Release",     val: "May 2026" },
     { key: "Platform",    val: "Web · Mobile" },
     { key: "Institution", val: "KNUST, Ghana" },
@@ -1857,7 +2238,10 @@ function AboutScreen({ onBack }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button
+          onClick={onBack}
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
+        >
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">About TropiCare</div>
@@ -1884,7 +2268,12 @@ function AboutScreen({ onBack }) {
         </div>
 
         <div className="about-fact-grid mb-4">
-          {[{val:"22",lbl:"Diseases covered"},{val:"76",lbl:"Tracked symptoms"},{val:"15",lbl:"Max questions"},{val:"2",lbl:"ML algorithms"}].map((f) => (
+          {[
+            { val: "22", lbl: "Diseases covered" },
+            { val: "76", lbl: "Tracked symptoms" },
+            { val: "15", lbl: "Max questions" },
+            { val: "2",  lbl: "ML algorithms" },
+          ].map((f) => (
             <div key={f.lbl} className="about-fact">
               <div className="about-fact-val">{f.val}</div>
               <div className="about-fact-lbl">{f.lbl}</div>
@@ -1955,9 +2344,9 @@ function SettingsScreen({ onBack, toast }) {
   useEffect(() => {
     const s = Store.get("tc_settings");
     if (s) {
-      setTheme(s.theme || "light");
+      setTheme(s.theme     || "light");
       setNotifs(s.notifications !== false);
-      setLang(s.language || "en");
+      setLang(s.language   || "en");
       setFontSize(s.fontSize || "medium");
     }
   }, []);
@@ -1970,7 +2359,9 @@ function SettingsScreen({ onBack, toast }) {
   const ChipGroup = ({ options, value, onChange }) => (
     <div className="chip-row">
       {options.map((o) => (
-        <button key={o.val} className={`chip${value === o.val ? " on" : ""}`} onClick={() => onChange(o.val)}>{o.label}</button>
+        <button key={o.val} className={`chip${value === o.val ? " on" : ""}`} onClick={() => onChange(o.val)}>
+          {o.label}
+        </button>
       ))}
     </div>
   );
@@ -1988,9 +2379,15 @@ function SettingsScreen({ onBack, toast }) {
       content: (
         <>
           <div className="t-label mb-2">Theme</div>
-          <ChipGroup options={[{val:"light",label:"Light"},{val:"dark",label:"Dark"},{val:"system",label:"System"}]} value={theme} onChange={setTheme} />
+          <ChipGroup
+            options={[{val:"light",label:"Light"},{val:"dark",label:"Dark"},{val:"system",label:"System"}]}
+            value={theme} onChange={setTheme}
+          />
           <div className="t-label mt-3 mb-2">Text Size</div>
-          <ChipGroup options={[{val:"small",label:"Small"},{val:"medium",label:"Medium"},{val:"large",label:"Large"}]} value={fontSize} onChange={setFontSize} />
+          <ChipGroup
+            options={[{val:"small",label:"Small"},{val:"medium",label:"Medium"},{val:"large",label:"Large"}]}
+            value={fontSize} onChange={setFontSize}
+          />
         </>
       ),
     },
@@ -2010,7 +2407,12 @@ function SettingsScreen({ onBack, toast }) {
       title: "Language",
       content: (
         <ChipGroup
-          options={[{val:"en",label:"English"},{val:"tw",label:"Twi"},{val:"fr",label:"French"},{val:"ha",label:"Hausa"}]}
+          options={[
+            {val:"en",label:"English"},
+            {val:"tw",label:"Twi"},
+            {val:"fr",label:"French"},
+            {val:"ha",label:"Hausa"},
+          ]}
           value={lang} onChange={setLang}
         />
       ),
@@ -2041,11 +2443,15 @@ function SettingsScreen({ onBack, toast }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button
+          onClick={onBack}
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
+        >
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Settings</div>
       </div>
+
       <div className="page-body">
         {sections.map((s) => (
           <div key={s.title} style={{ marginBottom: 16 }}>
@@ -2060,56 +2466,84 @@ function SettingsScreen({ onBack, toast }) {
 }
 
 // ─────────────────────────────────────────────
-// ADMIN SCREEN
+// ADMIN / DATABASE SCREEN
 // ─────────────────────────────────────────────
 function AdminScreen({ onBack, toast }) {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [confirm, setConfirm] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [search,  setSearch]  = useState("");
+  const confirmTimerRef = useRef(null);
 
   useEffect(() => { load(); }, []);
 
   const load = async () => {
     setLoading(true);
-    try { setRecords(await api.get("/admin/all-records")); }
-    catch { setRecords([]); }
-    finally { setLoading(false); }
+    try {
+      const data = await api.get("/admin/all-records");
+      setRecords(Array.isArray(data) ? data : []);
+    } catch {
+      setRecords([]);
+      toast("Could not load admin records.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const clearAll = async () => {
-    if (!confirm) { setConfirm(true); setTimeout(() => setConfirm(false), 5000); return; }
+    if (!confirm) {
+      setConfirm(true);
+      if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current);
+      confirmTimerRef.current = setTimeout(() => setConfirm(false), 5000);
+      return;
+    }
+    setClearing(true);
     try {
       await api.delete("/admin/clear-database");
-      setRecords([]); setConfirm(false); toast("All records cleared.");
-    } catch { toast("Failed to clear records."); }
+      setRecords([]);
+      setConfirm(false);
+      toast("All records cleared.");
+    } catch (e) {
+      toast(e.message || "Failed to clear records.");
+    } finally {
+      setClearing(false);
+    }
   };
 
   const del = async (id) => {
-    try { await api.delete(`/admin/record/${id}`); } catch {}
-    setRecords((r) => r.filter((x) => x.id !== id));
-    toast("Record deleted.");
+    try {
+      await api.delete(`/admin/record/${id}`);
+      setRecords((r) => r.filter((x) => x.id !== id));
+      toast("Record deleted.");
+    } catch (e) {
+      toast(e.message || "Could not delete record.");
+    }
   };
 
   const counts = { High: 0, Medium: 0, Low: 0 };
   records.forEach((r) => { if (counts[r.risk] !== undefined) counts[r.risk]++; });
 
   const shown = records.filter((r) =>
-    (r.disease || "").toLowerCase().includes(search.toLowerCase()) ||
-    (r.patient_name || "").toLowerCase().includes(search.toLowerCase())
+    (r.disease     || "").toLowerCase().includes(search.toLowerCase()) ||
+    (r.patient_name|| "").toLowerCase().includes(search.toLowerCase())
   );
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button
+          onClick={onBack}
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}
+        >
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Database</div>
       </div>
+
       <div className="page-body">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
-          {[["High","#ef4444"],["Medium","#f59e0b"],["Low","#22c55e"]].map(([r,c]) => (
+          {[["High","#ef4444"],["Medium","#f59e0b"],["Low","#22c55e"]].map(([r, c]) => (
             <div key={r} className="stat-card">
               <div className="stat-val" style={{ color: c }}>{counts[r]}</div>
               <div className="stat-lbl">{r}</div>
@@ -2123,22 +2557,36 @@ function AdminScreen({ onBack, toast }) {
           {confirm && (
             <div className="disclaimer mb-3">
               <Icon name="alert" size={14} color="var(--amber)" />
-              <p>Click again to confirm deletion of {records.length} record{records.length !== 1 ? "s" : ""}.</p>
+              <p>Tap again to confirm deletion of {records.length} record{records.length !== 1 ? "s" : ""}.</p>
             </div>
           )}
-          <button className="btn btn-danger btn-full" onClick={clearAll} disabled={records.length === 0}>
+          <button
+            className="btn btn-danger btn-full"
+            onClick={clearAll}
+            disabled={records.length === 0 || clearing}
+          >
             <Icon name="trash" size={14} color="#fff" />
-            {confirm ? "Confirm Delete All" : "Clear All Records"}
+            {clearing ? "Clearing..." : confirm ? "Confirm Delete All" : "Clear All Records"}
           </button>
           {confirm && (
-            <button className="btn btn-secondary btn-full mt-2" onClick={() => setConfirm(false)}>Cancel</button>
+            <button
+              className="btn btn-secondary btn-full mt-2"
+              onClick={() => { setConfirm(false); if (confirmTimerRef.current) clearTimeout(confirmTimerRef.current); }}
+            >
+              Cancel
+            </button>
           )}
         </div>
 
         <div className="section-ttl mb-2">All Records ({records.length})</div>
         <div className="search-wrap mb-3">
           <span className="search-icon"><Icon name="search" size={15} /></span>
-          <input className="search-input" placeholder="Search records..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input
+            className="search-input"
+            placeholder="Search records..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
 
         {loading ? (
@@ -2146,18 +2594,28 @@ function AdminScreen({ onBack, toast }) {
         ) : shown.length === 0 ? (
           <div className="empty-state">
             <Icon name="database" size={36} color="var(--muted-l)" />
-            <div className="t-subtitle">No records found</div>
+            <div className="t-subtitle">{records.length === 0 ? "No records yet." : "No records match your search."}</div>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {shown.map((r) => (
-              <div key={r.id} className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ flex: 1 }}>
+              <div
+                key={r.id}
+                className="card"
+                style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 13 }}>{r.disease}</div>
-                  <div className="t-subtitle" style={{ fontSize: 11 }}>{r.patient_name} · {fmtDate(r.created_at)}</div>
+                  <div className="t-subtitle" style={{ fontSize: 11 }}>
+                    {r.patient_name} · {fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}%
+                  </div>
                 </div>
                 <span className={`badge badge-${r.risk}`}>{r.risk}</span>
-                <button onClick={() => del(r.id)} style={{ border: "none", background: "#fef2f2", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
+                <button
+                  onClick={() => del(r.id)}
+                  style={{ border: "none", background: "#fef2f2", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex", flexShrink: 0 }}
+                  aria-label="Delete record"
+                >
                   <Icon name="trash" size={13} color="#ef4444" />
                 </button>
               </div>
@@ -2167,12 +2625,4 @@ function AdminScreen({ onBack, toast }) {
       </div>
     </div>
   );
-}
-
-// ─────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────
-function fmtDate(iso) {
-  if (!iso) return "";
-  return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
 }
