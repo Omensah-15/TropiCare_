@@ -1,17 +1,6 @@
 """
 TropiCare API — main.py
-FastAPI backend for the TropiCare AI tropical disease symptom checker.
-
-Key improvements over previous version:
-- OpenRouter integration fixed and hardened (retry logic, better error handling, response validation)
-- ML models actually used for inference; scoring engine is a true fallback only
-- Connection pooling via aiohttp.ClientSession singleton (not per-request sessions)
-- Database connection pool tuning for high concurrency
-- Background tasks for non-critical work to reduce response latency
-- Per-user data isolation enforced at every query
-- Async DB access via threadpool to avoid blocking the event loop
-- Structured logging with request-level context
-- Graceful degradation: OpenRouter -> default recs, ML -> scoring engine
+FastAPI
 """
 
 from __future__ import annotations
