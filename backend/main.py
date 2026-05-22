@@ -18,7 +18,7 @@ except ImportError:
     JOBLIB_AVAILABLE = False
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -27,7 +27,6 @@ from sqlalchemy import (
     Boolean, DateTime, ForeignKey, Text,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from jose import JWTError, jwt
 from dotenv import load_dotenv
 
@@ -374,6 +373,16 @@ def predict_with_ml(answers: dict) -> dict:
 # ─────────────────────────────────────────────────────────────
 # OPENROUTER AI
 # ─────────────────────────────────────────────────────────────
+_http_session: Optional[aiohttp.ClientSession] = None
+
+
+def _get_http_session() -> aiohttp.ClientSession:
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        _http_session = aiohttp.ClientSession()
+    return _http_session
+
+
 async def call_openrouter(
     disease: str,
     risk: str,
@@ -391,26 +400,31 @@ async def call_openrouter(
         "Low":    "advise rest at home and a clinic visit only if symptoms worsen",
     }.get(risk, "advise a clinic visit")
 
-    prompt = f"""You are a health assistant helping patients in Ghana and West Africa.
-
-Patient symptoms: {sym_text}
-Likely condition: {disease} (confidence: {round(confidence * 100)}%)
-Risk level: {risk} — {urgency}
-
-Reply ONLY with a valid JSON object. No markdown. No extra text. Use this exact format:
-{{
-  "explanation": "One short sentence on why these symptoms suggest {disease}.",
-  "home_care": "1–2 simple things the patient can do at home right now.",
-  "test": "One specific lab test or medical test to confirm, or 'No test needed' if not required.",
-  "doctor": "One clear instruction — visit hospital, clinic, or pharmacy.",
-  "safety": "One brief safety warning if High risk, or empty string if Low/Medium."
-}}
-
-Rules:
-- Use plain, simple language. No medical jargon.
-- Keep each field to one sentence or a short phrase.
-- For High risk: always say to visit a hospital or clinic immediately.
-- Never invent drug names or dosages."""
+    prompt = (
+        "You are a health assistant helping patients in Ghana and West Africa.\n\n"
+        "Patient symptoms: {sym_text}\n"
+        "Likely condition: {disease} (confidence: {confidence_pct}%)\n"
+        "Risk level: {risk} — {urgency}\n\n"
+        "Reply ONLY with a valid JSON object. No markdown. No extra text. Use this exact format:\n"
+        "{{\n"
+        '  "explanation": "One short sentence on why these symptoms suggest {disease}.",\n'
+        '  "home_care": "1-2 simple things the patient can do at home right now.",\n'
+        '  "test": "One specific lab test or medical test to confirm, or No test needed if not required.",\n'
+        '  "doctor": "One clear instruction — visit hospital, clinic, or pharmacy.",\n'
+        '  "safety": "One brief safety warning if High risk, or empty string if Low/Medium."\n'
+        "}}\n\n"
+        "Rules:\n"
+        "- Use plain, simple language. No medical jargon.\n"
+        "- Keep each field to one sentence or a short phrase.\n"
+        "- For High risk: always say to visit a hospital or clinic immediately.\n"
+        "- Never invent drug names or dosages."
+    ).format(
+        sym_text=sym_text,
+        disease=disease,
+        confidence_pct=round(confidence * 100),
+        risk=risk,
+        urgency=urgency,
+    )
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -435,25 +449,25 @@ Rules:
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                OPENROUTER_URL,
-                headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    logger.warning(f"OpenRouter HTTP {resp.status}: {body[:200]}")
-                    return None
-                data   = await resp.json()
-                raw    = data["choices"][0]["message"]["content"].strip()
-                raw    = raw.replace("```json", "").replace("```", "").strip()
-                result = json.loads(raw)
-                for key in ("explanation", "home_care", "test", "doctor", "safety"):
-                    if key not in result:
-                        result[key] = ""
-                return result
+        session = _get_http_session()
+        async with session.post(
+            OPENROUTER_URL,
+            headers=headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status != 200:
+                body = await resp.text()
+                logger.warning(f"OpenRouter HTTP {resp.status}: {body[:200]}")
+                return None
+            data   = await resp.json(content_type=None)
+            raw    = data["choices"][0]["message"]["content"].strip()
+            raw    = raw.replace("```json", "").replace("```", "").strip()
+            result = json.loads(raw)
+            for key in ("explanation", "home_care", "test", "doctor", "safety"):
+                if key not in result:
+                    result[key] = ""
+            return result
     except json.JSONDecodeError as e:
         logger.warning(f"OpenRouter JSON parse error: {e}")
     except aiohttp.ClientError as e:
@@ -472,11 +486,11 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
     })
     if ai_result:
         return {
-            "home_care":   ai_result.get("home_care")    or default["home_care"],
-            "test":        ai_result.get("test")         or default["test"],
-            "doctor":      ai_result.get("doctor")       or default["doctor"],
-            "safety":      ai_result.get("safety")       or default.get("safety", ""),
-            "explanation": ai_result.get("explanation")  or f"Your symptoms are consistent with {disease}.",
+            "home_care":   ai_result.get("home_care")   or default["home_care"],
+            "test":        ai_result.get("test")        or default["test"],
+            "doctor":      ai_result.get("doctor")      or default["doctor"],
+            "safety":      ai_result.get("safety")      or default.get("safety", ""),
+            "explanation": ai_result.get("explanation") or f"Your symptoms are consistent with {disease}.",
         }
     return {**default, "explanation": f"Your symptoms are consistent with {disease}."}
 
@@ -552,7 +566,10 @@ def hash_pw(pw: str) -> str:
 def verify_pw(pw: str, stored: str) -> bool:
     try:
         salt, hashed = stored.split(":", 1)
-        return hashlib.sha256((salt + pw).encode()).hexdigest() == hashed
+        return secrets.compare_digest(
+            hashlib.sha256((salt + pw).encode()).hexdigest(),
+            hashed,
+        )
     except Exception:
         return False
 
@@ -564,10 +581,14 @@ def verify_pw(pw: str, stored: str) -> bool:
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     load_ml_models()
+    _get_http_session()
     model_keys = list(LOADED_MODELS.keys()) or ["none — using scoring engine"]
     logger.info(f"TropiCare started. ML models: {model_keys}")
     logger.info(f"OpenRouter enabled: {bool(OPENROUTER_API_KEY)} | Model: {OPENROUTER_MODEL}")
     yield
+    global _http_session
+    if _http_session and not _http_session.closed:
+        await _http_session.close()
 
 
 app = FastAPI(
@@ -986,5 +1007,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=int(os.getenv("PORT", 8000)),
-        reload=True,
+        reload=False,
     )
