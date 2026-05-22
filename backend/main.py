@@ -6,7 +6,7 @@ import asyncio
 import hashlib
 import secrets
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 
 import aiohttp
 import numpy as np
@@ -18,7 +18,7 @@ except ImportError:
     JOBLIB_AVAILABLE = False
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -27,6 +27,7 @@ from sqlalchemy import (
     Boolean, DateTime, ForeignKey, Text,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from jose import JWTError, jwt
 from dotenv import load_dotenv
 
@@ -43,26 +44,12 @@ ACCESS_TOKEN_EXPIRE_DAYS = 7
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
 
-SITE_URL  = os.getenv("SITE_URL",  "http://localhost:8000")
-SITE_NAME = os.getenv("SITE_NAME", "TropiCare")
-
+SITE_URL     = os.getenv("SITE_URL", "http://localhost:8000")
+SITE_NAME    = os.getenv("SITE_NAME", "TropiCare")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./tropicare.db")
 MODELS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-
-# ─────────────────────────────────────────────────────────────
-# FREE MODEL LIST — tried in order until one succeeds
-# ─────────────────────────────────────────────────────────────
-FREE_MODELS: List[str] = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "google/gemma-3-27b-it:free",
-    "google/gemma-3-12b-it:free",
-    "nvidia/nemotron-3-nano-30b-a3b:free",
-    "nousresearch/hermes-3-llama-3.1-405b:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
-    "google/gemma-3-4b-it:free",
-    "mistralai/mistral-7b-instruct:free",
-]
 
 # ─────────────────────────────────────────────────────────────
 # DATABASE
@@ -100,7 +87,6 @@ class DiagnosisModel(Base):
     rec_safety      = Column(Text, nullable=True)
     ai_explanation  = Column(Text, nullable=True)
     ml_scores       = Column(Text, nullable=True)
-    ai_model_used   = Column(String(100), nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
 
@@ -150,22 +136,9 @@ def load_ml_models() -> None:
         key = fname.replace(".pkl", "")
         try:
             LOADED_MODELS[key] = joblib.load(os.path.join(MODELS_DIR, fname))
-            logger.info("Loaded ML model: %s (key=%s)", fname, key)
-        except Exception as exc:
-            logger.error("Failed to load %s: %s", fname, exc)
-
-    ensemble = LOADED_MODELS.get("sctd_ensemble")
-    le       = LOADED_MODELS.get("sctd_label_encoder")
-    cols     = LOADED_MODELS.get("sctd_feature_columns")
-    if ensemble and le and cols:
-        logger.info(
-            "ML ensemble ready | features=%d classes=%d estimator=%s",
-            len(list(cols)),
-            len(le.classes_) if hasattr(le, "classes_") else 0,
-            type(ensemble).__name__,
-        )
-    else:
-        logger.info("ML ensemble keys not found — scoring engine will be used.")
+            logger.info(f"Loaded ML model: {fname}")
+        except Exception as e:
+            logger.error(f"Failed to load {fname}: {e}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -365,7 +338,6 @@ def predict_with_ml(answers: dict) -> dict:
                 le.inverse_transform([i])[0]: round(float(p), 4)
                 for i, p in enumerate(proba)
             }
-            logger.info("ML prediction: disease=%s confidence=%.3f", disease, confidence)
             return {
                 "disease":    disease,
                 "confidence": confidence,
@@ -373,15 +345,15 @@ def predict_with_ml(answers: dict) -> dict:
                 "all_scores": dict(sorted(all_probs.items(), key=lambda x: x[1], reverse=True)),
                 "method":     "ml",
             }
-        except Exception as exc:
-            logger.warning("ML prediction failed, falling back to scoring engine: %s", exc)
+        except Exception as e:
+            logger.warning(f"ML prediction failed, falling back to scoring: {e}")
 
     scores        = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     best_disease, _ = sorted_scores[0]
 
-    syms       = DISEASE_SYMPTOM_MAP.get(best_disease, [])
-    yes_count  = sum(1 for s in syms if answers.get(s) is True)
+    syms      = DISEASE_SYMPTOM_MAP.get(best_disease, [])
+    yes_count = sum(1 for s in syms if answers.get(s) is True)
     confidence = min(0.95, max(0.35, yes_count / max(len(syms), 1)))
 
     all_scores: Dict[str, float] = {}
@@ -400,68 +372,45 @@ def predict_with_ml(answers: dict) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────
-# OPENROUTER AI — free model rotation
-# Tries each model in FREE_MODELS in order.
-# Skips a model on 429 (rate limit) or timeout and tries the next.
-# Returns (result_dict, model_name) on success, or (None, None) if all fail.
+# OPENROUTER AI
 # ─────────────────────────────────────────────────────────────
-_http_session: Optional[aiohttp.ClientSession] = None
-
-
-def _get_http_session() -> aiohttp.ClientSession:
-    global _http_session
-    if _http_session is None or _http_session.closed:
-        connector = aiohttp.TCPConnector(limit=100, limit_per_host=10)
-        _http_session = aiohttp.ClientSession(connector=connector)
-    return _http_session
-
-
 async def call_openrouter(
     disease: str,
     risk: str,
     active_syms: List[str],
     confidence: float,
-) -> Tuple[Optional[dict], Optional[str]]:
-    """
-    Attempts each model in FREE_MODELS in sequence.
-    Returns (result_dict, model_name) on success, or (None, None) if every model fails.
-    """
+) -> Optional[dict]:
     if not OPENROUTER_API_KEY:
         logger.info("OPENROUTER_API_KEY not set — skipping AI call.")
-        return None, None
+        return None
 
     sym_text = ", ".join(s.replace("_", " ") for s in active_syms[:12]) or "general symptoms"
     urgency  = {
         "High":   "URGENT — recommend visiting a hospital or clinic today",
-        "Medium": "advise a clinic visit within 1-2 days if symptoms persist",
+        "Medium": "advise a clinic visit within 1–2 days if symptoms persist",
         "Low":    "advise rest at home and a clinic visit only if symptoms worsen",
     }.get(risk, "advise a clinic visit")
 
-    prompt = (
-        "You are a health assistant helping patients in Ghana and West Africa.\n\n"
-        "Patient symptoms: {sym_text}\n"
-        "Likely condition: {disease} (confidence: {confidence_pct}%)\n"
-        "Risk level: {risk} — {urgency}\n\n"
-        "Reply ONLY with a valid JSON object. No markdown. No extra text. Use this exact format:\n"
-        "{{\n"
-        '  "explanation": "One short sentence on why these symptoms suggest {disease}.",\n'
-        '  "home_care": "1-2 simple things the patient can do at home right now.",\n'
-        '  "test": "One specific lab test or medical test to confirm, or No test needed if not required.",\n'
-        '  "doctor": "One clear instruction — visit hospital, clinic, or pharmacy.",\n'
-        '  "safety": "One brief safety warning if High risk, or empty string if Low/Medium."\n'
-        "}}\n\n"
-        "Rules:\n"
-        "- Use plain, simple language. No medical jargon.\n"
-        "- Keep each field to one sentence or a short phrase.\n"
-        "- For High risk: always say to visit a hospital or clinic immediately.\n"
-        "- Never invent drug names or dosages."
-    ).format(
-        sym_text=sym_text,
-        disease=disease,
-        confidence_pct=round(confidence * 100),
-        risk=risk,
-        urgency=urgency,
-    )
+    prompt = f"""You are a health assistant helping patients in Ghana and West Africa.
+
+Patient symptoms: {sym_text}
+Likely condition: {disease} (confidence: {round(confidence * 100)}%)
+Risk level: {risk} — {urgency}
+
+Reply ONLY with a valid JSON object. No markdown. No extra text. Use this exact format:
+{{
+  "explanation": "One short sentence on why these symptoms suggest {disease}.",
+  "home_care": "1–2 simple things the patient can do at home right now.",
+  "test": "One specific lab test or medical test to confirm, or 'No test needed' if not required.",
+  "doctor": "One clear instruction — visit hospital, clinic, or pharmacy.",
+  "safety": "One brief safety warning if High risk, or empty string if Low/Medium."
+}}
+
+Rules:
+- Use plain, simple language. No medical jargon.
+- Keep each field to one sentence or a short phrase.
+- For High risk: always say to visit a hospital or clinic immediately.
+- Never invent drug names or dosages."""
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -469,84 +418,49 @@ async def call_openrouter(
         "HTTP-Referer":  SITE_URL,
         "X-Title":       SITE_NAME,
     }
-    messages = [
-        {
-            "role":    "system",
-            "content": (
-                "You are a responsible clinical AI assistant for a tropical disease app. "
-                "Always respond with valid JSON only. Never prescribe specific drugs or dosages."
-            ),
-        },
-        {"role": "user", "content": prompt},
-    ]
+    payload = {
+        "model": OPENROUTER_MODEL,
+        "messages": [
+            {
+                "role":    "system",
+                "content": (
+                    "You are a responsible clinical AI assistant for a tropical disease app. "
+                    "Always respond with valid JSON only. Never prescribe specific drugs or dosages."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ],
+        "max_tokens":  350,
+        "temperature": 0.2,
+    }
 
-    session      = _get_http_session()
-    rate_limited = 0
-
-    for model in FREE_MODELS:
-        payload = {
-            "model":       model,
-            "messages":    messages,
-            "max_tokens":  350,
-            "temperature": 0.2,
-        }
-        try:
+    try:
+        async with aiohttp.ClientSession() as session:
             async with session.post(
                 OPENROUTER_URL,
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=20),
+                timeout=aiohttp.ClientTimeout(total=15),
             ) as resp:
-                if resp.status == 200:
-                    data = await resp.json(content_type=None)
-                    raw  = data["choices"][0]["message"]["content"].strip()
-                    raw  = raw.replace("```json", "").replace("```", "").strip()
-                    if not raw:
-                        logger.warning("Model %s returned empty content — trying next.", model)
-                        continue
-                    result = json.loads(raw)
-                    for key in ("explanation", "home_care", "test", "doctor", "safety"):
-                        if key not in result or not isinstance(result[key], str):
-                            result[key] = ""
-                    logger.info("OpenRouter success | model=%s disease=%s", model, disease)
-                    return result, model
-
-                elif resp.status == 429:
-                    rate_limited += 1
-                    logger.warning("Model %s rate-limited — trying next.", model)
-                    continue
-
-                elif resp.status in (401, 403):
+                if resp.status != 200:
                     body = await resp.text()
-                    logger.error("OpenRouter auth error %d: %s", resp.status, body[:200])
-                    return None, None
-
-                else:
-                    body = await resp.text()
-                    logger.warning(
-                        "Model %s returned HTTP %d: %s — trying next.",
-                        model, resp.status, body[:200],
-                    )
-                    continue
-
-        except asyncio.TimeoutError:
-            logger.warning("Model %s timed out — trying next.", model)
-            continue
-        except json.JSONDecodeError as exc:
-            logger.warning("Model %s returned invalid JSON (%s) — trying next.", model, exc)
-            continue
-        except aiohttp.ClientError as exc:
-            logger.warning("Model %s connection error (%s) — trying next.", model, exc)
-            continue
-        except Exception as exc:
-            logger.warning("Model %s unexpected error (%s) — trying next.", model, exc)
-            continue
-
-    if rate_limited == len(FREE_MODELS):
-        logger.warning("All free models are rate-limited — using default recommendations.")
-    else:
-        logger.warning("All free models failed — using default recommendations.")
-    return None, None
+                    logger.warning(f"OpenRouter HTTP {resp.status}: {body[:200]}")
+                    return None
+                data   = await resp.json()
+                raw    = data["choices"][0]["message"]["content"].strip()
+                raw    = raw.replace("```json", "").replace("```", "").strip()
+                result = json.loads(raw)
+                for key in ("explanation", "home_care", "test", "doctor", "safety"):
+                    if key not in result:
+                        result[key] = ""
+                return result
+    except json.JSONDecodeError as e:
+        logger.warning(f"OpenRouter JSON parse error: {e}")
+    except aiohttp.ClientError as e:
+        logger.warning(f"OpenRouter connection error: {e}")
+    except Exception as e:
+        logger.warning(f"OpenRouter unexpected error: {e}")
+    return None
 
 
 def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> dict:
@@ -558,11 +472,11 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
     })
     if ai_result:
         return {
-            "home_care":   ai_result.get("home_care")   or default["home_care"],
-            "test":        ai_result.get("test")        or default["test"],
-            "doctor":      ai_result.get("doctor")      or default["doctor"],
-            "safety":      ai_result.get("safety")      or default.get("safety", ""),
-            "explanation": ai_result.get("explanation") or f"Your symptoms are consistent with {disease}.",
+            "home_care":   ai_result.get("home_care")    or default["home_care"],
+            "test":        ai_result.get("test")         or default["test"],
+            "doctor":      ai_result.get("doctor")       or default["doctor"],
+            "safety":      ai_result.get("safety")       or default.get("safety", ""),
+            "explanation": ai_result.get("explanation")  or f"Your symptoms are consistent with {disease}.",
         }
     return {**default, "explanation": f"Your symptoms are consistent with {disease}."}
 
@@ -638,10 +552,7 @@ def hash_pw(pw: str) -> str:
 def verify_pw(pw: str, stored: str) -> bool:
     try:
         salt, hashed = stored.split(":", 1)
-        return secrets.compare_digest(
-            hashlib.sha256((salt + pw).encode()).hexdigest(),
-            hashed,
-        )
+        return hashlib.sha256((salt + pw).encode()).hexdigest() == hashed
     except Exception:
         return False
 
@@ -653,18 +564,10 @@ def verify_pw(pw: str, stored: str) -> bool:
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     load_ml_models()
-    _get_http_session()
     model_keys = list(LOADED_MODELS.keys()) or ["none — using scoring engine"]
-    logger.info("TropiCare started. ML models loaded: %s", model_keys)
-    logger.info(
-        "OpenRouter enabled: %s | %d free models available",
-        bool(OPENROUTER_API_KEY), len(FREE_MODELS),
-    )
+    logger.info(f"TropiCare started. ML models: {model_keys}")
+    logger.info(f"OpenRouter enabled: {bool(OPENROUTER_API_KEY)} | Model: {OPENROUTER_MODEL}")
     yield
-    global _http_session
-    if _http_session and not _http_session.closed:
-        await _http_session.close()
-        logger.info("HTTP session closed.")
 
 
 app = FastAPI(
@@ -695,7 +598,7 @@ async def health():
         "timestamp":          datetime.utcnow().isoformat(),
         "ml_models":          list(LOADED_MODELS.keys()),
         "openrouter_enabled": bool(OPENROUTER_API_KEY),
-        "free_models":        FREE_MODELS,
+        "openrouter_model":   OPENROUTER_MODEL,
     }
 
 
@@ -820,16 +723,15 @@ async def analyze(
     active_syms = [k for k, v in answers.items() if v is True]
 
     ai_result: Optional[dict] = None
-    ai_model:  Optional[str]  = None
     try:
-        ai_result, ai_model = await asyncio.wait_for(
+        ai_result = await asyncio.wait_for(
             call_openrouter(pred["disease"], pred["risk"], active_syms, pred["confidence"]),
-            timeout=60.0,
+            timeout=12.0,
         )
     except asyncio.TimeoutError:
-        logger.warning("OpenRouter overall timeout — using default recommendations.")
-    except Exception as exc:
-        logger.warning("OpenRouter call failed: %s — using default recommendations.", exc)
+        logger.warning("OpenRouter timed out — using default recommendations")
+    except Exception as e:
+        logger.warning(f"OpenRouter call failed: {e} — using default recommendations")
 
     rec = build_recommendation(pred["disease"], pred["risk"], ai_result)
 
@@ -847,7 +749,6 @@ async def analyze(
         rec_safety      = rec.get("safety", ""),
         ai_explanation  = rec.get("explanation", ""),
         ml_scores       = _dump_json(pred.get("all_scores", {})),
-        ai_model_used   = ai_model,
     )
     db.add(diag)
     db.commit()
@@ -866,9 +767,8 @@ async def analyze(
             "doctor":    rec["doctor"],
             "safety":    rec.get("safety", ""),
         },
-        "method":        pred["method"],
-        "ai_used":       ai_result is not None,
-        "ai_model_used": ai_model,
+        "method":  pred["method"],
+        "ai_used": ai_result is not None,
     }
 
 
@@ -940,9 +840,8 @@ async def get_diagnosis(
             "doctor":    d.rec_doctor,
             "safety":    d.rec_safety,
         },
-        "explanation":   d.ai_explanation,
-        "ml_scores":     _load_json(d.ml_scores, {}),
-        "ai_model_used": d.ai_model_used,
+        "explanation": d.ai_explanation,
+        "ml_scores":   _load_json(d.ml_scores, {}),
     }
 
 
@@ -1049,13 +948,12 @@ async def all_records(db: Session = Depends(get_db)):
     }
     return [
         {
-            "id":             d.id,
-            "disease":        d.disease,
-            "risk":           d.risk,
-            "confidence":     d.confidence,
-            "patient_name":   users.get(d.user_id, "Unknown"),
-            "created_at":     d.created_at.isoformat(),
-            "ai_model_used":  d.ai_model_used,
+            "id":           d.id,
+            "disease":      d.disease,
+            "risk":         d.risk,
+            "confidence":   d.confidence,
+            "patient_name": users.get(d.user_id, "Unknown"),
+            "created_at":   d.created_at.isoformat(),
         }
         for d in rows
     ]
@@ -1088,5 +986,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=int(os.getenv("PORT", 8000)),
-        reload=False,
+        reload=True,
     )
