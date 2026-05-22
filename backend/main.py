@@ -5,6 +5,7 @@ import logging
 import asyncio
 import hashlib
 import secrets
+import time
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 
@@ -18,24 +19,29 @@ except ImportError:
     JOBLIB_AVAILABLE = False
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float,
-    Boolean, DateTime, ForeignKey, Text,
+    Boolean, DateTime, ForeignKey, Text, event,
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from jose import JWTError, jwt
 from dotenv import load_dotenv
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # CONFIG
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+    datefmt="%Y-%m-%dT%H:%M:%S",
+)
 logger = logging.getLogger("tropicare")
 
 SECRET_KEY               = os.getenv("SECRET_KEY", "tropicare-fallback-secret-2024")
@@ -46,20 +52,67 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
 
-SITE_URL     = os.getenv("SITE_URL", "http://localhost:8000")
+OPENROUTER_CONNECT_TIMEOUT = float(os.getenv("OPENROUTER_CONNECT_TIMEOUT", "10"))
+OPENROUTER_READ_TIMEOUT    = float(os.getenv("OPENROUTER_READ_TIMEOUT",    "50"))
+OPENROUTER_TOTAL_TIMEOUT   = float(os.getenv("OPENROUTER_TOTAL_TIMEOUT",   "60"))
+OPENROUTER_MAX_RETRIES     = int(os.getenv("OPENROUTER_MAX_RETRIES",       "2"))
+OPENROUTER_RETRY_DELAY     = float(os.getenv("OPENROUTER_RETRY_DELAY",     "3.0"))
+
+SITE_URL     = os.getenv("SITE_URL",  "https://tropicare.onrender.com")
 SITE_NAME    = os.getenv("SITE_NAME", "TropiCare")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./tropicare.db")
 MODELS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
-# ─────────────────────────────────────────────────────────────
+DB_POOL_SIZE    = int(os.getenv("DB_POOL_SIZE",    "10"))
+DB_MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+DB_POOL_TIMEOUT = int(os.getenv("DB_POOL_TIMEOUT", "30"))
+
+# -----------------------------------------------------------------
 # DATABASE
-# ─────────────────────────────────────────────────────────────
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine       = create_engine(DATABASE_URL, connect_args=connect_args)
+# -----------------------------------------------------------------
+_is_sqlite = DATABASE_URL.startswith("sqlite")
+
+if _is_sqlite:
+    engine = create_engine(
+        DATABASE_URL,
+        connect_args={"check_same_thread": False},
+        pool_size=1,
+        max_overflow=0,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+    )
+
+    @event.listens_for(engine, "connect")
+    def _sqlite_pragmas(dbapi_conn, _):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.execute("PRAGMA cache_size=-65536")
+        cur.close()
+else:
+    pg_connect_args: Dict[str, Any] = {
+        "connect_timeout": 10,
+        "application_name": "TropiCare",
+        "options": "-c statement_timeout=30000",
+    }
+    engine = create_engine(
+        DATABASE_URL,
+        pool_size=DB_POOL_SIZE,
+        max_overflow=DB_MAX_OVERFLOW,
+        pool_timeout=DB_POOL_TIMEOUT,
+        pool_pre_ping=True,
+        pool_recycle=1800,
+        connect_args=pg_connect_args,
+    )
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base         = declarative_base()
 
 
+# -----------------------------------------------------------------
+# ORM MODELS
+# -----------------------------------------------------------------
 class UserModel(Base):
     __tablename__ = "users"
     id         = Column(Integer, primary_key=True, index=True)
@@ -74,7 +127,7 @@ class UserModel(Base):
 class DiagnosisModel(Base):
     __tablename__ = "diagnoses"
     id              = Column(Integer, primary_key=True, index=True)
-    user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id         = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     session_id      = Column(String(64), index=True)
     disease         = Column(String(100))
     risk            = Column(String(20))
@@ -87,23 +140,24 @@ class DiagnosisModel(Base):
     rec_safety      = Column(Text, nullable=True)
     ai_explanation  = Column(Text, nullable=True)
     ml_scores       = Column(Text, nullable=True)
-    created_at      = Column(DateTime, default=datetime.utcnow)
+    ai_used         = Column(Boolean, default=False)
+    created_at      = Column(DateTime, default=datetime.utcnow, index=True)
 
 
 class SessionModel(Base):
     __tablename__ = "assessment_sessions"
     id              = Column(Integer, primary_key=True, index=True)
     session_id      = Column(String(64), unique=True, index=True)
-    user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
+    user_id         = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     answers         = Column(Text, default="{}")
     asked_questions = Column(Text, default="[]")
-    completed       = Column(Boolean, default=False)
-    created_at      = Column(DateTime, default=datetime.utcnow)
+    completed       = Column(Boolean, default=False, index=True)
+    created_at      = Column(DateTime, default=datetime.utcnow, index=True)
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # DB HELPERS
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 def _load_json(value: Optional[str], default):
     if value is None:
         return default
@@ -114,36 +168,65 @@ def _load_json(value: Optional[str], default):
 
 
 def _dump_json(value) -> str:
-    return json.dumps(value)
+    return json.dumps(value, separators=(",", ":"))
 
 
-# ─────────────────────────────────────────────────────────────
-# ML MODELS
-# ─────────────────────────────────────────────────────────────
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# -----------------------------------------------------------------
+# ML MODEL REGISTRY
+# -----------------------------------------------------------------
 LOADED_MODELS: Dict[str, Any] = {}
+_REQUIRED_MODEL_KEYS = ("sctd_ensemble", "sctd_label_encoder", "sctd_feature_columns")
 
 
 def load_ml_models() -> None:
     if not JOBLIB_AVAILABLE:
-        logger.info("joblib not available — using built-in scoring engine.")
+        logger.warning("joblib not installed — ML models cannot be loaded. Using scoring engine.")
         return
+
     os.makedirs(MODELS_DIR, exist_ok=True)
     pkl_files = [f for f in os.listdir(MODELS_DIR) if f.endswith(".pkl")]
     if not pkl_files:
-        logger.info("No .pkl models found in models/ — using built-in scoring engine.")
+        logger.warning("No .pkl files found in %s — using scoring engine.", MODELS_DIR)
         return
+
     for fname in pkl_files:
         key = fname.replace(".pkl", "")
         try:
             LOADED_MODELS[key] = joblib.load(os.path.join(MODELS_DIR, fname))
-            logger.info(f"Loaded ML model: {fname}")
-        except Exception as e:
-            logger.error(f"Failed to load {fname}: {e}")
+            logger.info("Loaded ML model: %s (key=%s)", fname, key)
+        except Exception as exc:
+            logger.error("Failed to load %s: %s", fname, exc)
+
+    missing = [k for k in _REQUIRED_MODEL_KEYS if k not in LOADED_MODELS]
+    if missing:
+        logger.warning(
+            "Missing required model keys %s — ML will fall back to scoring engine. "
+            "Rename your .pkl files to: %s",
+            missing, [f"{k}.pkl" for k in _REQUIRED_MODEL_KEYS],
+        )
+    else:
+        le   = LOADED_MODELS.get("sctd_label_encoder")
+        cols = LOADED_MODELS.get("sctd_feature_columns")
+        ens  = LOADED_MODELS.get("sctd_ensemble")
+        logger.info(
+            "ML ensemble ready | features=%s classes=%s estimator=%s",
+            len(list(cols)) if cols else "?",
+            len(le.classes_) if hasattr(le, "classes_") else "?",
+            type(ens).__name__ if ens else "?",
+        )
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # DISEASE / SYMPTOM DATA
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 RISK_MAP: Dict[str, str] = {
     "Malaria": "High", "Typhoid": "High", "Dengue": "High",
     "Tuberculosis": "High", "Hepatitis B": "High", "Hepatitis C": "High",
@@ -291,9 +374,10 @@ DEFAULT_RECS: Dict[str, Dict[str, str]] = {
     "Drug Reaction":          {"home_care":"Stop the suspected medication immediately","test":"No test usually needed","doctor":"See a doctor immediately if rash spreads or breathing is affected","safety":"Seek emergency care if you have throat swelling or difficulty breathing"},
 }
 
-# ─────────────────────────────────────────────────────────────
+
+# -----------------------------------------------------------------
 # ADAPTIVE ENGINE
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 def score_disease(disease: str, answers: dict) -> float:
     score = 0.0
     for symptom in DISEASE_SYMPTOM_MAP.get(disease, []):
@@ -324,36 +408,41 @@ def predict_with_ml(answers: dict) -> dict:
     cols     = LOADED_MODELS.get("sctd_feature_columns")
     risk_map = LOADED_MODELS.get("sctd_risk_classification") or RISK_MAP
 
-    if ensemble and le and cols:
+    if ensemble is not None and le is not None and cols is not None:
         try:
-            feature_cols = list(cols)
+            feature_cols: List[str] = list(cols)
             vec = np.array(
-                [1.0 if answers.get(c, False) else 0.0 for c in feature_cols]
+                [1.0 if answers.get(c) is True else 0.0 for c in feature_cols],
+                dtype=np.float32,
             ).reshape(1, -1)
+
             proba      = ensemble.predict_proba(vec)[0]
             idx        = int(np.argmax(proba))
-            disease    = le.inverse_transform([idx])[0]
+            disease    = str(le.inverse_transform([idx])[0])
             confidence = float(proba[idx])
-            all_probs  = {
-                le.inverse_transform([i])[0]: round(float(p), 4)
+
+            all_probs: Dict[str, float] = {
+                str(le.inverse_transform([i])[0]): round(float(p), 4)
                 for i, p in enumerate(proba)
             }
+            logger.info("ML prediction: disease=%s confidence=%.3f method=ensemble", disease, confidence)
             return {
                 "disease":    disease,
                 "confidence": confidence,
-                "risk":       risk_map.get(disease, "Medium"),
+                "risk":       risk_map.get(disease, RISK_MAP.get(disease, "Medium")),
                 "all_scores": dict(sorted(all_probs.items(), key=lambda x: x[1], reverse=True)),
-                "method":     "ml",
+                "method":     "ml-ensemble",
             }
-        except Exception as e:
-            logger.warning(f"ML prediction failed, falling back to scoring: {e}")
+        except Exception as exc:
+            logger.error("ML ensemble failed (%s) — falling back to scoring engine.", exc)
 
+    logger.info("Using scoring engine (ML model unavailable or failed).")
     scores        = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     best_disease, _ = sorted_scores[0]
 
-    syms      = DISEASE_SYMPTOM_MAP.get(best_disease, [])
-    yes_count = sum(1 for s in syms if answers.get(s) is True)
+    syms       = DISEASE_SYMPTOM_MAP.get(best_disease, [])
+    yes_count  = sum(1 for s in syms if answers.get(s) is True)
     confidence = min(0.95, max(0.35, yes_count / max(len(syms), 1)))
 
     all_scores: Dict[str, float] = {}
@@ -367,13 +456,31 @@ def predict_with_ml(answers: dict) -> dict:
         "confidence": confidence,
         "risk":       RISK_MAP.get(best_disease, "Medium"),
         "all_scores": all_scores,
-        "method":     "scoring",
+        "method":     "scoring-engine",
     }
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # OPENROUTER AI
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+_http_session: Optional[aiohttp.ClientSession] = None
+_REQUIRED_AI_KEYS = ("explanation", "home_care", "test", "doctor", "safety")
+
+
+def _get_http_session() -> aiohttp.ClientSession:
+    global _http_session
+    if _http_session is None or _http_session.closed:
+        connector = aiohttp.TCPConnector(
+            limit=100,
+            limit_per_host=20,
+            ttl_dns_cache=300,
+            use_dns_cache=True,
+            keepalive_timeout=60,
+        )
+        _http_session = aiohttp.ClientSession(connector=connector)
+    return _http_session
+
+
 async def call_openrouter(
     disease: str,
     risk: str,
@@ -381,36 +488,42 @@ async def call_openrouter(
     confidence: float,
 ) -> Optional[dict]:
     if not OPENROUTER_API_KEY:
-        logger.info("OPENROUTER_API_KEY not set — skipping AI call.")
+        logger.info("OPENROUTER_API_KEY not configured — using default recommendations.")
         return None
 
-    sym_text = ", ".join(s.replace("_", " ") for s in active_syms[:12]) or "general symptoms"
+    sym_text = ", ".join(s.replace("_", " ") for s in active_syms[:14]) or "general symptoms"
     urgency  = {
-        "High":   "URGENT — recommend visiting a hospital or clinic today",
-        "Medium": "advise a clinic visit within 1–2 days if symptoms persist",
-        "Low":    "advise rest at home and a clinic visit only if symptoms worsen",
+        "High":   "URGENT — the patient must visit a hospital or clinic today without delay",
+        "Medium": "advise the patient to visit a clinic within 1 to 2 days if symptoms persist",
+        "Low":    "advise the patient to rest at home and visit a clinic only if symptoms worsen",
     }.get(risk, "advise a clinic visit")
 
-    prompt = f"""You are a health assistant helping patients in Ghana and West Africa.
-
-Patient symptoms: {sym_text}
-Likely condition: {disease} (confidence: {round(confidence * 100)}%)
-Risk level: {risk} — {urgency}
-
-Reply ONLY with a valid JSON object. No markdown. No extra text. Use this exact format:
-{{
-  "explanation": "One short sentence on why these symptoms suggest {disease}.",
-  "home_care": "1–2 simple things the patient can do at home right now.",
-  "test": "One specific lab test or medical test to confirm, or 'No test needed' if not required.",
-  "doctor": "One clear instruction — visit hospital, clinic, or pharmacy.",
-  "safety": "One brief safety warning if High risk, or empty string if Low/Medium."
-}}
-
-Rules:
-- Use plain, simple language. No medical jargon.
-- Keep each field to one sentence or a short phrase.
-- For High risk: always say to visit a hospital or clinic immediately.
-- Never invent drug names or dosages."""
+    prompt = (
+        "You are a health assistant helping patients in Ghana and West Africa.\n\n"
+        "Patient reported symptoms: {sym_text}\n"
+        "Most likely condition: {disease} (confidence {confidence_pct}%)\n"
+        "Risk level: {risk} — {urgency}\n\n"
+        "Reply ONLY with a valid JSON object. No markdown, no code fences, no extra text.\n"
+        "Use exactly this format:\n"
+        "{{\n"
+        '  "explanation": "One clear sentence explaining why these symptoms suggest {disease}.",\n'
+        '  "home_care": "One or two simple things the patient can do at home right now.",\n'
+        '  "test": "One specific test to confirm the condition, or No test needed if not required.",\n'
+        '  "doctor": "One clear instruction about when and where to seek care.",\n'
+        '  "safety": "One brief safety warning for High risk, or empty string for Low or Medium."\n'
+        "}}\n\n"
+        "Rules:\n"
+        "- Use plain language. No medical jargon.\n"
+        "- Keep every field to one sentence.\n"
+        "- For High risk always tell the patient to visit a hospital or clinic immediately.\n"
+        "- Never name specific drug brands or dosages."
+    ).format(
+        sym_text=sym_text,
+        disease=disease,
+        confidence_pct=round(confidence * 100),
+        risk=risk,
+        urgency=urgency,
+    )
 
     headers = {
         "Authorization": f"Bearer {OPENROUTER_API_KEY}",
@@ -424,66 +537,147 @@ Rules:
             {
                 "role":    "system",
                 "content": (
-                    "You are a responsible clinical AI assistant for a tropical disease app. "
-                    "Always respond with valid JSON only. Never prescribe specific drugs or dosages."
+                    "You are a responsible clinical AI assistant for a tropical disease symptom checker. "
+                    "Always respond with a valid JSON object only — no markdown, no code fences. "
+                    "Never prescribe specific drugs or dosages."
                 ),
             },
             {"role": "user", "content": prompt},
         ],
-        "max_tokens":  350,
-        "temperature": 0.2,
+        "max_tokens":  400,
+        "temperature": 0.15,
+        "top_p":       0.9,
     }
 
-    try:
-        async with aiohttp.ClientSession() as session:
+    timeout = aiohttp.ClientTimeout(
+        connect=OPENROUTER_CONNECT_TIMEOUT,
+        sock_read=OPENROUTER_READ_TIMEOUT,
+        total=OPENROUTER_TOTAL_TIMEOUT,
+    )
+    session = _get_http_session()
+    raw     = ""
+
+    for attempt in range(1, OPENROUTER_MAX_RETRIES + 1):
+        try:
+            t0 = time.monotonic()
             async with session.post(
                 OPENROUTER_URL,
                 headers=headers,
                 json=payload,
-                timeout=aiohttp.ClientTimeout(total=15),
+                timeout=timeout,
             ) as resp:
+                elapsed = time.monotonic() - t0
+
+                if resp.status == 429:
+                    retry_after = float(resp.headers.get("Retry-After", OPENROUTER_RETRY_DELAY * attempt))
+                    logger.warning(
+                        "OpenRouter rate-limited (attempt %d/%d). Waiting %.1fs.",
+                        attempt, OPENROUTER_MAX_RETRIES, retry_after,
+                    )
+                    await asyncio.sleep(retry_after)
+                    continue
+
+                if resp.status >= 500:
+                    body = await resp.text()
+                    logger.warning(
+                        "OpenRouter server error %d (attempt %d/%d, %.1fs): %s",
+                        resp.status, attempt, OPENROUTER_MAX_RETRIES, elapsed, body[:300],
+                    )
+                    if attempt < OPENROUTER_MAX_RETRIES:
+                        await asyncio.sleep(OPENROUTER_RETRY_DELAY * attempt)
+                    continue
+
                 if resp.status != 200:
                     body = await resp.text()
-                    logger.warning(f"OpenRouter HTTP {resp.status}: {body[:200]}")
+                    logger.warning(
+                        "OpenRouter HTTP %d (attempt %d/%d, %.1fs): %s",
+                        resp.status, attempt, OPENROUTER_MAX_RETRIES, elapsed, body[:300],
+                    )
                     return None
-                data   = await resp.json()
-                raw    = data["choices"][0]["message"]["content"].strip()
-                raw    = raw.replace("```json", "").replace("```", "").strip()
-                result = json.loads(raw)
-                for key in ("explanation", "home_care", "test", "doctor", "safety"):
-                    if key not in result:
+
+                data = await resp.json(content_type=None)
+                raw  = data["choices"][0]["message"]["content"].strip()
+
+                if raw.startswith("```"):
+                    parts = raw.split("```")
+                    raw   = parts[1] if len(parts) > 1 else raw
+                    if raw.startswith("json"):
+                        raw = raw[4:]
+                raw = raw.strip()
+
+                result: dict = json.loads(raw)
+
+                for key in _REQUIRED_AI_KEYS:
+                    if key not in result or not isinstance(result[key], str):
                         result[key] = ""
+
+                logger.info(
+                    "OpenRouter OK (attempt %d/%d, %.1fs) disease=%s model=%s",
+                    attempt, OPENROUTER_MAX_RETRIES, elapsed, disease, OPENROUTER_MODEL,
+                )
                 return result
-    except json.JSONDecodeError as e:
-        logger.warning(f"OpenRouter JSON parse error: {e}")
-    except aiohttp.ClientError as e:
-        logger.warning(f"OpenRouter connection error: {e}")
-    except Exception as e:
-        logger.warning(f"OpenRouter unexpected error: {e}")
+
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "OpenRouter JSON parse error (attempt %d/%d): %s | raw=%r",
+                attempt, OPENROUTER_MAX_RETRIES, exc, raw[:200],
+            )
+            if attempt < OPENROUTER_MAX_RETRIES:
+                await asyncio.sleep(OPENROUTER_RETRY_DELAY)
+
+        except asyncio.TimeoutError:
+            logger.warning(
+                "OpenRouter timed out (attempt %d/%d, total=%.0fs).",
+                attempt, OPENROUTER_MAX_RETRIES, OPENROUTER_TOTAL_TIMEOUT,
+            )
+            if attempt < OPENROUTER_MAX_RETRIES:
+                await asyncio.sleep(OPENROUTER_RETRY_DELAY)
+
+        except aiohttp.ClientError as exc:
+            logger.warning(
+                "OpenRouter connection error (attempt %d/%d): %s",
+                attempt, OPENROUTER_MAX_RETRIES, exc,
+            )
+            if attempt < OPENROUTER_MAX_RETRIES:
+                await asyncio.sleep(OPENROUTER_RETRY_DELAY * attempt)
+
+        except Exception as exc:
+            logger.error(
+                "OpenRouter unexpected error (attempt %d/%d): %s",
+                attempt, OPENROUTER_MAX_RETRIES, exc,
+            )
+            break
+
+    logger.warning(
+        "All %d OpenRouter attempts failed for disease=%s — using default recommendations.",
+        OPENROUTER_MAX_RETRIES, disease,
+    )
     return None
 
 
 def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> dict:
     default = DEFAULT_RECS.get(disease, {
-        "home_care": "Rest and stay hydrated.",
+        "home_care": "Rest and stay well hydrated.",
         "test":      "Consult a healthcare provider for appropriate tests.",
         "doctor":    "Visit a clinic if symptoms persist or worsen.",
         "safety":    "Seek emergency care if symptoms become severe." if risk == "High" else "",
     })
+
     if ai_result:
         return {
-            "home_care":   ai_result.get("home_care")    or default["home_care"],
-            "test":        ai_result.get("test")         or default["test"],
-            "doctor":      ai_result.get("doctor")       or default["doctor"],
-            "safety":      ai_result.get("safety")       or default.get("safety", ""),
-            "explanation": ai_result.get("explanation")  or f"Your symptoms are consistent with {disease}.",
+            "home_care":   (ai_result.get("home_care")   or "").strip() or default.get("home_care", ""),
+            "test":        (ai_result.get("test")        or "").strip() or default.get("test", ""),
+            "doctor":      (ai_result.get("doctor")      or "").strip() or default.get("doctor", ""),
+            "safety":      (ai_result.get("safety")      or "").strip() or default.get("safety", ""),
+            "explanation": (ai_result.get("explanation") or "").strip() or f"Your symptoms are consistent with {disease}.",
         }
+
     return {**default, "explanation": f"Your symptoms are consistent with {disease}."}
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # PYDANTIC SCHEMAS
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 class RegisterRequest(BaseModel):
     email:    str
     password: str
@@ -491,10 +685,29 @@ class RegisterRequest(BaseModel):
     age:      Optional[str] = None
     gender:   Optional[str] = None
 
+    @validator("email")
+    def _email(cls, v): return v.strip().lower()
+
+    @validator("password")
+    def _pw(cls, v):
+        if len(v) < 6:
+            raise ValueError("Password must be at least 6 characters.")
+        return v
+
+    @validator("name")
+    def _name(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError("Name must not be empty.")
+        return v
+
 
 class LoginRequest(BaseModel):
     email:    str
     password: str
+
+    @validator("email")
+    def _email(cls, v): return v.strip().lower()
 
 
 class AnswerRequest(BaseModel):
@@ -512,10 +725,16 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password:     str
 
+    @validator("new_password")
+    def _pw(cls, v):
+        if len(v) < 8:
+            raise ValueError("New password must be at least 8 characters.")
+        return v
 
-# ─────────────────────────────────────────────────────────────
+
+# -----------------------------------------------------------------
 # AUTH HELPERS
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 security = HTTPBearer()
 
 
@@ -527,20 +746,12 @@ def create_token(user_id: int) -> str:
 def verify_token(creds: HTTPAuthorizationCredentials = Depends(security)) -> int:
     try:
         payload = jwt.decode(creds.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
-        return int(user_id)
+        sub = payload.get("sub")
+        if sub is None:
+            raise HTTPException(status_code=401, detail="Invalid token payload.")
+        return int(sub)
     except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+        raise HTTPException(status_code=401, detail="Invalid or expired token.")
 
 
 def hash_pw(pw: str) -> str:
@@ -552,32 +763,50 @@ def hash_pw(pw: str) -> str:
 def verify_pw(pw: str, stored: str) -> bool:
     try:
         salt, hashed = stored.split(":", 1)
-        return hashlib.sha256((salt + pw).encode()).hexdigest() == hashed
+        return secrets.compare_digest(hashlib.sha256((salt + pw).encode()).hexdigest(), hashed)
     except Exception:
         return False
 
 
-# ─────────────────────────────────────────────────────────────
-# APP STARTUP
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# APP STARTUP / SHUTDOWN
+# -----------------------------------------------------------------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     load_ml_models()
-    model_keys = list(LOADED_MODELS.keys()) or ["none — using scoring engine"]
-    logger.info(f"TropiCare started. ML models: {model_keys}")
-    logger.info(f"OpenRouter enabled: {bool(OPENROUTER_API_KEY)} | Model: {OPENROUTER_MODEL}")
+    _get_http_session()
+
+    ml_status = (
+        "ml-ensemble ready"
+        if all(k in LOADED_MODELS for k in _REQUIRED_MODEL_KEYS)
+        else "scoring-engine (ML models not found)"
+    )
+    logger.info("TropiCare started | prediction=%s", ml_status)
+    logger.info(
+        "OpenRouter | enabled=%s | model=%s | total_timeout=%.0fs | retries=%d",
+        bool(OPENROUTER_API_KEY), OPENROUTER_MODEL,
+        OPENROUTER_TOTAL_TIMEOUT, OPENROUTER_MAX_RETRIES,
+    )
     yield
 
+    global _http_session
+    if _http_session and not _http_session.closed:
+        await _http_session.close()
+        logger.info("HTTP session closed.")
 
+
+# -----------------------------------------------------------------
+# FASTAPI APP
+# -----------------------------------------------------------------
 app = FastAPI(
     title="TropiCare API",
-    version="1.0.0",
-    description="KNUST Final Year Project — AI Tropical Disease Checker",
+    version="2.0.0",
+    description="KNUST Final Year Project — AI Tropical Disease Symptom Checker",
     lifespan=lifespan,
 )
 
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",")]
 
 app.add_middleware(
     CORSMiddleware,
@@ -585,36 +814,49 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Process-Time"],
 )
 
 
-# ─────────────────────────────────────────────────────────────
+@app.middleware("http")
+async def _process_time(request: Request, call_next):
+    t0       = time.monotonic()
+    response = await call_next(request)
+    response.headers["X-Process-Time"] = f"{(time.monotonic() - t0) * 1000:.1f}ms"
+    return response
+
+
+@app.exception_handler(Exception)
+async def _global_error(request: Request, exc: Exception):
+    logger.error("Unhandled exception on %s: %s", request.url, exc, exc_info=True)
+    return JSONResponse(status_code=500, content={"detail": "An internal server error occurred."})
+
+
+# -----------------------------------------------------------------
 # ROUTES — Health
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 @app.get("/api/v1/health")
 async def health():
     return {
         "status":             "healthy",
         "timestamp":          datetime.utcnow().isoformat(),
-        "ml_models":          list(LOADED_MODELS.keys()),
+        "prediction_engine":  "ml-ensemble" if all(k in LOADED_MODELS for k in _REQUIRED_MODEL_KEYS) else "scoring-engine",
+        "ml_models_loaded":   list(LOADED_MODELS.keys()),
         "openrouter_enabled": bool(OPENROUTER_API_KEY),
         "openrouter_model":   OPENROUTER_MODEL,
     }
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # ROUTES — Auth
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 @app.post("/api/v1/auth/register", status_code=201)
 async def register(req: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(UserModel).filter(UserModel.email == req.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
+        raise HTTPException(status_code=400, detail="Email already registered.")
     user = UserModel(
-        email=req.email,
-        name=req.name,
-        pw_hash=hash_pw(req.password),
-        age=req.age,
-        gender=req.gender,
+        email=req.email, name=req.name,
+        pw_hash=hash_pw(req.password), age=req.age, gender=req.gender,
     )
     db.add(user)
     db.commit()
@@ -630,7 +872,7 @@ async def register(req: RegisterRequest, db: Session = Depends(get_db)):
 async def login(req: LoginRequest, db: Session = Depends(get_db)):
     user = db.query(UserModel).filter(UserModel.email == req.email).first()
     if not user or not user.pw_hash or not verify_pw(req.password, user.pw_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
+        raise HTTPException(status_code=401, detail="Invalid email or password.")
     return {
         "access_token": create_token(user.id),
         "token_type":   "bearer",
@@ -638,43 +880,31 @@ async def login(req: LoginRequest, db: Session = Depends(get_db)):
     }
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # ROUTES — Assessment
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 @app.post("/api/v1/symptoms/start", status_code=201)
-async def start_assessment(
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
+async def start_assessment(user_id: int = Depends(verify_token), db: Session = Depends(get_db)):
     sid     = str(uuid.uuid4())
     session = SessionModel(
-        session_id=sid,
-        user_id=user_id,
-        answers=_dump_json({}),
-        asked_questions=_dump_json([]),
+        session_id=sid, user_id=user_id,
+        answers=_dump_json({}), asked_questions=_dump_json([]),
     )
     db.add(session)
     db.commit()
-    return {
-        "session_id":      sid,
-        "first_question":  ALL_QUESTIONS[0],
-        "total_questions": 15,
-    }
+    return {"session_id": sid, "first_question": ALL_QUESTIONS[0], "total_questions": 15}
 
 
 @app.post("/api/v1/symptoms/next")
 async def next_question(
-    session_id: str,
-    req: AnswerRequest,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
+    session_id: str, req: AnswerRequest,
+    user_id: int = Depends(verify_token), db: Session = Depends(get_db),
 ):
     s = db.query(SessionModel).filter(
-        SessionModel.session_id == session_id,
-        SessionModel.user_id == user_id,
+        SessionModel.session_id == session_id, SessionModel.user_id == user_id,
     ).first()
     if not s:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found.")
 
     answers = _load_json(s.answers, {})
     asked   = _load_json(s.asked_questions, [])
@@ -712,26 +942,18 @@ async def analyze(
     db: Session = Depends(get_db),
 ):
     s = db.query(SessionModel).filter(
-        SessionModel.session_id == session_id,
-        SessionModel.user_id == user_id,
+        SessionModel.session_id == session_id, SessionModel.user_id == user_id,
     ).first()
     if not s:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(status_code=404, detail="Session not found.")
 
     answers     = _load_json(s.answers, {})
     pred        = predict_with_ml(answers)
     active_syms = [k for k, v in answers.items() if v is True]
 
-    ai_result: Optional[dict] = None
-    try:
-        ai_result = await asyncio.wait_for(
-            call_openrouter(pred["disease"], pred["risk"], active_syms, pred["confidence"]),
-            timeout=12.0,
-        )
-    except asyncio.TimeoutError:
-        logger.warning("OpenRouter timed out — using default recommendations")
-    except Exception as e:
-        logger.warning(f"OpenRouter call failed: {e} — using default recommendations")
+    ai_result: Optional[dict] = await call_openrouter(
+        pred["disease"], pred["risk"], active_syms, pred["confidence"]
+    )
 
     rec = build_recommendation(pred["disease"], pred["risk"], ai_result)
 
@@ -749,6 +971,7 @@ async def analyze(
         rec_safety      = rec.get("safety", ""),
         ai_explanation  = rec.get("explanation", ""),
         ml_scores       = _dump_json(pred.get("all_scores", {})),
+        ai_used         = ai_result is not None,
     )
     db.add(diag)
     db.commit()
@@ -772,14 +995,11 @@ async def analyze(
     }
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # ROUTES — Patient History
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 @app.get("/api/v1/patient/history")
-async def get_history(
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
+async def get_history(user_id: int = Depends(verify_token), db: Session = Depends(get_db)):
     rows = (
         db.query(DiagnosisModel)
         .filter(DiagnosisModel.user_id == user_id)
@@ -789,7 +1009,6 @@ async def get_history(
     )
     user         = db.query(UserModel).filter(UserModel.id == user_id).first()
     patient_name = user.name if user else "Unknown"
-
     return [
         {
             "id":           d.id,
@@ -799,10 +1018,8 @@ async def get_history(
             "created_at":   d.created_at.isoformat(),
             "patient_name": patient_name,
             "recommendation": {
-                "home_care": d.rec_home_care,
-                "test":      d.rec_test,
-                "doctor":    d.rec_doctor,
-                "safety":    d.rec_safety,
+                "home_care": d.rec_home_care, "test": d.rec_test,
+                "doctor":    d.rec_doctor,    "safety": d.rec_safety,
             },
             "explanation":     d.ai_explanation,
             "active_symptoms": _load_json(d.active_symptoms, []),
@@ -812,55 +1029,41 @@ async def get_history(
 
 
 @app.get("/api/v1/patient/history/{diag_id}")
-async def get_diagnosis(
-    diag_id: int,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
+async def get_diagnosis(diag_id: int, user_id: int = Depends(verify_token), db: Session = Depends(get_db)):
     d = db.query(DiagnosisModel).filter(
-        DiagnosisModel.id == diag_id,
-        DiagnosisModel.user_id == user_id,
+        DiagnosisModel.id == diag_id, DiagnosisModel.user_id == user_id,
     ).first()
     if not d:
-        raise HTTPException(status_code=404, detail="Not found")
-
+        raise HTTPException(status_code=404, detail="Not found.")
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
     return {
-        "id":           d.id,
-        "disease":      d.disease,
-        "risk":         d.risk,
-        "confidence":   d.confidence,
-        "created_at":   d.created_at.isoformat(),
-        "patient_name": user.name if user else "Unknown",
-        "answers":      _load_json(d.answers, {}),
+        "id":              d.id,
+        "disease":         d.disease,
+        "risk":            d.risk,
+        "confidence":      d.confidence,
+        "created_at":      d.created_at.isoformat(),
+        "patient_name":    user.name if user else "Unknown",
+        "answers":         _load_json(d.answers, {}),
         "active_symptoms": _load_json(d.active_symptoms, []),
         "recommendation": {
-            "home_care": d.rec_home_care,
-            "test":      d.rec_test,
-            "doctor":    d.rec_doctor,
-            "safety":    d.rec_safety,
+            "home_care": d.rec_home_care, "test": d.rec_test,
+            "doctor":    d.rec_doctor,    "safety": d.rec_safety,
         },
         "explanation": d.ai_explanation,
         "ml_scores":   _load_json(d.ml_scores, {}),
     }
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # ROUTES — User Profile
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 @app.get("/api/v1/user/profile")
-async def get_profile(
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
+async def get_profile(user_id: int = Depends(verify_token), db: Session = Depends(get_db)):
     u = db.query(UserModel).filter(UserModel.id == user_id).first()
     if not u:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="User not found.")
     count = db.query(DiagnosisModel).filter(DiagnosisModel.user_id == user_id).count()
-    high  = db.query(DiagnosisModel).filter(
-        DiagnosisModel.user_id == user_id,
-        DiagnosisModel.risk == "High",
-    ).count()
+    high  = db.query(DiagnosisModel).filter(DiagnosisModel.user_id == user_id, DiagnosisModel.risk == "High").count()
     return {
         "id":               u.id,
         "email":            u.email,
@@ -874,14 +1077,10 @@ async def get_profile(
 
 
 @app.put("/api/v1/user/profile")
-async def update_profile(
-    req: ProfileUpdate,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
+async def update_profile(req: ProfileUpdate, user_id: int = Depends(verify_token), db: Session = Depends(get_db)):
     u = db.query(UserModel).filter(UserModel.id == user_id).first()
     if not u:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="User not found.")
     if req.name   is not None: u.name   = req.name
     if req.age    is not None: u.age    = req.age
     if req.gender is not None: u.gender = req.gender
@@ -890,38 +1089,29 @@ async def update_profile(
 
 
 @app.put("/api/v1/user/change-password")
-async def change_password(
-    req: ChangePasswordRequest,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
+async def change_password(req: ChangePasswordRequest, user_id: int = Depends(verify_token), db: Session = Depends(get_db)):
     u = db.query(UserModel).filter(UserModel.id == user_id).first()
     if not u:
-        raise HTTPException(status_code=404, detail="User not found")
+        raise HTTPException(status_code=404, detail="User not found.")
     if not u.pw_hash or not verify_pw(req.current_password, u.pw_hash):
-        raise HTTPException(status_code=401, detail="Current password is incorrect")
-    if len(req.new_password) < 8:
-        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+        raise HTTPException(status_code=401, detail="Current password is incorrect.")
     u.pw_hash = hash_pw(req.new_password)
     db.commit()
-    return {"message": "Password updated successfully"}
+    return {"message": "Password updated successfully."}
 
 
 @app.delete("/api/v1/user/account")
-async def delete_account(
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
+async def delete_account(user_id: int = Depends(verify_token), db: Session = Depends(get_db)):
     db.query(DiagnosisModel).filter(DiagnosisModel.user_id == user_id).delete()
     db.query(SessionModel).filter(SessionModel.user_id == user_id).delete()
     db.query(UserModel).filter(UserModel.id == user_id).delete()
     db.commit()
-    return {"message": "Account deleted"}
+    return {"message": "Account deleted."}
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # ROUTES — Admin
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 @app.get("/api/v1/admin/stats")
 async def admin_stats(db: Session = Depends(get_db)):
     return {
@@ -942,10 +1132,7 @@ async def all_records(db: Session = Depends(get_db)):
         .all()
     )
     user_ids = {d.user_id for d in rows}
-    users    = {
-        u.id: u.name
-        for u in db.query(UserModel).filter(UserModel.id.in_(user_ids)).all()
-    }
+    users    = {u.id: u.name for u in db.query(UserModel).filter(UserModel.id.in_(user_ids)).all()}
     return [
         {
             "id":           d.id,
@@ -964,27 +1151,28 @@ async def clear_database(db: Session = Depends(get_db)):
     deleted = db.query(DiagnosisModel).delete()
     db.query(SessionModel).delete()
     db.commit()
-    return {"message": f"Cleared {deleted} diagnosis records"}
+    return {"message": f"Cleared {deleted} diagnosis records."}
 
 
 @app.delete("/api/v1/admin/record/{diag_id}")
 async def delete_record(diag_id: int, db: Session = Depends(get_db)):
     d = db.query(DiagnosisModel).filter(DiagnosisModel.id == diag_id).first()
     if not d:
-        raise HTTPException(status_code=404, detail="Not found")
+        raise HTTPException(status_code=404, detail="Not found.")
     db.delete(d)
     db.commit()
-    return {"message": "Record deleted"}
+    return {"message": "Record deleted."}
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # ENTRYPOINT
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=int(os.getenv("PORT", 8000)),
-        reload=True,
+        reload=False,
+        workers=int(os.getenv("WORKERS", 1)),
     )
