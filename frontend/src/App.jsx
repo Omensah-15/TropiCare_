@@ -1833,7 +1833,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
 function AboutScreen({ onBack }) {
   const features = [
     { icon: "activity",  color: "#0d9488", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers — no irrelevant questions, no wasted time." },
-    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 23 tropical and common diseases." },
+    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset 22 tropical and common diseases." },
     { icon: "shield",    color: "#8b5cf6", bg: "#f5f3ff",        title: "Risk Stratification",         desc: "Every result is classified as High, Medium, or Low risk — with clear, actionable next steps." },
     { icon: "heart",     color: "#ef4444", bg: "#fef2f2",        title: "AI-Powered Recommendations",  desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
     { icon: "clipboard", color: "#f59e0b", bg: "#fffbeb",        title: "Assessment History",          desc: "All past results are stored securely so you and your care provider can track changes over time." },
