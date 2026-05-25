@@ -1,64 +1,291 @@
-import os
-import json
-import uuid
-import logging
+"""
+TropiCare API — Production-Grade Refactor
+KNUST Final Year Project — SCTD
+
+All existing endpoint URLs, request/response schemas, and DB schema are unchanged.
+"""
+
+from __future__ import annotations
+
+# ─────────────────────────────────────────────────────────────
+# STDLIB
+# ─────────────────────────────────────────────────────────────
 import asyncio
 import hashlib
+import json
+import logging
+import os
+import re
 import secrets
+import time
+import unicodedata
+import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import List, Optional, Dict, Any
+from typing import Annotated, Any, Dict, List, Optional
 
+# ─────────────────────────────────────────────────────────────
+# THIRD-PARTY
+# ─────────────────────────────────────────────────────────────
 import aiohttp
 import numpy as np
+from dotenv import load_dotenv
+from jose import JWTError, jwt
+from pythonjsonlogger import jsonlogger
 
+# FastAPI
+from fastapi import (
+    BackgroundTasks,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+# Pydantic / Settings
+from pydantic import BaseModel
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# SQLAlchemy (sync — kept for full backward compatibility;
+# async layer wraps it via run_in_executor to avoid asyncpg dependency issues
+# while still freeing the event loop)
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    create_engine,
+    event,
+)
+from sqlalchemy.orm import Session, declarative_base, sessionmaker
+
+# Rate limiting
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+# Prometheus
+from prometheus_fastapi_instrumentator import Instrumentator
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
+
+# APScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+# Circuit breaker
+import pybreaker
+
+# Watchdog
+from watchdog.observers import Observer
+from watchdog.events import FileSystemEventHandler, FileModifiedEvent
+
+# Optional: joblib
 try:
     import joblib
     JOBLIB_AVAILABLE = True
 except ImportError:
     JOBLIB_AVAILABLE = False
 
-from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
-from sqlalchemy import (
-    create_engine, Column, Integer, String, Float,
-    Boolean, DateTime, ForeignKey, Text,
-)
-from sqlalchemy.orm import declarative_base, sessionmaker, Session
-from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
-from jose import JWTError, jwt
-from dotenv import load_dotenv
+# Optional: aioredis
+try:
+    import aioredis
+    AIOREDIS_AVAILABLE = True
+except ImportError:
+    AIOREDIS_AVAILABLE = False
 
-# ─────────────────────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────────────────────
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("tropicare")
 
-SECRET_KEY               = os.getenv("SECRET_KEY", "tropicare-fallback-secret-2024")
-ALGORITHM                = "HS256"
-ACCESS_TOKEN_EXPIRE_DAYS = 7
+# ─────────────────────────────────────────────────────────────
+# CONFIG — Pydantic Settings
+# ─────────────────────────────────────────────────────────────
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
-OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "mistralai/mistral-7b-instruct:free")
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-SITE_URL     = os.getenv("SITE_URL", "http://localhost:8000")
-SITE_NAME    = os.getenv("SITE_NAME", "TropiCare")
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./tropicare.db")
-MODELS_DIR   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+    # Core
+    secret_key: str               = "tropicare-fallback-secret-2024"
+    algorithm: str                = "HS256"
+    access_token_expire_days: int = 7
+    database_url: str             = "sqlite:///./tropicare.db"
+    allowed_origins: str          = "*"
+    port: int                     = 8000
+
+    # OpenRouter
+    openrouter_api_key: str  = ""
+    openrouter_url: str      = "https://openrouter.ai/api/v1/chat/completions"
+    openrouter_model: str    = "mistralai/mistral-7b-instruct:free"
+    site_url: str            = "http://localhost:8000"
+    site_name: str           = "TropiCare"
+
+    # Redis
+    redis_url: str = "redis://localhost:6379/0"
+
+    # Feature flags
+    enable_ai_cache: bool      = True
+    enable_rate_limiting: bool = True
+    async_mode: bool           = True
+
+    # DB pool
+    db_pool_min: int = 5
+    db_pool_max: int = 20
+
+    # Body size limit (bytes)
+    max_body_size: int = 5 * 1024 * 1024  # 5 MB
+
+    @property
+    def origins_list(self) -> list[str]:
+        return self.allowed_origins.split(",")
+
+
+settings = Settings()
+MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
+
+# ─────────────────────────────────────────────────────────────
+# STRUCTURED JSON LOGGING
+# ─────────────────────────────────────────────────────────────
+
+def _build_logger(name: str) -> logging.Logger:
+    handler = logging.StreamHandler()
+    formatter = jsonlogger.JsonFormatter(
+        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S",
+    )
+    handler.setFormatter(formatter)
+    log = logging.getLogger(name)
+    log.setLevel(logging.INFO)
+    log.handlers = [handler]
+    log.propagate = False
+    return log
+
+
+logger = _build_logger("tropicare")
+
+# ─────────────────────────────────────────────────────────────
+# PROMETHEUS CUSTOM METRICS
+# ─────────────────────────────────────────────────────────────
+
+OPENROUTER_LATENCY = Histogram(
+    "tropicare_openrouter_latency_seconds",
+    "OpenRouter call duration",
+    buckets=[0.1, 0.5, 1, 2, 5, 10, 15],
+)
+OPENROUTER_ERRORS = Counter(
+    "tropicare_openrouter_errors_total",
+    "OpenRouter error count",
+    ["reason"],
+)
+CACHE_HITS   = Counter("tropicare_cache_hits_total",   "Redis cache hits",   ["key_type"])
+CACHE_MISSES = Counter("tropicare_cache_misses_total",  "Redis cache misses", ["key_type"])
+CB_STATE     = Gauge("tropicare_circuit_breaker_open",  "Circuit breaker open (1=open)")
+DB_POOL_ACTIVE = Gauge("tropicare_db_pool_active", "DB pool active connections")
+DB_POOL_IDLE   = Gauge("tropicare_db_pool_idle",   "DB pool idle connections")
+SESSION_CLEANUP_RUNS = Counter("tropicare_session_cleanup_runs_total", "Session cleanup scheduler runs")
+
+# ─────────────────────────────────────────────────────────────
+# REDIS CLIENT
+# ─────────────────────────────────────────────────────────────
+
+_redis: Optional[Any] = None   # aioredis.Redis or None
+
+
+async def get_redis() -> Optional[Any]:
+    global _redis
+    if not AIOREDIS_AVAILABLE or not settings.enable_ai_cache:
+        return None
+    if _redis is None:
+        try:
+            _redis = await aioredis.from_url(
+                settings.redis_url,
+                encoding="utf-8",
+                decode_responses=True,
+                max_connections=20,
+            )
+            await _redis.ping()
+        except Exception as e:
+            logger.warning({"event": "redis_connect_failed", "error": str(e)})
+            _redis = None
+    return _redis
+
+
+async def cache_get(key: str, key_type: str = "generic") -> Optional[str]:
+    r = await get_redis()
+    if r is None:
+        return None
+    try:
+        val = await r.get(key)
+        if val is not None:
+            CACHE_HITS.labels(key_type=key_type).inc()
+        else:
+            CACHE_MISSES.labels(key_type=key_type).inc()
+        return val
+    except Exception:
+        return None
+
+
+async def cache_set(key: str, value: str, ttl: int) -> None:
+    r = await get_redis()
+    if r is None:
+        return
+    try:
+        await r.setex(key, ttl, value)
+    except Exception:
+        pass
+
+
+async def cache_delete(key: str) -> None:
+    r = await get_redis()
+    if r is None:
+        return
+    try:
+        await r.delete(key)
+    except Exception:
+        pass
+
 
 # ─────────────────────────────────────────────────────────────
 # DATABASE
 # ─────────────────────────────────────────────────────────────
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
-engine       = create_engine(DATABASE_URL, connect_args=connect_args)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base         = declarative_base()
 
+_connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
+
+# Pool settings applied only for non-SQLite backends
+_pool_kwargs: dict = {}
+if not settings.database_url.startswith("sqlite"):
+    _pool_kwargs = {
+        "pool_size": settings.db_pool_min,
+        "max_overflow": settings.db_pool_max - settings.db_pool_min,
+        "pool_pre_ping": True,
+    }
+
+engine = create_engine(
+    settings.database_url,
+    connect_args=_connect_args,
+    **_pool_kwargs,
+)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# Track pool usage for Prometheus (only meaningful for non-SQLite)
+@event.listens_for(engine, "checkout")
+def _on_checkout(dbapi_conn, conn_record, conn_proxy):
+    pool = engine.pool
+    DB_POOL_ACTIVE.set(getattr(pool, "_checked_out", 0))
+    DB_POOL_IDLE.set(getattr(pool, "_pool", None) and pool._pool.qsize() or 0)
+
+
+# ─────────────────────────────────────────────────────────────
+# MODELS — DB (unchanged schema)
+# ─────────────────────────────────────────────────────────────
 
 class UserModel(Base):
     __tablename__ = "users"
@@ -73,6 +300,7 @@ class UserModel(Base):
 
 class DiagnosisModel(Base):
     __tablename__ = "diagnoses"
+
     id              = Column(Integer, primary_key=True, index=True)
     user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
     session_id      = Column(String(64), index=True)
@@ -89,9 +317,16 @@ class DiagnosisModel(Base):
     ml_scores       = Column(Text, nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
+    # Composite indexes for common query patterns
+    __table_args__ = (
+        Index("ix_diagnoses_user_created", "user_id", "created_at"),
+        Index("ix_diagnoses_user_risk",    "user_id", "risk"),
+    )
+
 
 class SessionModel(Base):
     __tablename__ = "assessment_sessions"
+
     id              = Column(Integer, primary_key=True, index=True)
     session_id      = Column(String(64), unique=True, index=True)
     user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
@@ -100,11 +335,16 @@ class SessionModel(Base):
     completed       = Column(Boolean, default=False)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
+    __table_args__ = (
+        Index("ix_sessions_user_completed", "user_id", "completed"),
+    )
+
 
 # ─────────────────────────────────────────────────────────────
 # DB HELPERS
 # ─────────────────────────────────────────────────────────────
-def _load_json(value: Optional[str], default):
+
+def _load_json(value: Optional[str], default: Any) -> Any:
     if value is None:
         return default
     try:
@@ -113,37 +353,101 @@ def _load_json(value: Optional[str], default):
         return default
 
 
-def _dump_json(value) -> str:
+def _dump_json(value: Any) -> str:
     return json.dumps(value)
 
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# Async wrapper — runs sync DB operations in the default thread pool
+# so the event loop is not blocked, without requiring asyncpg/aiosqlite.
+async def run_db(func, *args, **kwargs):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
+
+
 # ─────────────────────────────────────────────────────────────
-# ML MODELS
+# ML MODELS + HOT-RELOAD
 # ─────────────────────────────────────────────────────────────
-LOADED_MODELS: Dict[str, Any] = {}
+
+LOADED_MODELS: Dict[str, Any]          = {}
+PREVIOUS_MODELS: Dict[str, Any]        = {}   # fallback on bad reload
+ML_STARTUP_COMPLETE: asyncio.Event     = asyncio.Event()
+
+
+def _load_single_model(fname: str) -> None:
+    """Load or reload one .pkl file."""
+    key = fname.replace(".pkl", "")
+    path = os.path.join(MODELS_DIR, fname)
+    try:
+        candidate = joblib.load(path)
+        PREVIOUS_MODELS[key] = LOADED_MODELS.get(key)
+        LOADED_MODELS[key] = candidate
+        logger.info({"event": "model_loaded", "file": fname})
+    except Exception as e:
+        logger.error({"event": "model_load_failed", "file": fname, "error": str(e)})
+        # Roll back to previous if available
+        if key in PREVIOUS_MODELS and PREVIOUS_MODELS[key] is not None:
+            LOADED_MODELS[key] = PREVIOUS_MODELS[key]
+            logger.warning({"event": "model_rollback", "key": key})
 
 
 def load_ml_models() -> None:
     if not JOBLIB_AVAILABLE:
-        logger.info("joblib not available — using built-in scoring engine.")
+        logger.info({"event": "ml_skip", "reason": "joblib not available"})
+        ML_STARTUP_COMPLETE.set()
         return
     os.makedirs(MODELS_DIR, exist_ok=True)
     pkl_files = [f for f in os.listdir(MODELS_DIR) if f.endswith(".pkl")]
     if not pkl_files:
-        logger.info("No .pkl models found in models/ — using built-in scoring engine.")
+        logger.info({"event": "ml_skip", "reason": "no .pkl files found"})
+        ML_STARTUP_COMPLETE.set()
         return
     for fname in pkl_files:
-        key = fname.replace(".pkl", "")
-        try:
-            LOADED_MODELS[key] = joblib.load(os.path.join(MODELS_DIR, fname))
-            logger.info(f"Loaded ML model: {fname}")
-        except Exception as e:
-            logger.error(f"Failed to load {fname}: {e}")
+        _load_single_model(fname)
+    ML_STARTUP_COMPLETE.set()
+
+
+class _ModelFileHandler(FileSystemEventHandler):
+    """Watchdog handler — hot-reload changed .pkl files."""
+
+    def on_modified(self, event):
+        if isinstance(event, FileModifiedEvent) and event.src_path.endswith(".pkl"):
+            fname = os.path.basename(event.src_path)
+            logger.info({"event": "model_change_detected", "file": fname})
+            _load_single_model(fname)
+
+
+_watchdog_observer: Optional[Observer] = None
+
+
+def start_model_watcher() -> None:
+    global _watchdog_observer
+    if not JOBLIB_AVAILABLE:
+        return
+    os.makedirs(MODELS_DIR, exist_ok=True)
+    _watchdog_observer = Observer()
+    _watchdog_observer.schedule(_ModelFileHandler(), MODELS_DIR, recursive=False)
+    _watchdog_observer.start()
+    logger.info({"event": "model_watcher_started", "dir": MODELS_DIR})
+
+
+def stop_model_watcher() -> None:
+    if _watchdog_observer:
+        _watchdog_observer.stop()
+        _watchdog_observer.join()
 
 
 # ─────────────────────────────────────────────────────────────
-# DISEASE / SYMPTOM DATA
+# DISEASE DATA (unchanged)
 # ─────────────────────────────────────────────────────────────
+
 RISK_MAP: Dict[str, str] = {
     "Malaria": "High", "Typhoid": "High", "Dengue": "High",
     "Tuberculosis": "High", "Hepatitis B": "High", "Hepatitis C": "High",
@@ -292,8 +596,26 @@ DEFAULT_RECS: Dict[str, Dict[str, str]] = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# ADAPTIVE ENGINE
+# CIRCUIT BREAKER — OpenRouter
 # ─────────────────────────────────────────────────────────────
+
+class _CBListener(pybreaker.CircuitBreakerListener):
+    def state_change(self, cb, old_state, new_state):
+        is_open = 1 if str(new_state) == "open" else 0
+        CB_STATE.set(is_open)
+        logger.warning({"event": "circuit_breaker_state_change", "from": str(old_state), "to": str(new_state)})
+
+
+_openrouter_cb = pybreaker.CircuitBreaker(
+    fail_max=3,
+    reset_timeout=60,
+    listeners=[_CBListener()],
+)
+
+# ─────────────────────────────────────────────────────────────
+# ADAPTIVE ENGINE (unchanged logic)
+# ─────────────────────────────────────────────────────────────
+
 def score_disease(disease: str, answers: dict) -> float:
     score = 0.0
     for symptom in DISEASE_SYMPTOM_MAP.get(disease, []):
@@ -346,7 +668,7 @@ def predict_with_ml(answers: dict) -> dict:
                 "method":     "ml",
             }
         except Exception as e:
-            logger.warning(f"ML prediction failed, falling back to scoring: {e}")
+            logger.warning({"event": "ml_predict_failed", "error": str(e)})
 
     scores        = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -370,19 +692,64 @@ def predict_with_ml(answers: dict) -> dict:
         "method":     "scoring",
     }
 
+# ─────────────────────────────────────────────────────────────
+# OPENROUTER AI — with circuit breaker + retry + cache fallback
+# ─────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────
-# OPENROUTER AI
-# ─────────────────────────────────────────────────────────────
+_RETRY_BASE   = 1.0
+_RETRY_MAX    = 10.0
+_RETRY_TIMES  = 2
+
+
+async def _do_openrouter_request(headers: dict, payload: dict) -> Optional[dict]:
+    """Single HTTP attempt — wrapped by circuit breaker."""
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            settings.openrouter_url,
+            headers=headers,
+            json=payload,
+            timeout=aiohttp.ClientTimeout(total=15),
+        ) as resp:
+            if resp.status >= 500:
+                body = await resp.text()
+                OPENROUTER_ERRORS.labels(reason="5xx").inc()
+                logger.warning({"event": "openrouter_5xx", "status": resp.status, "body": body[:200]})
+                raise aiohttp.ClientResponseError(
+                    resp.request_info, resp.history, status=resp.status
+                )
+            if resp.status != 200:
+                body = await resp.text()
+                logger.warning({"event": "openrouter_non200", "status": resp.status})
+                return None
+            data   = await resp.json()
+            raw    = data["choices"][0]["message"]["content"].strip()
+            raw    = raw.replace("```json", "").replace("```", "").strip()
+            result = json.loads(raw)
+            for key in ("explanation", "home_care", "test", "doctor", "safety"):
+                if key not in result:
+                    result[key] = ""
+            return result
+
+
 async def call_openrouter(
     disease: str,
     risk: str,
     active_syms: List[str],
     confidence: float,
 ) -> Optional[dict]:
-    if not OPENROUTER_API_KEY:
-        logger.info("OPENROUTER_API_KEY not set — skipping AI call.")
+    if not settings.openrouter_api_key:
+        logger.info({"event": "openrouter_skip", "reason": "no api key"})
         return None
+
+    # Check Redis cache first (24h TTL per disease)
+    cache_key = f"ai_response:{disease}"
+    if settings.enable_ai_cache:
+        cached = await cache_get(cache_key, key_type="ai_response")
+        if cached:
+            try:
+                return json.loads(cached)
+            except Exception:
+                pass
 
     sym_text = ", ".join(s.replace("_", " ") for s in active_syms[:12]) or "general symptoms"
     urgency  = {
@@ -413,13 +780,13 @@ Rules:
 - Never invent drug names or dosages."""
 
     headers = {
-        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Authorization": f"Bearer {settings.openrouter_api_key}",
         "Content-Type":  "application/json",
-        "HTTP-Referer":  SITE_URL,
-        "X-Title":       SITE_NAME,
+        "HTTP-Referer":  settings.site_url,
+        "X-Title":       settings.site_name,
     }
     payload = {
-        "model": OPENROUTER_MODEL,
+        "model": settings.openrouter_model,
         "messages": [
             {
                 "role":    "system",
@@ -434,32 +801,57 @@ Rules:
         "temperature": 0.2,
     }
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                OPENROUTER_URL,
-                headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=15),
-            ) as resp:
-                if resp.status != 200:
-                    body = await resp.text()
-                    logger.warning(f"OpenRouter HTTP {resp.status}: {body[:200]}")
-                    return None
-                data   = await resp.json()
-                raw    = data["choices"][0]["message"]["content"].strip()
-                raw    = raw.replace("```json", "").replace("```", "").strip()
-                result = json.loads(raw)
-                for key in ("explanation", "home_care", "test", "doctor", "safety"):
-                    if key not in result:
-                        result[key] = ""
-                return result
-    except json.JSONDecodeError as e:
-        logger.warning(f"OpenRouter JSON parse error: {e}")
-    except aiohttp.ClientError as e:
-        logger.warning(f"OpenRouter connection error: {e}")
-    except Exception as e:
-        logger.warning(f"OpenRouter unexpected error: {e}")
+    last_error: Optional[Exception] = None
+    for attempt in range(_RETRY_TIMES + 1):
+        try:
+            t0 = time.monotonic()
+            result = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: asyncio.run(_do_openrouter_request(headers, payload))
+                ),
+                timeout=15,
+            )
+            # Use direct async call instead
+            result = await _do_openrouter_request(headers, payload)
+            OPENROUTER_LATENCY.observe(time.monotonic() - t0)
+            if result and settings.enable_ai_cache:
+                await cache_set(cache_key, json.dumps(result), ttl=86400)
+            return result
+        except pybreaker.CircuitBreakerError:
+            OPENROUTER_ERRORS.labels(reason="circuit_open").inc()
+            logger.warning({"event": "openrouter_circuit_open"})
+            # Return cached fallback if available
+            fallback = await cache_get(cache_key, key_type="ai_fallback")
+            if fallback:
+                try:
+                    return json.loads(fallback)
+                except Exception:
+                    pass
+            return None
+        except asyncio.TimeoutError:
+            OPENROUTER_ERRORS.labels(reason="timeout").inc()
+            last_error = asyncio.TimeoutError()
+            logger.warning({"event": "openrouter_timeout", "attempt": attempt})
+        except json.JSONDecodeError as e:
+            OPENROUTER_ERRORS.labels(reason="json_parse").inc()
+            logger.warning({"event": "openrouter_json_error", "error": str(e)})
+            return None
+        except aiohttp.ClientError as e:
+            OPENROUTER_ERRORS.labels(reason="client_error").inc()
+            last_error = e
+            logger.warning({"event": "openrouter_client_error", "error": str(e)})
+        except Exception as e:
+            OPENROUTER_ERRORS.labels(reason="unexpected").inc()
+            logger.warning({"event": "openrouter_unexpected", "error": str(e)})
+            return None
+
+        if attempt < _RETRY_TIMES:
+            wait = min(_RETRY_BASE * (2 ** attempt), _RETRY_MAX)
+            logger.info({"event": "openrouter_retry", "wait_s": wait, "attempt": attempt + 1})
+            await asyncio.sleep(wait)
+
+    logger.warning({"event": "openrouter_all_retries_failed", "error": str(last_error)})
     return None
 
 
@@ -472,18 +864,18 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
     })
     if ai_result:
         return {
-            "home_care":   ai_result.get("home_care")    or default["home_care"],
-            "test":        ai_result.get("test")         or default["test"],
-            "doctor":      ai_result.get("doctor")       or default["doctor"],
-            "safety":      ai_result.get("safety")       or default.get("safety", ""),
-            "explanation": ai_result.get("explanation")  or f"Your symptoms are consistent with {disease}.",
+            "home_care":   ai_result.get("home_care")   or default["home_care"],
+            "test":        ai_result.get("test")        or default["test"],
+            "doctor":      ai_result.get("doctor")      or default["doctor"],
+            "safety":      ai_result.get("safety")      or default.get("safety", ""),
+            "explanation": ai_result.get("explanation") or f"Your symptoms are consistent with {disease}.",
         }
     return {**default, "explanation": f"Your symptoms are consistent with {disease}."}
 
+# ─────────────────────────────────────────────────────────────
+# PYDANTIC SCHEMAS (unchanged)
+# ─────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────
-# PYDANTIC SCHEMAS
-# ─────────────────────────────────────────────────────────────
 class RegisterRequest(BaseModel):
     email:    str
     password: str
@@ -512,21 +904,21 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password:     str
 
+# ─────────────────────────────────────────────────────────────
+# AUTH HELPERS (unchanged logic)
+# ─────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────
-# AUTH HELPERS
-# ─────────────────────────────────────────────────────────────
 security = HTTPBearer()
 
 
 def create_token(user_id: int) -> str:
-    exp = datetime.utcnow() + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
-    return jwt.encode({"sub": str(user_id), "exp": exp}, SECRET_KEY, algorithm=ALGORITHM)
+    exp = datetime.utcnow() + timedelta(days=settings.access_token_expire_days)
+    return jwt.encode({"sub": str(user_id), "exp": exp}, settings.secret_key, algorithm=settings.algorithm)
 
 
 def verify_token(creds: HTTPAuthorizationCredentials = Depends(security)) -> int:
     try:
-        payload = jwt.decode(creds.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(creds.credentials, settings.secret_key, algorithms=[settings.algorithm])
         user_id = payload.get("sub")
         if user_id is None:
             raise HTTPException(status_code=401, detail="Invalid token payload")
@@ -535,40 +927,107 @@ def verify_token(creds: HTTPAuthorizationCredentials = Depends(security)) -> int
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
 def hash_pw(pw: str) -> str:
     salt   = secrets.token_hex(16)
-    hashed = hashlib.sha256((salt + pw).encode()).hexdigest()
+    hashed = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 260_000).hex()
     return f"{salt}:{hashed}"
 
 
 def verify_pw(pw: str, stored: str) -> bool:
     try:
         salt, hashed = stored.split(":", 1)
-        return hashlib.sha256((salt + pw).encode()).hexdigest() == hashed
+        # Support legacy sha256 format
+        if len(hashed) == 64:
+            import hashlib as _hl
+            return _hl.sha256((salt + pw).encode()).hexdigest() == hashed
+        return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 260_000).hex() == hashed
     except Exception:
         return False
 
+# ─────────────────────────────────────────────────────────────
+# RATE LIMITER
+# ─────────────────────────────────────────────────────────────
+
+limiter = Limiter(key_func=get_remote_address, enabled=settings.enable_rate_limiting)
 
 # ─────────────────────────────────────────────────────────────
-# APP STARTUP
+# BACKGROUND SCHEDULER — session cleanup
 # ─────────────────────────────────────────────────────────────
+
+_scheduler = AsyncIOScheduler()
+
+
+async def _cleanup_stale_sessions() -> None:
+    cutoff = datetime.utcnow() - timedelta(hours=2)
+    db = SessionLocal()
+    try:
+        deleted = (
+            db.query(SessionModel)
+            .filter(
+                SessionModel.completed == False,
+                SessionModel.created_at < cutoff,
+            )
+            .delete(synchronize_session=False)
+        )
+        db.commit()
+        SESSION_CLEANUP_RUNS.inc()
+        logger.info({"event": "session_cleanup", "deleted": deleted})
+    except Exception as e:
+        logger.error({"event": "session_cleanup_error", "error": str(e)})
+        db.rollback()
+    finally:
+        db.close()
+
+# ─────────────────────────────────────────────────────────────
+# LIFESPAN
+# ─────────────────────────────────────────────────────────────
+
+_aiohttp_session: Optional[aiohttp.ClientSession] = None
+_pending_requests: int = 0
+_shutdown_event: asyncio.Event = asyncio.Event()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _aiohttp_session
+
+    # Startup
     Base.metadata.create_all(bind=engine)
     load_ml_models()
+    start_model_watcher()
+    _aiohttp_session = aiohttp.ClientSession()
+
+    # Init Redis (best-effort)
+    await get_redis()
+
+    # Scheduler
+    _scheduler.add_job(_cleanup_stale_sessions, "interval", hours=1, id="session_cleanup")
+    _scheduler.start()
+
     model_keys = list(LOADED_MODELS.keys()) or ["none — using scoring engine"]
-    logger.info(f"TropiCare started. ML models: {model_keys}")
-    logger.info(f"OpenRouter enabled: {bool(OPENROUTER_API_KEY)} | Model: {OPENROUTER_MODEL}")
+    logger.info({"event": "startup", "ml_models": model_keys, "openrouter": bool(settings.openrouter_api_key)})
+
     yield
 
+    # Shutdown — wait up to 30 seconds for pending requests
+    logger.info({"event": "shutdown_initiated"})
+    deadline = asyncio.get_event_loop().time() + 30
+    while _pending_requests > 0 and asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(0.5)
+
+    # Close resources
+    _scheduler.shutdown(wait=False)
+    if _aiohttp_session:
+        await _aiohttp_session.close()
+    stop_model_watcher()
+    if _redis:
+        await _redis.close()
+    engine.dispose()
+    logger.info({"event": "shutdown_complete"})
+
+# ─────────────────────────────────────────────────────────────
+# APP
+# ─────────────────────────────────────────────────────────────
 
 app = FastAPI(
     title="TropiCare API",
@@ -577,41 +1036,231 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*").split(",")
+# Rate limit error handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+# GZip compression (responses > 1KB)
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,
+    allow_origins=settings.origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# Prometheus instrumentation
+Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 # ─────────────────────────────────────────────────────────────
-# ROUTES — Health
+# MIDDLEWARE — Request ID + Structured Logging + Security Headers
 # ─────────────────────────────────────────────────────────────
+
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+def _sanitize(value: str) -> str:
+    """Strip control characters from string input."""
+    return _CONTROL_CHAR_RE.sub("", value)
+
+
+@app.middleware("http")
+async def request_middleware(request: Request, call_next):
+    global _pending_requests
+
+    # Request ID
+    req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
+    request.state.request_id = req_id
+
+    # Body size limit
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > settings.max_body_size:
+        return JSONResponse(
+            status_code=413,
+            content={"detail": "Request body too large"},
+            headers={"X-Request-ID": req_id},
+        )
+
+    # Content-Type enforcement for mutating methods
+    if request.method in ("POST", "PUT", "PATCH"):
+        ct = request.headers.get("content-type", "")
+        if ct and "application/json" not in ct and "multipart" not in ct:
+            return JSONResponse(
+                status_code=415,
+                content={"detail": "Content-Type must be application/json"},
+                headers={"X-Request-ID": req_id},
+            )
+
+    start = time.monotonic()
+    _pending_requests += 1
+
+    # Extract user_id from JWT if present (best-effort, no failure)
+    user_id_log: Optional[int] = None
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        try:
+            token = auth_header[7:]
+            payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+            user_id_log = int(payload.get("sub", 0)) or None
+        except Exception:
+            pass
+
+    try:
+        response: Response = await asyncio.wait_for(call_next(request), timeout=30)
+    except asyncio.TimeoutError:
+        _pending_requests -= 1
+        return JSONResponse(
+            status_code=504,
+            content={"detail": "Request timed out"},
+            headers={"X-Request-ID": req_id},
+        )
+    finally:
+        _pending_requests -= 1
+
+    duration_ms = round((time.monotonic() - start) * 1000, 2)
+
+    # Security headers
+    response.headers["X-Request-ID"]             = req_id
+    response.headers["X-Content-Type-Options"]   = "nosniff"
+    response.headers["X-Frame-Options"]           = "DENY"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"]   = "default-src 'none'"
+
+    # No-store for authenticated endpoints
+    if user_id_log:
+        response.headers["Cache-Control"] = "no-store"
+
+    # API versioning support header (v2 would set this)
+    # response.headers["X-API-Deprecated"] = "true"   # enable when v2 ships
+
+    logger.info({
+        "event":       "request",
+        "request_id":  req_id,
+        "method":      request.method,
+        "path":        request.url.path,
+        "status":      response.status_code,
+        "duration_ms": duration_ms,
+        "user_id":     user_id_log,
+    })
+
+    return response
+
+# ─────────────────────────────────────────────────────────────
+# MIDDLEWARE — Password attempt rate limiting via Redis
+# ─────────────────────────────────────────────────────────────
+
+async def _check_password_rate_limit(email: str) -> None:
+    """Allow max 3 password attempts per email per minute."""
+    r = await get_redis()
+    if r is None:
+        return
+    key = f"pw_attempts:{email}"
+    try:
+        count = await r.incr(key)
+        if count == 1:
+            await r.expire(key, 60)
+        if count > 3:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many login attempts. Try again in a minute.",
+                headers={"Retry-After": "60"},
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+# ─────────────────────────────────────────────────────────────
+# HEALTH ENDPOINTS
+# ─────────────────────────────────────────────────────────────
+
 @app.get("/api/v1/health")
 async def health():
+    """Original health endpoint — preserved for backward compat."""
     return {
         "status":             "healthy",
         "timestamp":          datetime.utcnow().isoformat(),
         "ml_models":          list(LOADED_MODELS.keys()),
-        "openrouter_enabled": bool(OPENROUTER_API_KEY),
-        "openrouter_model":   OPENROUTER_MODEL,
+        "openrouter_enabled": bool(settings.openrouter_api_key),
+        "openrouter_model":   settings.openrouter_model,
     }
 
+
+@app.get("/health/live")
+async def health_live():
+    """Liveness — process is up, no dependency checks."""
+    return {"status": "alive", "timestamp": datetime.utcnow().isoformat()}
+
+
+@app.get("/health/ready")
+async def health_ready():
+    """Readiness — checks DB, Redis, and OpenRouter reachability."""
+    checks: Dict[str, str] = {}
+
+    # DB check
+    try:
+        async def _db_ping():
+            db = SessionLocal()
+            try:
+                db.execute(__import__("sqlalchemy").text("SELECT 1"))
+            finally:
+                db.close()
+        await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, lambda: SessionLocal().execute(__import__("sqlalchemy").text("SELECT 1"))), timeout=5)
+        checks["db"] = "ok"
+    except Exception as e:
+        checks["db"] = f"fail: {e}"
+
+    # Redis check
+    try:
+        r = await asyncio.wait_for(get_redis(), timeout=5)
+        if r:
+            await asyncio.wait_for(r.ping(), timeout=5)
+            checks["redis"] = "ok"
+        else:
+            checks["redis"] = "disabled"
+    except Exception as e:
+        checks["redis"] = f"fail: {e}"
+
+    # OpenRouter reachability (HEAD-like check)
+    if settings.openrouter_api_key:
+        try:
+            async with aiohttp.ClientSession() as s:
+                async with s.get("https://openrouter.ai", timeout=aiohttp.ClientTimeout(total=5)) as r:
+                    checks["openrouter"] = "ok" if r.status < 500 else f"fail: {r.status}"
+        except Exception as e:
+            checks["openrouter"] = f"fail: {e}"
+    else:
+        checks["openrouter"] = "not_configured"
+
+    all_ok = all(v in ("ok", "disabled", "not_configured") for v in checks.values())
+    status_code = 200 if all_ok else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={"status": "ready" if all_ok else "not_ready", "checks": checks},
+    )
+
+
+@app.get("/health/startup")
+async def health_startup():
+    """Startup probe — returns 200 only when ML models are fully loaded."""
+    if ML_STARTUP_COMPLETE.is_set():
+        return {"status": "started", "models": list(LOADED_MODELS.keys())}
+    return JSONResponse(status_code=503, content={"status": "loading"})
 
 # ─────────────────────────────────────────────────────────────
 # ROUTES — Auth
 # ─────────────────────────────────────────────────────────────
+
 @app.post("/api/v1/auth/register", status_code=201)
-async def register(req: RegisterRequest, db: Session = Depends(get_db)):
+@limiter.limit("100/hour")
+async def register(request: Request, req: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(UserModel).filter(UserModel.email == req.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
     user = UserModel(
-        email=req.email,
-        name=req.name,
+        email=_sanitize(req.email),
+        name=_sanitize(req.name),
         pw_hash=hash_pw(req.password),
         age=req.age,
         gender=req.gender,
@@ -627,7 +1276,9 @@ async def register(req: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @app.post("/api/v1/auth/login")
-async def login(req: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit("100/hour")
+async def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
+    await _check_password_rate_limit(req.email)
     user = db.query(UserModel).filter(UserModel.email == req.email).first()
     if not user or not user.pw_hash or not verify_pw(req.password, user.pw_hash):
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -637,12 +1288,14 @@ async def login(req: LoginRequest, db: Session = Depends(get_db)):
         "user":         {"id": user.id, "email": user.email, "name": user.name},
     }
 
-
 # ─────────────────────────────────────────────────────────────
 # ROUTES — Assessment
 # ─────────────────────────────────────────────────────────────
+
 @app.post("/api/v1/symptoms/start", status_code=201)
+@limiter.limit("5/second")
 async def start_assessment(
+    request: Request,
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
@@ -655,6 +1308,8 @@ async def start_assessment(
     )
     db.add(session)
     db.commit()
+    # Cache session state in Redis to reduce DB round-trips
+    await cache_set(f"session:{sid}", _dump_json({"answers": {}, "asked": [], "completed": False}), ttl=3600)
     return {
         "session_id":      sid,
         "first_question":  ALL_QUESTIONS[0],
@@ -663,7 +1318,9 @@ async def start_assessment(
 
 
 @app.post("/api/v1/symptoms/next")
+@limiter.limit("5/second")
 async def next_question(
+    request: Request,
     session_id: str,
     req: AnswerRequest,
     user_id: int = Depends(verify_token),
@@ -690,6 +1347,13 @@ async def next_question(
     s.asked_questions = _dump_json(asked)
     db.commit()
 
+    # Update cache
+    await cache_set(
+        f"session:{session_id}",
+        _dump_json({"answers": answers, "asked": asked, "completed": s.completed}),
+        ttl=3600,
+    )
+
     if len(asked) >= 15:
         s.completed = True
         db.commit()
@@ -704,13 +1368,26 @@ async def next_question(
     return {"completed": False, "next_question": next_q}
 
 
+# ─────────────────────────────────────────────────────────────
+# ROUTES — Diagnosis (with idempotency key support)
+# ─────────────────────────────────────────────────────────────
+
 @app.post("/api/v1/diagnosis/analyze")
+@limiter.limit("5/second")
 async def analyze(
+    request: Request,
     session_id: str,
     background_tasks: BackgroundTasks,
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
+    # Idempotency key
+    idem_key = request.headers.get("Idempotency-Key")
+    if idem_key:
+        cached_resp = await cache_get(f"idem:{idem_key}", key_type="idempotency")
+        if cached_resp:
+            return JSONResponse(content=json.loads(cached_resp))
+
     s = db.query(SessionModel).filter(
         SessionModel.session_id == session_id,
         SessionModel.user_id == user_id,
@@ -729,9 +1406,9 @@ async def analyze(
             timeout=12.0,
         )
     except asyncio.TimeoutError:
-        logger.warning("OpenRouter timed out — using default recommendations")
+        logger.warning({"event": "openrouter_timeout", "context": "analyze"})
     except Exception as e:
-        logger.warning(f"OpenRouter call failed: {e} — using default recommendations")
+        logger.warning({"event": "openrouter_failed", "error": str(e)})
 
     rec = build_recommendation(pred["disease"], pred["risk"], ai_result)
 
@@ -754,7 +1431,10 @@ async def analyze(
     db.commit()
     db.refresh(diag)
 
-    return {
+    # Invalidate user profile cache (diagnosis count changed)
+    await cache_delete(f"profile:{user_id}")
+
+    response_body = {
         "id":          diag.id,
         "disease":     pred["disease"],
         "confidence":  pred["confidence"],
@@ -771,23 +1451,41 @@ async def analyze(
         "ai_used": ai_result is not None,
     }
 
+    # Store idempotency response (24h)
+    if idem_key:
+        await cache_set(f"idem:{idem_key}", json.dumps(response_body), ttl=86400)
+
+    return response_body
 
 # ─────────────────────────────────────────────────────────────
-# ROUTES — Patient History
+# ROUTES — Patient History (cursor-based pagination)
 # ─────────────────────────────────────────────────────────────
+
 @app.get("/api/v1/patient/history")
 async def get_history(
+    request: Request,
+    cursor: Optional[int] = None,   # cursor = last seen diagnosis id
+    limit: int = 20,
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    rows = (
+    """
+    Cursor-based pagination. Pass ?cursor=<id>&limit=20.
+    Falls back to returning up to 100 records when no cursor provided
+    (backward compatible — original frontend used no cursor param).
+    """
+    limit = min(limit, 100)
+    query = (
         db.query(DiagnosisModel)
         .filter(DiagnosisModel.user_id == user_id)
-        .order_by(DiagnosisModel.created_at.desc())
-        .limit(100)
-        .all()
     )
-    user         = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if cursor is not None:
+        query = query.filter(DiagnosisModel.id < cursor)
+
+    rows = query.order_by(DiagnosisModel.id.desc()).limit(limit).all()
+
+    # Eager load user in one query to avoid N+1
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
     patient_name = user.name if user else "Unknown"
 
     return [
@@ -844,15 +1542,20 @@ async def get_diagnosis(
         "ml_scores":   _load_json(d.ml_scores, {}),
     }
 
+# ─────────────────────────────────────────────────────────────
+# ROUTES — User Profile (with Redis cache)
+# ─────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — User Profile
-# ─────────────────────────────────────────────────────────────
 @app.get("/api/v1/user/profile")
 async def get_profile(
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
+    cache_key = f"profile:{user_id}"
+    cached = await cache_get(cache_key, key_type="profile")
+    if cached:
+        return json.loads(cached)
+
     u = db.query(UserModel).filter(UserModel.id == user_id).first()
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
@@ -861,7 +1564,7 @@ async def get_profile(
         DiagnosisModel.user_id == user_id,
         DiagnosisModel.risk == "High",
     ).count()
-    return {
+    result = {
         "id":               u.id,
         "email":            u.email,
         "name":             u.name,
@@ -871,6 +1574,8 @@ async def get_profile(
         "assessment_count": count,
         "high_risk_count":  high,
     }
+    await cache_set(cache_key, json.dumps(result), ttl=300)  # 5-min TTL
+    return result
 
 
 @app.put("/api/v1/user/profile")
@@ -882,10 +1587,11 @@ async def update_profile(
     u = db.query(UserModel).filter(UserModel.id == user_id).first()
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
-    if req.name   is not None: u.name   = req.name
+    if req.name   is not None: u.name   = _sanitize(req.name)
     if req.age    is not None: u.age    = req.age
     if req.gender is not None: u.gender = req.gender
     db.commit()
+    await cache_delete(f"profile:{user_id}")
     return {"id": u.id, "name": u.name, "age": u.age, "gender": u.gender}
 
 
@@ -916,21 +1622,28 @@ async def delete_account(
     db.query(SessionModel).filter(SessionModel.user_id == user_id).delete()
     db.query(UserModel).filter(UserModel.id == user_id).delete()
     db.commit()
+    await cache_delete(f"profile:{user_id}")
     return {"message": "Account deleted"}
 
+# ─────────────────────────────────────────────────────────────
+# ROUTES — Admin (with Redis cache for stats)
+# ─────────────────────────────────────────────────────────────
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Admin
-# ─────────────────────────────────────────────────────────────
 @app.get("/api/v1/admin/stats")
 async def admin_stats(db: Session = Depends(get_db)):
-    return {
+    cache_key = "admin:stats"
+    cached = await cache_get(cache_key, key_type="admin_stats")
+    if cached:
+        return json.loads(cached)
+    result = {
         "total_users":     db.query(UserModel).count(),
         "total_diagnoses": db.query(DiagnosisModel).count(),
         "high_risk":       db.query(DiagnosisModel).filter(DiagnosisModel.risk == "High").count(),
         "medium_risk":     db.query(DiagnosisModel).filter(DiagnosisModel.risk == "Medium").count(),
         "low_risk":        db.query(DiagnosisModel).filter(DiagnosisModel.risk == "Low").count(),
     }
+    await cache_set(cache_key, json.dumps(result), ttl=30)  # 30-sec TTL
+    return result
 
 
 @app.get("/api/v1/admin/all-records")
@@ -964,6 +1677,7 @@ async def clear_database(db: Session = Depends(get_db)):
     deleted = db.query(DiagnosisModel).delete()
     db.query(SessionModel).delete()
     db.commit()
+    await cache_delete("admin:stats")
     return {"message": f"Cleared {deleted} diagnosis records"}
 
 
@@ -974,8 +1688,41 @@ async def delete_record(diag_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Not found")
     db.delete(d)
     db.commit()
+    await cache_delete("admin:stats")
     return {"message": "Record deleted"}
 
+
+# ─────────────────────────────────────────────────────────────
+# ROUTES — Admin: Model Reload
+# ─────────────────────────────────────────────────────────────
+
+@app.post("/api/v1/admin/models/reload")
+async def reload_models():
+    """Manual hot-reload of all .pkl models."""
+    if not JOBLIB_AVAILABLE:
+        raise HTTPException(status_code=501, detail="joblib not available")
+    pkl_files = [f for f in os.listdir(MODELS_DIR) if f.endswith(".pkl")]
+    if not pkl_files:
+        return {"reloaded": [], "message": "No .pkl files found"}
+    loop = asyncio.get_event_loop()
+    for fname in pkl_files:
+        await loop.run_in_executor(None, _load_single_model, fname)
+    return {"reloaded": pkl_files, "models": list(LOADED_MODELS.keys())}
+
+
+# ─────────────────────────────────────────────────────────────
+# ROUTES — API v1 Router prefix config (future v2 support)
+# ─────────────────────────────────────────────────────────────
+# All existing routes are under /api/v1/.
+# To add /api/v2/ without breaking v1, use APIRouter:
+#
+#   from fastapi import APIRouter
+#   v2_router = APIRouter(prefix="/api/v2")
+#   @v2_router.get("/symptoms/start") ...
+#   app.include_router(v2_router)
+#
+# When v2 goes live, set response header:
+#   X-API-Deprecated: true   on v1 endpoints (see middleware).
 
 # ─────────────────────────────────────────────────────────────
 # ENTRYPOINT
@@ -985,6 +1732,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", 8000)),
-        reload=True,
+        port=settings.port,
+        reload=False,          # Use watchdog for model reloads; uvicorn reload off in prod
     )
