@@ -1,8 +1,5 @@
 """
-TropiCare API — Production-Grade Refactor
-KNUST Final Year Project — SCTD
-
-All existing endpoint URLs, request/response schemas, and DB schema are unchanged.
+TropiCare API
 """
 
 from __future__ import annotations
