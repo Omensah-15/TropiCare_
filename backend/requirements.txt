@@ -10,3 +10,13 @@ joblib
 pydantic
 python-multipart
 psycopg2-binary
+pydantic-settings
+slowapi
+python-json-logger
+apscheduler
+watchdog
+pybreaker
+prometheus-fastapi-instrumentator
+prometheus-client
+aioredis
+scikit-learn
