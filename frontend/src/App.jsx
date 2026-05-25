@@ -1870,7 +1870,7 @@ function AboutScreen({ onBack }) {
           <div className="about-hero-title">TropiCare</div>
           <div className="about-hero-sub">
             An AI-powered symptom checker built to help patients and clinicians identify tropical diseases
-            faster — with clear risk levels and personalised recommendations.
+            faster with clear risk levels and personalised recommendations.
           </div>
         </div>
 
