@@ -718,6 +718,18 @@ const CATEGORY_ILLUS = {
 };
 
 function QuestionIllus({ question }) {
+  const imgPath = question ? SYMPTOM_IMAGES[question.id] : null;
+  const catPath = question ? getCategoryImage(question.category) : null;
+  const src = imgPath || catPath;
+
+  if (src) {
+    return (
+      <div className="q-illus">
+        <img src={src} alt={question?.category || "symptom"} style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }} />
+      </div>
+    );
+  }
+
   const Comp = question ? (CATEGORY_ILLUS[question.category] || IllusDoctor) : IllusDoctor;
   return <div className="q-illus"><Comp /></div>;
 }
