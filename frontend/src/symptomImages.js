@@ -38,7 +38,7 @@ export const SYMPTOM_IMAGES = {
   // ── General ──────────────────────────────────────────────────────────────
   high_fever:    "/images/symptoms/fever.png",
   mild_fever:    "/images/symptoms/fever.png",
-  fatigue:       "/images/symptoms/fatigue.png",
+  fatigue:       "/ images/symptoms/fatigue.png",
   malaise:       "/images/symptoms/malaise.png",
   chills:        "/images/symptoms/chills.png",
   sweating:      "/images/symptoms/sweating.png",
