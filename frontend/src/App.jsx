@@ -1,7 +1,6 @@
 /*
  * TropiCare — App.jsx
  * Backend: FastAPI (tropicare.onrender.com)
- * Adaptive questioning engine v2 — information-gain weighted scoring
  */
 
 import { useState, useEffect, useCallback } from "react";
