@@ -1,31 +1,5 @@
-/**
+/*
  * TropiCare — Symptom Image Registry
- * ====================================
- *
- * HOW IT WORKS
- * ────────────
- * App.jsx imports two exports from this file:
- *
- *   import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
- *
- *   • SYMPTOM_IMAGES   — per-symptom image paths  (keyed by symptom id)
- *   • getCategoryImage — fallback per category     (returns a path or null)
- *
- * QuestionIllus in App.jsx tries:
- *   1. SYMPTOM_IMAGES[symptom.id]        → exact symptom image
- *   2. getCategoryImage(symptom.category) → category-level fallback
- *   3. Inline SVG                         → built-in vector art
- *
- * ADDING YOUR OWN IMAGES
- * ──────────────────────
- * Drop images into:  public/images/symptoms/
- * Then replace the null values below with the correct path, e.g.:
- *   high_fever: "/images/symptoms/high_fever.png",
- *
- * Recommended image spec: 400×400 px, PNG with transparent background or
- * clean white/light background, object-fit: contain display.
- *
- * Any symptom id left as null falls through to category → SVG fallback.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,7 +73,7 @@ export const SYMPTOM_IMAGES = {
   // ── Urinary ───────────────────────────────────────────────────────────────
   burning_micturition:       "/images/symptoms/burning_micturition.png",
   urinating_frequently:      "/images/symptoms/urinating_frequently.png",
-  continuous_feel_of_urine:  "/images/symptoms/continuous_feel_of_urine.png",
+  continuous_feel_of_urine:  "/images/symptoms/urinating_frequently.png",
   bladder_discomfort:        "/images/symptoms/bladder_discomfort.png",
   foul_smell_of_urine:       "/images/symptoms/foul_smell_of_urine.png",
   spotting_urination:        "/images/symptoms/spotting_urination.png",
@@ -107,7 +81,7 @@ export const SYMPTOM_IMAGES = {
   // ── Rectal ────────────────────────────────────────────────────────────────
   pain_anal_region:     "/images/symptoms/pain_anal_region.png",
   pain_bowel_movements: "/images/symptoms/pain_bowel_movements.png",
-  irritation_anus:      "/images/symptoms/irritation_anus.png",
+  irritation_anus:      "/images/symptoms/pain_anal_region.png",
 
   // ── Neurological ──────────────────────────────────────────────────────────
   restlessness: "/images/symptoms/restlessness.png",
@@ -121,7 +95,7 @@ export const SYMPTOM_IMAGES = {
   irregular_sugar_level: "/images/symptoms/irregular_sugar_level.png",
   polyuria:              "/images/symptoms/polyuria.png",
   dehydration:           "/images/symptoms/dehydration.png",
-  weight_loss:           "/images/symptoms/weight_loss.png",
+  weight_loss:           "/images/symptoms/slim.png",
   obesity:               "/images/symptoms/obesity.png",
 
   // ── Infection ─────────────────────────────────────────────────────────────
@@ -171,57 +145,3 @@ export function getCategoryImage(category) {
   return CATEGORY_IMAGES[category] ?? null;
 }
 
-
-// ─────────────────────────────────────────────────────────────────────────────
-// QUICK-REFERENCE: ALL SYMPTOM IDS
-// Copy-paste this list to verify every id is covered.
-// ─────────────────────────────────────────────────────────────────────────────
-/*
-GENERAL (10):
-  high_fever, mild_fever, fatigue, malaise, chills, sweating,
-  headache, muscle_pain, joint_pain, back_pain
-
-RESPIRATORY (12):
-  cough, phlegm, rusty_sputum, blood_in_sputum, breathlessness,
-  chest_pain, runny_nose, continuous_sneezing, throat_irritation,
-  sinus_pressure, watering_from_eyes, loss_of_smell
-
-DIGESTIVE (12):
-  nausea, vomiting, diarrhoea, stomach_pain, abdominal_pain,
-  indigestion, distension_of_abdomen, constipation, passage_of_gases,
-  bloody_stool, loss_of_appetite, stomach_bleeding
-
-LIVER (7):
-  yellowish_skin, yellowing_of_eyes, dark_urine, yellow_urine,
-  internal_itching, acute_liver_failure, fluid_overload
-
-SKIN (5):
-  itching, skin_rash, red_spots_over_body, nodal_skin_eruptions,
-  dischromic_patches
-
-EYES (3):
-  redness_of_eyes, blurred_vision, pain_behind_eyes
-
-URINARY (6):
-  burning_micturition, urinating_frequently, continuous_feel_of_urine,
-  bladder_discomfort, foul_smell_of_urine, spotting_urination
-
-RECTAL (3):
-  pain_anal_region, pain_bowel_movements, irritation_anus
-
-NEUROLOGICAL (4):
-  restlessness, mood_swings, confusion, coma
-
-METABOLIC (7):
-  excessive_hunger, increased_appetite, irregular_sugar_level,
-  polyuria, dehydration, weight_loss, obesity
-
-INFECTION (6):
-  swelled_lymph_nodes, swelling_stomach, fast_heart_rate,
-  toxic_look, swollen_lymph_neck, loss_of_appetite_fever
-
-HISTORY (4):
-  family_history, blood_transfusion, unsterile_injections, alcohol_history
-
-TOTAL: 79 symptom ids
-*/
