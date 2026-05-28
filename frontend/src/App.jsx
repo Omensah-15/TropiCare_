@@ -182,203 +182,39 @@ const ALL_QUESTIONS = [
 
 const Q_INDEX = Object.fromEntries(ALL_QUESTIONS.map((q) => [q.id, q]));
 
-// ─────────────────────────────────────────────
-// ADAPTIVE ENGINE v2 — INFORMATION-GAIN WEIGHTS
-// ─────────────────────────────────────────────
-
-// Pre-compute how many diseases each symptom appears in
-const SYMPTOM_DISEASE_COUNT = (() => {
-  const counts = {};
-  for (const syms of Object.values(DISEASE_SYMPTOM_MAP)) {
-    for (const s of syms) counts[s] = (counts[s] || 0) + 1;
-  }
-  return counts;
-})();
-
-const TOTAL_DISEASES = Object.keys(DISEASE_SYMPTOM_MAP).length;
-
-// Weight = totalDiseases / diseaseCount (inverse frequency)
-// Symptom in 1 disease -> weight 22; symptom in 15 diseases -> weight ~1.47
-function symptomWeight(symptomId) {
-  const count = SYMPTOM_DISEASE_COUNT[symptomId] || 1;
-  return TOTAL_DISEASES / count;
-}
-
-// Symptoms in more than 14 diseases add almost no discriminative information
-const TOO_GENERIC_THRESHOLD = 14;
-
-// Prefer symptoms appearing in 1-6 diseases (most discriminating)
-const HIGH_VALUE_MAX = 6;
-
-// Dynamic question limits
-const MIN_Q_FOR_EARLY_EXIT  = 8;   // must ask at least this many before early stop
-const DEFAULT_TARGET_Q      = 15;  // target question count
-const MAX_Q                 = 20;  // hard ceiling
-const EARLY_EXIT_GAP        = 0.40; // top disease must lead second by >=40% of its score
-
-// Best triage opener: symptom closest to appearing in half the diseases
-// Pre-computed: loss_of_appetite appears in 10/22 diseases (closest to 11)
-const TRIAGE_OPENER_ID = (() => {
-  const half = TOTAL_DISEASES / 2;
-  let best = "loss_of_appetite";
-  let bestDiff = Infinity;
-  for (const [sym, count] of Object.entries(SYMPTOM_DISEASE_COUNT)) {
-    if (count > TOO_GENERIC_THRESHOLD) continue;
-    const diff = Math.abs(count - half);
-    if (diff < bestDiff) { bestDiff = diff; best = sym; }
-  }
-  return best;
-})();
-
-/**
- * scoreDisease — information-gain weighted scoring
- *
- * For each symptom in the disease's profile:
- *   YES answer -> +weight (specific symptoms reward more)
- *   NO  answer -> -weight * 0.5 (penalise proportionally but softer)
- *
- * Symptoms not in the disease profile but answered YES contribute a flat
- * small negative to distinguish diseases that don't share the symptom.
- */
 function scoreDisease(disease, answers) {
-  const syms = new Set(DISEASE_SYMPTOM_MAP[disease] || []);
   let score = 0;
-
-  for (const [symptomId, val] of Object.entries(answers)) {
-    const w = symptomWeight(symptomId);
-    if (syms.has(symptomId)) {
-      if (val === true)  score += w;
-      if (val === false) score -= w * 0.5;
-    } else {
-      // Symptom not associated with this disease but patient has it
-      if (val === true)  score -= w * 0.3;
-    }
+  for (const s of DISEASE_SYMPTOM_MAP[disease] || []) {
+    if (answers[s] === true)  score += 3;
+    if (answers[s] === false) score -= 1;
   }
   return score;
 }
 
-/**
- * getRankedDiseases — returns all diseases sorted by score descending
- */
-function getRankedDiseases(answers) {
-  return Object.keys(DISEASE_SYMPTOM_MAP)
-    .map((d) => ({ d, sc: scoreDisease(d, answers) }))
-    .sort((a, b) => b.sc - a.sc);
-}
-
-/**
- * computeCompletionConfidence — gap between rank-1 and rank-2 scores,
- * normalised to a 0-1 value. Exposed as completion_confidence.
- */
-function computeCompletionConfidence(answers, askedCount) {
-  if (askedCount < 2) return 0;
-  const ranked = getRankedDiseases(answers);
-  if (ranked.length < 2) return 1;
-
-  const top    = ranked[0].sc;
-  const second = ranked[1].sc;
-
-  // Avoid division by zero; score gap as a fraction of absolute top score
-  const range = Math.abs(top) + Math.abs(second) + 1e-9;
-  const gap   = (top - second) / range;
-  const rawConf = Math.min(1, Math.max(0, gap));
-
-  // Weight by how many questions have been asked (more questions = more reliable)
-  const questionFactor = Math.min(1, askedCount / DEFAULT_TARGET_Q);
-  return parseFloat((rawConf * 0.7 + questionFactor * 0.3).toFixed(4));
-}
-
-/**
- * shouldStopEarly — true if the top disease has pulled far enough ahead
- * and the minimum question count has been reached.
- */
-function shouldStopEarly(answers, askedCount) {
-  if (askedCount < MIN_Q_FOR_EARLY_EXIT) return false;
-  const ranked = getRankedDiseases(answers);
-  if (ranked.length < 2) return true;
-  const top    = ranked[0].sc;
-  const second = ranked[1].sc;
-  if (top <= 0) return false;
-  const gap = (top - second) / Math.abs(top);
-  return gap >= EARLY_EXIT_GAP;
-}
-
-/**
- * getNextQuestionOffline — selects the most informative unasked question
- *
- * Strategy:
- * 1. Rank all diseases by score.
- * 2. Take the top 4 candidate diseases.
- * 3. Collect their unanswered symptoms.
- * 4. Sort candidates by symptom discriminability:
- *    - Skip symptoms that appear in >14 diseases.
- *    - Prefer symptoms in 1-6 diseases (highest value).
- *    - Break ties by weight (higher = more specific).
- * 5. Return the best candidate.
- *
- * Also handles the triage opener on the very first question.
- */
 function getNextQuestionOffline(answers, asked) {
-  // First question: use computed triage opener
-  if (asked.length === 0) {
-    const q = Q_INDEX[TRIAGE_OPENER_ID];
-    return q || ALL_QUESTIONS[0];
-  }
+  const ranked = Object.keys(DISEASE_SYMPTOM_MAP)
+    .map((d) => ({ d, sc: scoreDisease(d, answers) }))
+    .sort((a, b) => b.sc - a.sc)
+    .slice(0, 6)
+    .map((x) => x.d);
 
-  const ranked = getRankedDiseases(answers);
-  const topDiseases = ranked.slice(0, 4).map((x) => x.d);
-
-  // Build a scored list of candidate questions
-  const candidateScores = {};
-
-  for (const disease of topDiseases) {
+  for (const disease of ranked) {
     for (const sym of DISEASE_SYMPTOM_MAP[disease] || []) {
-      if (asked.includes(sym)) continue;
-      const count = SYMPTOM_DISEASE_COUNT[sym] || 1;
-      if (count > TOO_GENERIC_THRESHOLD) continue; // skip non-discriminating symptoms
-
-      const w = TOTAL_DISEASES / count;
-      const isHighValue = count <= HIGH_VALUE_MAX;
-
-      // Score = weight, boosted for high-value symptoms
-      const candidateVal = isHighValue ? w * 2 : w;
-      if (!candidateScores[sym] || candidateVal > candidateScores[sym]) {
-        candidateScores[sym] = candidateVal;
+      if (!asked.includes(sym)) {
+        const q = Q_INDEX[sym];
+        if (q) return q;
       }
     }
   }
-
-  // Sort candidates by their discriminability score
-  const sortedCandidates = Object.entries(candidateScores)
-    .sort((a, b) => b[1] - a[1])
-    .map(([sym]) => sym);
-
-  for (const sym of sortedCandidates) {
-    const q = Q_INDEX[sym];
-    if (q) return q;
-  }
-
-  // Fallback: any unasked question not already excluded
-  const fallback = ALL_QUESTIONS.find(
-    (q) => !asked.includes(q.id) && (SYMPTOM_DISEASE_COUNT[q.id] || 1) <= TOO_GENERIC_THRESHOLD
-  );
-  if (fallback) return fallback;
-
-  // Last resort: any unasked question
   return ALL_QUESTIONS.find((q) => !asked.includes(q.id)) || null;
 }
 
-/**
- * predictOffline — uses weighted scores to produce the final prediction
- */
 function predictOffline(answers) {
   const sorted = Object.keys(DISEASE_SYMPTOM_MAP)
     .map((d) => {
       const syms = DISEASE_SYMPTOM_MAP[d] || [];
-      const yesCount = syms.filter((s) => answers[s] === true).length;
-      const sc = scoreDisease(d, answers);
-      const conf = Math.min(0.95, Math.max(0.35, yesCount / Math.max(syms.length, 1)));
-      return { d, sc, conf };
+      const yes  = syms.filter((s) => answers[s] === true).length;
+      return { d, sc: scoreDisease(d, answers), conf: Math.min(0.95, Math.max(0.35, yes / Math.max(syms.length, 1))) };
     })
     .sort((a, b) => b.sc - a.sc);
 
@@ -397,7 +233,7 @@ function predictOffline(answers) {
       safety:    risk === "High" ? "Do not wait — seek medical attention today." : "",
     },
     all_scores: Object.fromEntries(sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])),
-    method: "offline-weighted-scoring",
+    method: "offline-scoring",
   };
 }
 
@@ -502,9 +338,6 @@ const injectStyles = () => {
     .prog-track { height: 5px; background: var(--border-l); border-radius: 99px; overflow: hidden; }
     .prog-fill  { height: 100%; background: linear-gradient(90deg, #2dd4bf, var(--teal)); border-radius: 99px; transition: width 0.4s cubic-bezier(0.4,0,0.2,1); }
 
-    .conf-track { height: 3px; background: var(--border-l); border-radius: 99px; overflow: hidden; margin-top: 4px; }
-    .conf-fill  { height: 100%; background: linear-gradient(90deg, #f59e0b, #22c55e); border-radius: 99px; transition: width 0.6s cubic-bezier(0.4,0,0.2,1); }
-
     .avatar    { width: 38px; height: 38px; border-radius: 99px; background: var(--teal-xl); display: flex; align-items: center; justify-content: center; color: var(--teal); font-weight: 700; font-size: 14px; flex-shrink: 0; }
     .avatar-lg { width: 64px; height: 64px; font-size: 22px; background: linear-gradient(135deg, var(--teal-l), var(--teal-xl)); }
     .mx-auto   { margin-left: auto; margin-right: auto; }
@@ -600,11 +433,6 @@ const injectStyles = () => {
     .ans-no-icon  { background: var(--border); }
     .q-anim    { animation: qSlide 0.28s cubic-bezier(0.4,0,0.2,1); }
     @keyframes qSlide { from{opacity:0;transform:translateY(14px);} to{opacity:1;transform:none;} }
-
-    .conf-indicator { margin-top: 16px; width: 100%; max-width: 340px; }
-    .conf-label     { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
-    .conf-label-txt { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
-    .conf-label-pct { font-size: 10px; font-weight: 700; color: var(--teal); }
 
     .analyzing  { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); }
     .spin-ring  { width: 140px; height: 140px; margin-bottom: 28px; animation: spin-slow 3s linear infinite; }
@@ -971,21 +799,22 @@ function RecBubble({ icon, label, text, accent, bg }) {
 export default function App() {
   useEffect(() => { injectStyles(); }, []);
 
-  const [splash,           setSplash]           = useState(true);
-  const [splashFade,       setSplashFade]       = useState(false);
-  const [user,             setUser]             = useState(null);
-  const [page,             setPage]             = useState("home");
-  const [notif,            setNotif]            = useState("");
-  const [detailRec,        setDetailRec]        = useState(null);
-  const [assActive,        setAssActive]        = useState(false);
-  const [answers,          setAnswers]          = useState({});
-  const [asked,            setAsked]            = useState([]);
-  const [currentQ,         setCurrentQ]         = useState(null);
-  const [qIdx,             setQIdx]             = useState(0);
-  const [sessionId,        setSessionId]        = useState(null);
-  const [analyzing,        setAnalyzing]        = useState(false);
-  const [result,           setResult]           = useState(null);
-  const [completionConf,   setCompletionConf]   = useState(0);
+  const [splash,     setSplash]     = useState(true);
+  const [splashFade, setSplashFade] = useState(false);
+  const [user,       setUser]       = useState(null);
+  const [page,       setPage]       = useState("home");
+  const [notif,      setNotif]      = useState("");
+  const [detailRec,  setDetailRec]  = useState(null);
+  const [assActive,  setAssActive]  = useState(false);
+  const [answers,    setAnswers]    = useState({});
+  const [asked,      setAsked]      = useState([]);
+  const [currentQ,   setCurrentQ]   = useState(null);
+  const [qIdx,       setQIdx]       = useState(0);
+  const [sessionId,  setSessionId]  = useState(null);
+  const [analyzing,  setAnalyzing]  = useState(false);
+  const [result,     setResult]     = useState(null);
+
+  const MAX_Q = 15;
 
   const toast = useCallback((msg) => {
     setNotif(msg);
@@ -1016,20 +845,19 @@ export default function App() {
     setUser(null);
     setAssActive(false); setResult(null); setAnalyzing(false);
     setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0); setSessionId(null);
-    setCompletionConf(0);
     setPage("home");
     toast("Signed out successfully.");
   };
 
   const startAssessment = async () => {
     setAnswers({}); setAsked([]); setQIdx(0);
-    setResult(null); setAnalyzing(false); setSessionId(null); setCompletionConf(0);
-    let firstQ = Q_INDEX[TRIAGE_OPENER_ID] || ALL_QUESTIONS[0];
+    setResult(null); setAnalyzing(false); setSessionId(null);
+    let firstQ = ALL_QUESTIONS[0];
     let sid    = null;
     try {
       const data = await api.post("/symptoms/start", {});
       sid    = data.session_id;
-      firstQ = data.first_question || firstQ;
+      firstQ = data.first_question || ALL_QUESTIONS[0];
       setSessionId(sid);
     } catch { /* offline fallback */ }
     setCurrentQ(firstQ);
@@ -1042,52 +870,17 @@ export default function App() {
     const newAsked   = [...asked, currentQ.id];
     setAnswers(newAnswers);
     setAsked(newAsked);
-
-    // Update completion confidence after each answer
-    const conf = computeCompletionConfidence(newAnswers, newAsked.length);
-    setCompletionConf(conf);
-
-    // Check dynamic stop conditions (offline engine)
-    const earlyStop = shouldStopEarly(newAnswers, newAsked.length);
-    const hitCeiling = newAsked.length >= MAX_Q;
-
-    if (hitCeiling || (earlyStop && !sessionId)) {
-      finishAssessment(newAnswers);
-      return;
-    }
-
+    if (newAsked.length >= MAX_Q) { finishAssessment(newAnswers); return; }
     let next = null;
     if (sessionId) {
       try {
         const res = await api.post(`/symptoms/next?session_id=${sessionId}`, { question_id: currentQ.id, answer: val });
-        // Honour server-side completion signal
         if (res.completed) { finishAssessment(newAnswers); return; }
         next = res.next_question;
-        // Update confidence from server if provided
-        if (typeof res.completion_confidence === "number") {
-          setCompletionConf(res.completion_confidence);
-        }
-        // Check if server says we have enough questions (respect DEFAULT_TARGET_Q)
-        if (newAsked.length >= DEFAULT_TARGET_Q && earlyStop) {
-          finishAssessment(newAnswers);
-          return;
-        }
-      } catch {
-        // Server failed — fall back to offline engine
-        if (earlyStop || newAsked.length >= DEFAULT_TARGET_Q) {
-          finishAssessment(newAnswers);
-          return;
-        }
-        next = getNextQuestionOffline(newAnswers, newAsked);
-      }
+      } catch { next = getNextQuestionOffline(newAnswers, newAsked); }
     } else {
-      if (earlyStop || newAsked.length >= DEFAULT_TARGET_Q) {
-        finishAssessment(newAnswers);
-        return;
-      }
       next = getNextQuestionOffline(newAnswers, newAsked);
     }
-
     if (!next) { finishAssessment(newAnswers); return; }
     setCurrentQ(next);
     setQIdx(qIdx + 1);
@@ -1110,7 +903,6 @@ export default function App() {
   const resetAssessment = () => {
     setAssActive(false); setResult(null); setAnalyzing(false);
     setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0); setSessionId(null);
-    setCompletionConf(0);
     setPage("home");
   };
 
@@ -1130,17 +922,7 @@ export default function App() {
   if (!user) return <AuthScreen onLogin={login} toast={toast} />;
   if (analyzing) return <AnalyzingScreen />;
   if (page === "result" && result) return <ResultScreen result={result} onReset={resetAssessment} onNewCheck={startAssessment} />;
-  if (assActive && currentQ) return (
-    <QuestionScreen
-      question={currentQ}
-      qIdx={qIdx}
-      total={DEFAULT_TARGET_Q}
-      maxQ={MAX_Q}
-      onAnswer={handleAnswer}
-      onQuit={resetAssessment}
-      completionConf={completionConf}
-    />
-  );
+  if (assActive && currentQ) return <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />;
 
   const navItems = [
     { id: "home",       label: "Home",    icon: "home" },
@@ -1389,9 +1171,9 @@ function HomeScreen({ user, onStart, onNav }) {
 // ─────────────────────────────────────────────
 function AssessmentLanding({ onStart }) {
   const features = [
-    { icon: "activity", title: "Adaptive Questions",    desc: "Questions adapt dynamically based on your answers — the engine stops early when confident, and extends up to 20 questions when scores are close.", color: "#0d9488", bg: "#f0fdfa" },
-    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.",                                                                              color: "#3b82f6", bg: "#eff6ff" },
-    { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",                                                                                       color: "#8b5cf6", bg: "#f5f3ff" },
+    { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "#0d9488", bg: "#f0fdfa" },
+    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "#3b82f6", bg: "#eff6ff" },
+    { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",           color: "#8b5cf6", bg: "#f5f3ff" },
   ];
 
   return (
@@ -1451,11 +1233,9 @@ function AssessmentLanding({ onStart }) {
 // ─────────────────────────────────────────────
 // QUESTION SCREEN
 // ─────────────────────────────────────────────
-function QuestionScreen({ question, qIdx, total, maxQ, onAnswer, onQuit, completionConf }) {
+function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
   const [animKey, setAnimKey] = useState(0);
-  // Show progress as fraction of default target; cap visual at 100%
-  const progress = Math.min(100, (qIdx / total) * 100);
-  const confPct  = Math.round(completionConf * 100);
+  const progress = (qIdx / total) * 100;
 
   const answer = (val) => { setAnimKey((k) => k + 1); onAnswer(val); };
 
@@ -1465,13 +1245,8 @@ function QuestionScreen({ question, qIdx, total, maxQ, onAnswer, onQuit, complet
         <button className="q-close" onClick={onQuit}><Icon name="x" size={16} color="var(--muted)" /></button>
         <div style={{ flex: 1 }}>
           <div className="prog-track"><div className="prog-fill" style={{ width: `${progress}%` }} /></div>
-          {completionConf > 0.1 && (
-            <div className="conf-track">
-              <div className="conf-fill" style={{ width: `${confPct}%` }} />
-            </div>
-          )}
         </div>
-        <div className="q-counter">{qIdx + 1}/{maxQ}</div>
+        <div className="q-counter">{qIdx + 1}/{total}</div>
       </div>
       <div key={animKey} className="q-body q-anim">
         <div className="q-cat-pill">{question.category}</div>
@@ -1487,17 +1262,6 @@ function QuestionScreen({ question, qIdx, total, maxQ, onAnswer, onQuit, complet
             No
           </button>
         </div>
-        {completionConf > 0.15 && (
-          <div className="conf-indicator">
-            <div className="conf-label">
-              <span className="conf-label-txt">Diagnostic confidence</span>
-              <span className="conf-label-pct">{confPct}%</span>
-            </div>
-            <div className="conf-track" style={{ height: 4 }}>
-              <div className="conf-fill" style={{ width: `${confPct}%` }} />
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -1791,6 +1555,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
       </div>
 
       <div className="page-body">
+        {/* Identity card — hidden while editing */}
         {!editing && (
           <div className="card card-p text-c mb-3">
             <div className="avatar avatar-lg mx-auto mb-3">{(p.name || "P")[0].toUpperCase()}</div>
@@ -1807,6 +1572,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         )}
 
+        {/* Edit panel — only visible while editing */}
         {editing && (
           <div className="edit-panel mb-3">
             <div className="edit-panel-title">Edit Profile</div>
@@ -1836,6 +1602,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         )}
 
+        {/* Stats */}
         <div className="profile-stat-grid">
           <div className="ps-card">
             <div className="ps-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
@@ -1847,6 +1614,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         </div>
 
+        {/* Menu */}
         <div className="card card-p mb-3">
           <div className="menu-list">
             {menuItems.map((item) => (
@@ -1934,6 +1702,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
       </div>
 
       <div className="page-body">
+        {/* Account Security */}
         <div className="sec-section">
           <div className="sec-section-title">Account Security</div>
           <div className="card card-p">
@@ -2026,6 +1795,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
           </div>
         </div>
 
+        {/* Privacy */}
         <div className="sec-section">
           <div className="sec-section-title">Your Privacy</div>
           <div className="card card-p">
@@ -2043,6 +1813,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
           </div>
         </div>
 
+        {/* Danger Zone */}
         <div className="sec-section">
           <div className="sec-section-title">Danger Zone</div>
           <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
@@ -2075,16 +1846,16 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
 // ─────────────────────────────────────────────
 function AboutScreen({ onBack }) {
   const features = [
-    { icon: "activity",  color: "#0d9488", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment",  desc: "Questions adjust in real time based on your answers, stopping early when confident and extending when scores are close between two diseases." },
-    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Information-Gain Scoring",     desc: "Specific symptoms like blood in sputum or burning urination carry far higher weight than generic symptoms shared across many diseases." },
-    { icon: "shield",    color: "#8b5cf6", bg: "#f5f3ff",        title: "Risk Stratification",          desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
-    { icon: "heart",     color: "#ef4444", bg: "#fef2f2",        title: "AI-Powered Recommendations",   desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
-    { icon: "clipboard", color: "#f59e0b", bg: "#fffbeb",        title: "Assessment History",           desc: "All past results are stored securely so you and your care provider can track changes over time." },
-    { icon: "user",      color: "#22c55e", bg: "#f0fdf4",        title: "Built for West Africa",        desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
+    { icon: "activity",  color: "#0d9488", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers, no irrelevant questions, no wasted time." },
+    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset 22 tropical and common diseases." },
+    { icon: "shield",    color: "#8b5cf6", bg: "#f5f3ff",        title: "Risk Stratification",         desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
+    { icon: "heart",     color: "#ef4444", bg: "#fef2f2",        title: "AI-Powered Recommendations",  desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
+    { icon: "clipboard", color: "#f59e0b", bg: "#fffbeb",        title: "Assessment History",          desc: "All past results are stored securely so you and your care provider can track changes over time." },
+    { icon: "user",      color: "#22c55e", bg: "#f0fdf4",        title: "Built for West Africa",       desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
   ];
 
   const team = [
-    { initials: "OA", name: "Obed Mensah",          role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
+    { initials: "OA", name: "Obed Mensah",       role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
     { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping",    color: "#3b82f6", bg: "#eff6ff" },
     { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                color: "#8b5cf6", bg: "#f5f3ff" },
   ];
@@ -2127,7 +1898,7 @@ function AboutScreen({ onBack }) {
         </div>
 
         <div className="about-fact-grid mb-4">
-          {[{val:"22",lbl:"Diseases covered"},{val:"76",lbl:"Tracked symptoms"},{val:"20",lbl:"Max questions"},{val:"2",lbl:"ML algorithms"}].map((f) => (
+          {[{val:"22",lbl:"Diseases covered"},{val:"76",lbl:"Tracked symptoms"},{val:"15",lbl:"Max questions"},{val:"2",lbl:"ML algorithms"}].map((f) => (
             <div key={f.lbl} className="about-fact">
               <div className="about-fact-val">{f.val}</div>
               <div className="about-fact-lbl">{f.lbl}</div>
