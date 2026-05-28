@@ -1111,7 +1111,7 @@ function HomeScreen({ user, onStart, onNav }) {
 
       <div className="hero-card">
         <div className="hero-bg-icon"><Icon name="heart" size={110} color="#fff" /></div>
-        <div className="hero-eyebrow">AI-Powered Assessment</div>
+        <div className="hero-eyebrow">Guided Clinical Assessment</div>
         <div className="hero-headline">Check your symptoms in under 2 minutes</div>
         <button className="hero-btn" onClick={onStart}>
           Start Assessment <Icon name="chevR" size={14} color="var(--teal-d)" />
@@ -1883,7 +1883,7 @@ function AboutScreen({ onBack }) {
           <div className="about-hero-eyebrow">Project · KNUST 2026</div>
           <div className="about-hero-title">TropiCare</div>
           <div className="about-hero-sub">
-            An AI-powered symptom checker built to help patients and clinicians identify tropical diseases
+            An AI-guided symptom checker built to help patients and clinicians identify tropical diseases
             faster with clear risk levels and personalised recommendations.
           </div>
         </div>
