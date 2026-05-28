@@ -1025,7 +1025,7 @@ function AuthScreen({ onLogin, toast }) {
         <div className="auth-logo">
           <div className="auth-icon"><MedicalHeartLarge size={34} color="#fff" /></div>
           <div className="auth-title">TropiCare</div>
-          <div className="auth-hint">AI-guided symptom assessment for tropical diseases</div>
+          <div className="auth-hint">Guided symptom assessment for tropical diseases</div>
         </div>
         <div className="card card-p" style={{ boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
           <div className="tabs mb-3">
