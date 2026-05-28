@@ -1,5 +1,5 @@
 """
-TropiCare API — main.py
+TropiCare API
 """
 
 from __future__ import annotations
@@ -49,7 +49,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# SQLAlchemy
+# SQLAlchemy (sync — kept for full backward compatibility;
+# async layer wraps it via run_in_executor to avoid asyncpg dependency issues
+# while still freeing the event loop)
 from sqlalchemy import (
     Boolean,
     Column,
@@ -101,7 +103,7 @@ except ImportError:
 load_dotenv()
 
 # ─────────────────────────────────────────────────────────────
-# CONFIG
+# CONFIG — Pydantic Settings
 # ─────────────────────────────────────────────────────────────
 
 class Settings(BaseSettings):
@@ -190,7 +192,7 @@ SESSION_CLEANUP_RUNS = Counter("tropicare_session_cleanup_runs_total", "Session 
 # REDIS CLIENT
 # ─────────────────────────────────────────────────────────────
 
-_redis: Optional[Any] = None
+_redis: Optional[Any] = None   # aioredis.Redis or None
 
 
 async def get_redis() -> Optional[Any]:
@@ -253,6 +255,7 @@ async def cache_delete(key: str) -> None:
 
 _connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 
+# Pool settings applied only for non-SQLite backends
 _pool_kwargs: dict = {}
 if not settings.database_url.startswith("sqlite"):
     _pool_kwargs = {
@@ -269,7 +272,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-
+# Track pool usage for Prometheus (only meaningful for non-SQLite)
 @event.listens_for(engine, "checkout")
 def _on_checkout(dbapi_conn, conn_record, conn_proxy):
     pool = engine.pool
@@ -278,7 +281,7 @@ def _on_checkout(dbapi_conn, conn_record, conn_proxy):
 
 
 # ─────────────────────────────────────────────────────────────
-# MODELS — DB (schema unchanged)
+# MODELS — DB (unchanged schema)
 # ─────────────────────────────────────────────────────────────
 
 class UserModel(Base):
@@ -311,6 +314,7 @@ class DiagnosisModel(Base):
     ml_scores       = Column(Text, nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
+    # Composite indexes for common query patterns
     __table_args__ = (
         Index("ix_diagnoses_user_created", "user_id", "created_at"),
         Index("ix_diagnoses_user_risk",    "user_id", "risk"),
@@ -358,6 +362,8 @@ def get_db():
         db.close()
 
 
+# Async wrapper — runs sync DB operations in the default thread pool
+# so the event loop is not blocked, without requiring asyncpg/aiosqlite.
 async def run_db(func, *args, **kwargs):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
@@ -367,12 +373,13 @@ async def run_db(func, *args, **kwargs):
 # ML MODELS + HOT-RELOAD
 # ─────────────────────────────────────────────────────────────
 
-LOADED_MODELS: Dict[str, Any]       = {}
-PREVIOUS_MODELS: Dict[str, Any]     = {}
-ML_STARTUP_COMPLETE: asyncio.Event  = asyncio.Event()
+LOADED_MODELS: Dict[str, Any]          = {}
+PREVIOUS_MODELS: Dict[str, Any]        = {}   # fallback on bad reload
+ML_STARTUP_COMPLETE: asyncio.Event     = asyncio.Event()
 
 
 def _load_single_model(fname: str) -> None:
+    """Load or reload one .pkl file."""
     key = fname.replace(".pkl", "")
     path = os.path.join(MODELS_DIR, fname)
     try:
@@ -382,6 +389,7 @@ def _load_single_model(fname: str) -> None:
         logger.info({"event": "model_loaded", "file": fname})
     except Exception as e:
         logger.error({"event": "model_load_failed", "file": fname, "error": str(e)})
+        # Roll back to previous if available
         if key in PREVIOUS_MODELS and PREVIOUS_MODELS[key] is not None:
             LOADED_MODELS[key] = PREVIOUS_MODELS[key]
             logger.warning({"event": "model_rollback", "key": key})
@@ -404,6 +412,8 @@ def load_ml_models() -> None:
 
 
 class _ModelFileHandler(FileSystemEventHandler):
+    """Watchdog handler — hot-reload changed .pkl files."""
+
     def on_modified(self, event):
         if isinstance(event, FileModifiedEvent) and event.src_path.endswith(".pkl"):
             fname = os.path.basename(event.src_path)
@@ -432,7 +442,7 @@ def stop_model_watcher() -> None:
 
 
 # ─────────────────────────────────────────────────────────────
-# DISEASE DATA (unchanged schema)
+# DISEASE DATA (unchanged)
 # ─────────────────────────────────────────────────────────────
 
 RISK_MAP: Dict[str, str] = {
@@ -583,185 +593,6 @@ DEFAULT_RECS: Dict[str, Dict[str, str]] = {
 }
 
 # ─────────────────────────────────────────────────────────────
-# ADAPTIVE ENGINE v2 — INFORMATION-GAIN WEIGHTS
-# Mirrors App.jsx exactly.
-# ─────────────────────────────────────────────────────────────
-
-# Pre-compute how many diseases each symptom appears in
-_SYMPTOM_DISEASE_COUNT: Dict[str, int] = {}
-for _syms in DISEASE_SYMPTOM_MAP.values():
-    for _s in _syms:
-        _SYMPTOM_DISEASE_COUNT[_s] = _SYMPTOM_DISEASE_COUNT.get(_s, 0) + 1
-
-_TOTAL_DISEASES: int = len(DISEASE_SYMPTOM_MAP)
-
-# Thresholds — must match App.jsx constants
-_TOO_GENERIC_THRESHOLD: int   = 14   # symptoms in >14 diseases skipped
-_HIGH_VALUE_MAX: int          = 6    # symptoms in <=6 diseases get bonus weight
-_MIN_Q_FOR_EARLY_EXIT: int    = 8    # minimum questions before early stop
-_DEFAULT_TARGET_Q: int        = 15   # default target question count
-_MAX_Q: int                   = 20   # hard ceiling
-_EARLY_EXIT_GAP: float        = 0.40 # score gap required for early stop
-
-# Pre-compute triage opener: symptom closest to appearing in half the diseases
-_half = _TOTAL_DISEASES / 2.0
-_TRIAGE_OPENER_ID: str = "loss_of_appetite"
-_best_diff = float("inf")
-for _sym, _cnt in _SYMPTOM_DISEASE_COUNT.items():
-    if _cnt > _TOO_GENERIC_THRESHOLD:
-        continue
-    _diff = abs(_cnt - _half)
-    if _diff < _best_diff:
-        _best_diff = _diff
-        _TRIAGE_OPENER_ID = _sym
-
-
-def _symptom_weight(symptom_id: str) -> float:
-    """Inverse-frequency weight. Symptom in 1 disease -> 22.0; in 15 -> ~1.47."""
-    count = _SYMPTOM_DISEASE_COUNT.get(symptom_id, 1)
-    return _TOTAL_DISEASES / count
-
-
-def score_disease(disease: str, answers: dict) -> float:
-    """
-    Information-gain weighted scoring — matches scoreDisease() in App.jsx.
-
-    For each symptom in the disease profile:
-      YES  -> +weight
-      NO   -> -weight * 0.5
-
-    For symptoms NOT in the disease profile but answered YES:
-      YES  -> -weight * 0.3
-    """
-    syms = set(DISEASE_SYMPTOM_MAP.get(disease, []))
-    score = 0.0
-
-    for symptom_id, val in answers.items():
-        w = _symptom_weight(symptom_id)
-        if symptom_id in syms:
-            if val is True:
-                score += w
-            elif val is False:
-                score -= w * 0.5
-        else:
-            if val is True:
-                score -= w * 0.3
-
-    return score
-
-
-def _get_ranked_diseases(answers: dict) -> List[tuple]:
-    """Return all diseases sorted by score descending as (disease, score) tuples."""
-    ranked = [(d, score_disease(d, answers)) for d in DISEASE_SYMPTOM_MAP]
-    ranked.sort(key=lambda x: x[1], reverse=True)
-    return ranked
-
-
-def compute_completion_confidence(answers: dict, asked_count: int) -> float:
-    """
-    Gap between rank-1 and rank-2 scores, normalised to 0-1.
-    Matches computeCompletionConfidence() in App.jsx exactly.
-    """
-    if asked_count < 2:
-        return 0.0
-
-    ranked = _get_ranked_diseases(answers)
-    if len(ranked) < 2:
-        return 1.0
-
-    top    = ranked[0][1]
-    second = ranked[1][1]
-
-    range_  = abs(top) + abs(second) + 1e-9
-    gap     = (top - second) / range_
-    raw_conf = min(1.0, max(0.0, gap))
-
-    question_factor = min(1.0, asked_count / _DEFAULT_TARGET_Q)
-    return round(raw_conf * 0.7 + question_factor * 0.3, 4)
-
-
-def should_stop_early(answers: dict, asked_count: int) -> bool:
-    """
-    True if the top disease has pulled far enough ahead and the minimum
-    question count has been reached. Matches shouldStopEarly() in App.jsx.
-    """
-    if asked_count < _MIN_Q_FOR_EARLY_EXIT:
-        return False
-
-    ranked = _get_ranked_diseases(answers)
-    if len(ranked) < 2:
-        return True
-
-    top    = ranked[0][1]
-    second = ranked[1][1]
-
-    if top <= 0:
-        return False
-
-    gap = (top - second) / abs(top)
-    return gap >= _EARLY_EXIT_GAP
-
-
-def get_next_question(answers: dict, asked: list) -> Optional[dict]:
-    """
-    Selects the most informative unasked question.
-    Matches getNextQuestionOffline() in App.jsx exactly.
-
-    Strategy:
-    1. On the first question, return the pre-computed triage opener.
-    2. Rank all diseases by score; take the top 4.
-    3. Collect their unanswered symptoms, scored by discriminability.
-       - Skip symptoms appearing in >14 diseases.
-       - Double the score for symptoms in <=6 diseases.
-    4. Return the best candidate.
-    5. Fallback: any unasked, non-generic question.
-    6. Last resort: any unasked question.
-    """
-    # First question: triage opener
-    if len(asked) == 0:
-        q = Q_INDEX.get(_TRIAGE_OPENER_ID)
-        return q if q else ALL_QUESTIONS[0]
-
-    ranked      = _get_ranked_diseases(answers)
-    top_diseases = [d for d, _ in ranked[:4]]
-
-    # Build candidate scores
-    candidate_scores: Dict[str, float] = {}
-    for disease in top_diseases:
-        for sym in DISEASE_SYMPTOM_MAP.get(disease, []):
-            if sym in asked:
-                continue
-            count = _SYMPTOM_DISEASE_COUNT.get(sym, 1)
-            if count > _TOO_GENERIC_THRESHOLD:
-                continue
-            w            = _TOTAL_DISEASES / count
-            is_high_value = count <= _HIGH_VALUE_MAX
-            val          = w * 2 if is_high_value else w
-            if sym not in candidate_scores or val > candidate_scores[sym]:
-                candidate_scores[sym] = val
-
-    # Sort by discriminability score descending
-    sorted_candidates = sorted(candidate_scores, key=lambda s: candidate_scores[s], reverse=True)
-
-    for sym in sorted_candidates:
-        q = Q_INDEX.get(sym)
-        if q:
-            return q
-
-    # Fallback: any unasked non-generic question
-    for q in ALL_QUESTIONS:
-        if q["id"] not in asked and _SYMPTOM_DISEASE_COUNT.get(q["id"], 1) <= _TOO_GENERIC_THRESHOLD:
-            return q
-
-    # Last resort
-    for q in ALL_QUESTIONS:
-        if q["id"] not in asked:
-            return q
-
-    return None
-
-
-# ─────────────────────────────────────────────────────────────
 # CIRCUIT BREAKER — OpenRouter
 # ─────────────────────────────────────────────────────────────
 
@@ -779,8 +610,32 @@ _openrouter_cb = pybreaker.CircuitBreaker(
 )
 
 # ─────────────────────────────────────────────────────────────
-# ML PREDICTION
+# ADAPTIVE ENGINE (unchanged logic)
 # ─────────────────────────────────────────────────────────────
+
+def score_disease(disease: str, answers: dict) -> float:
+    score = 0.0
+    for symptom in DISEASE_SYMPTOM_MAP.get(disease, []):
+        if answers.get(symptom) is True:
+            score += 3.0
+        elif answers.get(symptom) is False:
+            score -= 1.0
+    return score
+
+
+def get_next_question(answers: dict, asked: list) -> Optional[dict]:
+    ranked = sorted(DISEASE_SYMPTOM_MAP.keys(), key=lambda d: score_disease(d, answers), reverse=True)
+    for disease in ranked[:6]:
+        for sym in DISEASE_SYMPTOM_MAP[disease]:
+            if sym not in asked:
+                q = Q_INDEX.get(sym)
+                if q:
+                    return q
+    for q in ALL_QUESTIONS:
+        if q["id"] not in asked:
+            return q
+    return None
+
 
 def predict_with_ml(answers: dict) -> dict:
     ensemble = LOADED_MODELS.get("sctd_ensemble")
@@ -812,16 +667,16 @@ def predict_with_ml(answers: dict) -> dict:
         except Exception as e:
             logger.warning({"event": "ml_predict_failed", "error": str(e)})
 
-    # Fallback: weighted scoring engine (mirrors predictOffline in App.jsx)
-    ranked = _get_ranked_diseases(answers)
-    best_disease = ranked[0][0]
+    scores        = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    best_disease, _ = sorted_scores[0]
 
-    syms       = DISEASE_SYMPTOM_MAP.get(best_disease, [])
-    yes_count  = sum(1 for s in syms if answers.get(s) is True)
+    syms      = DISEASE_SYMPTOM_MAP.get(best_disease, [])
+    yes_count = sum(1 for s in syms if answers.get(s) is True)
     confidence = min(0.95, max(0.35, yes_count / max(len(syms), 1)))
 
     all_scores: Dict[str, float] = {}
-    for d, _ in ranked[:8]:
+    for d, _ in sorted_scores[:8]:
         yc = sum(1 for s in DISEASE_SYMPTOM_MAP.get(d, []) if answers.get(s) is True)
         tc = max(len(DISEASE_SYMPTOM_MAP.get(d, [])), 1)
         all_scores[d] = round(min(0.95, max(0.01, yc / tc)), 4)
@@ -835,15 +690,16 @@ def predict_with_ml(answers: dict) -> dict:
     }
 
 # ─────────────────────────────────────────────────────────────
-# OPENROUTER AI — circuit breaker + retry + cache fallback
+# OPENROUTER AI — with circuit breaker + retry + cache fallback
 # ─────────────────────────────────────────────────────────────
 
-_RETRY_BASE  = 1.0
-_RETRY_MAX   = 10.0
-_RETRY_TIMES = 2
+_RETRY_BASE   = 1.0
+_RETRY_MAX    = 10.0
+_RETRY_TIMES  = 2
 
 
 async def _do_openrouter_request(headers: dict, payload: dict) -> Optional[dict]:
+    """Single HTTP attempt — wrapped by circuit breaker."""
     async with aiohttp.ClientSession() as session:
         async with session.post(
             settings.openrouter_url,
@@ -859,6 +715,7 @@ async def _do_openrouter_request(headers: dict, payload: dict) -> Optional[dict]
                     resp.request_info, resp.history, status=resp.status
                 )
             if resp.status != 200:
+                body = await resp.text()
                 logger.warning({"event": "openrouter_non200", "status": resp.status})
                 return None
             data   = await resp.json()
@@ -881,6 +738,7 @@ async def call_openrouter(
         logger.info({"event": "openrouter_skip", "reason": "no api key"})
         return None
 
+    # Check Redis cache first (24h TTL per disease)
     cache_key = f"ai_response:{disease}"
     if settings.enable_ai_cache:
         cached = await cache_get(cache_key, key_type="ai_response")
@@ -943,7 +801,15 @@ Rules:
     last_error: Optional[Exception] = None
     for attempt in range(_RETRY_TIMES + 1):
         try:
-            t0     = time.monotonic()
+            t0 = time.monotonic()
+            result = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: asyncio.run(_do_openrouter_request(headers, payload))
+                ),
+                timeout=15,
+            )
+            # Use direct async call instead
             result = await _do_openrouter_request(headers, payload)
             OPENROUTER_LATENCY.observe(time.monotonic() - t0)
             if result and settings.enable_ai_cache:
@@ -952,6 +818,7 @@ Rules:
         except pybreaker.CircuitBreakerError:
             OPENROUTER_ERRORS.labels(reason="circuit_open").inc()
             logger.warning({"event": "openrouter_circuit_open"})
+            # Return cached fallback if available
             fallback = await cache_get(cache_key, key_type="ai_fallback")
             if fallback:
                 try:
@@ -1121,32 +988,31 @@ _shutdown_event: asyncio.Event = asyncio.Event()
 async def lifespan(app: FastAPI):
     global _aiohttp_session
 
+    # Startup
     Base.metadata.create_all(bind=engine)
     load_ml_models()
     start_model_watcher()
     _aiohttp_session = aiohttp.ClientSession()
+
+    # Init Redis (best-effort)
     await get_redis()
+
+    # Scheduler
     _scheduler.add_job(_cleanup_stale_sessions, "interval", hours=1, id="session_cleanup")
     _scheduler.start()
 
     model_keys = list(LOADED_MODELS.keys()) or ["none — using scoring engine"]
-    logger.info({
-        "event":        "startup",
-        "ml_models":    model_keys,
-        "openrouter":   bool(settings.openrouter_api_key),
-        "triage_opener": _TRIAGE_OPENER_ID,
-        "max_q":        _MAX_Q,
-        "default_target_q": _DEFAULT_TARGET_Q,
-        "early_exit_gap":   _EARLY_EXIT_GAP,
-    })
+    logger.info({"event": "startup", "ml_models": model_keys, "openrouter": bool(settings.openrouter_api_key)})
 
     yield
 
+    # Shutdown — wait up to 30 seconds for pending requests
     logger.info({"event": "shutdown_initiated"})
     deadline = asyncio.get_event_loop().time() + 30
     while _pending_requests > 0 and asyncio.get_event_loop().time() < deadline:
         await asyncio.sleep(0.5)
 
+    # Close resources
     _scheduler.shutdown(wait=False)
     if _aiohttp_session:
         await _aiohttp_session.close()
@@ -1167,9 +1033,14 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Rate limit error handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# GZip compression (responses > 1KB)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins_list,
@@ -1177,6 +1048,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Prometheus instrumentation
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 # ─────────────────────────────────────────────────────────────
@@ -1185,8 +1058,8 @@ Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
-
 def _sanitize(value: str) -> str:
+    """Strip control characters from string input."""
     return _CONTROL_CHAR_RE.sub("", value)
 
 
@@ -1194,9 +1067,11 @@ def _sanitize(value: str) -> str:
 async def request_middleware(request: Request, call_next):
     global _pending_requests
 
+    # Request ID
     req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     request.state.request_id = req_id
 
+    # Body size limit
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > settings.max_body_size:
         return JSONResponse(
@@ -1205,6 +1080,7 @@ async def request_middleware(request: Request, call_next):
             headers={"X-Request-ID": req_id},
         )
 
+    # Content-Type enforcement for mutating methods
     if request.method in ("POST", "PUT", "PATCH"):
         ct = request.headers.get("content-type", "")
         if ct and "application/json" not in ct and "multipart" not in ct:
@@ -1217,6 +1093,7 @@ async def request_middleware(request: Request, call_next):
     start = time.monotonic()
     _pending_requests += 1
 
+    # Extract user_id from JWT if present (best-effort, no failure)
     user_id_log: Optional[int] = None
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
@@ -1241,14 +1118,19 @@ async def request_middleware(request: Request, call_next):
 
     duration_ms = round((time.monotonic() - start) * 1000, 2)
 
+    # Security headers
     response.headers["X-Request-ID"]             = req_id
     response.headers["X-Content-Type-Options"]   = "nosniff"
     response.headers["X-Frame-Options"]           = "DENY"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Content-Security-Policy"]   = "default-src 'none'"
 
+    # No-store for authenticated endpoints
     if user_id_log:
         response.headers["Cache-Control"] = "no-store"
+
+    # API versioning support header (v2 would set this)
+    # response.headers["X-API-Deprecated"] = "true"   # enable when v2 ships
 
     logger.info({
         "event":       "request",
@@ -1267,6 +1149,7 @@ async def request_middleware(request: Request, call_next):
 # ─────────────────────────────────────────────────────────────
 
 async def _check_password_rate_limit(email: str) -> None:
+    """Allow max 3 password attempts per email per minute."""
     r = await get_redis()
     if r is None:
         return
@@ -1292,41 +1175,41 @@ async def _check_password_rate_limit(email: str) -> None:
 
 @app.get("/api/v1/health")
 async def health():
+    """Original health endpoint — preserved for backward compat."""
     return {
         "status":             "healthy",
         "timestamp":          datetime.utcnow().isoformat(),
         "ml_models":          list(LOADED_MODELS.keys()),
         "openrouter_enabled": bool(settings.openrouter_api_key),
         "openrouter_model":   settings.openrouter_model,
-        "engine_version":     "v2",
-        "triage_opener":      _TRIAGE_OPENER_ID,
-        "max_q":              _MAX_Q,
-        "default_target_q":   _DEFAULT_TARGET_Q,
     }
 
 
 @app.get("/health/live")
 async def health_live():
+    """Liveness — process is up, no dependency checks."""
     return {"status": "alive", "timestamp": datetime.utcnow().isoformat()}
 
 
 @app.get("/health/ready")
 async def health_ready():
+    """Readiness — checks DB, Redis, and OpenRouter reachability."""
     checks: Dict[str, str] = {}
 
+    # DB check
     try:
-        import sqlalchemy
-        await asyncio.wait_for(
-            asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: SessionLocal().execute(sqlalchemy.text("SELECT 1"))
-            ),
-            timeout=5,
-        )
+        async def _db_ping():
+            db = SessionLocal()
+            try:
+                db.execute(__import__("sqlalchemy").text("SELECT 1"))
+            finally:
+                db.close()
+        await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, lambda: SessionLocal().execute(__import__("sqlalchemy").text("SELECT 1"))), timeout=5)
         checks["db"] = "ok"
     except Exception as e:
         checks["db"] = f"fail: {e}"
 
+    # Redis check
     try:
         r = await asyncio.wait_for(get_redis(), timeout=5)
         if r:
@@ -1337,6 +1220,7 @@ async def health_ready():
     except Exception as e:
         checks["redis"] = f"fail: {e}"
 
+    # OpenRouter reachability (HEAD-like check)
     if settings.openrouter_api_key:
         try:
             async with aiohttp.ClientSession() as s:
@@ -1348,14 +1232,16 @@ async def health_ready():
         checks["openrouter"] = "not_configured"
 
     all_ok = all(v in ("ok", "disabled", "not_configured") for v in checks.values())
+    status_code = 200 if all_ok else 503
     return JSONResponse(
-        status_code=200 if all_ok else 503,
+        status_code=status_code,
         content={"status": "ready" if all_ok else "not_ready", "checks": checks},
     )
 
 
 @app.get("/health/startup")
 async def health_startup():
+    """Startup probe — returns 200 only when ML models are fully loaded."""
     if ML_STARTUP_COMPLETE.is_set():
         return {"status": "started", "models": list(LOADED_MODELS.keys())}
     return JSONResponse(status_code=503, content={"status": "loading"})
@@ -1419,23 +1305,12 @@ async def start_assessment(
     )
     db.add(session)
     db.commit()
-
     # Cache session state in Redis to reduce DB round-trips
-    await cache_set(
-        f"session:{sid}",
-        _dump_json({"answers": {}, "asked": [], "completed": False}),
-        ttl=3600,
-    )
-
-    # Return the dynamic triage opener instead of a hardcoded first question
-    first_q = Q_INDEX.get(_TRIAGE_OPENER_ID, ALL_QUESTIONS[0])
-
+    await cache_set(f"session:{sid}", _dump_json({"answers": {}, "asked": [], "completed": False}), ttl=3600)
     return {
         "session_id":      sid,
-        "first_question":  first_q,
-        "total_questions": _DEFAULT_TARGET_Q,
-        "max_questions":   _MAX_Q,
-        "engine_version":  "v2",
+        "first_question":  ALL_QUESTIONS[0],
+        "total_questions": 15,
     }
 
 
@@ -1461,7 +1336,6 @@ async def next_question(
     if req.question_id not in Q_INDEX:
         raise HTTPException(status_code=400, detail=f"Unknown question_id: {req.question_id}")
 
-    # Record the answer
     answers[req.question_id] = req.answer
     if req.question_id not in asked:
         asked.append(req.question_id)
@@ -1470,62 +1344,25 @@ async def next_question(
     s.asked_questions = _dump_json(asked)
     db.commit()
 
-    # Update Redis cache
+    # Update cache
     await cache_set(
         f"session:{session_id}",
         _dump_json({"answers": answers, "asked": asked, "completed": s.completed}),
         ttl=3600,
     )
 
-    # Compute current confidence gap to expose to the frontend
-    conf = compute_completion_confidence(answers, len(asked))
-
-    # Hard ceiling
-    if len(asked) >= _MAX_Q:
+    if len(asked) >= 15:
         s.completed = True
         db.commit()
-        return {
-            "completed":             True,
-            "completion_confidence": conf,
-        }
+        return {"completed": True}
 
-    # Dynamic early stop: confident enough AND past minimum question count
-    if should_stop_early(answers, len(asked)):
-        s.completed = True
-        db.commit()
-        return {
-            "completed":             True,
-            "completion_confidence": conf,
-        }
-
-    # Default target reached — complete unless confidence is still low
-    # (This mirrors the frontend's earlyStop || newAsked.length >= DEFAULT_TARGET_Q path)
-    if len(asked) >= _DEFAULT_TARGET_Q:
-        s.completed = True
-        db.commit()
-        return {
-            "completed":             True,
-            "completion_confidence": conf,
-        }
-
-    # Get the next most discriminating question
     next_q = get_next_question(answers, asked)
     if not next_q:
         s.completed = True
         db.commit()
-        return {
-            "completed":             True,
-            "completion_confidence": conf,
-        }
+        return {"completed": True}
 
-    return {
-        "completed":             False,
-        "next_question":         next_q,
-        "completion_confidence": conf,
-        "asked_count":           len(asked),
-        "max_questions":         _MAX_Q,
-        "default_target":        _DEFAULT_TARGET_Q,
-    }
+    return {"completed": False, "next_question": next_q}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1591,11 +1428,7 @@ async def analyze(
     db.commit()
     db.refresh(diag)
 
-    # Mark session completed
-    s.completed = True
-    db.commit()
-
-    # Invalidate user profile cache
+    # Invalidate user profile cache (diagnosis count changed)
     await cache_delete(f"profile:{user_id}")
 
     response_body = {
@@ -1615,6 +1448,7 @@ async def analyze(
         "ai_used": ai_result is not None,
     }
 
+    # Store idempotency response (24h)
     if idem_key:
         await cache_set(f"idem:{idem_key}", json.dumps(response_body), ttl=86400)
 
@@ -1627,18 +1461,27 @@ async def analyze(
 @app.get("/api/v1/patient/history")
 async def get_history(
     request: Request,
-    cursor: Optional[int] = None,
+    cursor: Optional[int] = None,   # cursor = last seen diagnosis id
     limit: int = 20,
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
+    """
+    Cursor-based pagination. Pass ?cursor=<id>&limit=20.
+    Falls back to returning up to 100 records when no cursor provided
+    (backward compatible — original frontend used no cursor param).
+    """
     limit = min(limit, 100)
-    query = db.query(DiagnosisModel).filter(DiagnosisModel.user_id == user_id)
+    query = (
+        db.query(DiagnosisModel)
+        .filter(DiagnosisModel.user_id == user_id)
+    )
     if cursor is not None:
         query = query.filter(DiagnosisModel.id < cursor)
 
     rows = query.order_by(DiagnosisModel.id.desc()).limit(limit).all()
 
+    # Eager load user in one query to avoid N+1
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
     patient_name = user.name if user else "Unknown"
 
@@ -1728,7 +1571,7 @@ async def get_profile(
         "assessment_count": count,
         "high_risk_count":  high,
     }
-    await cache_set(cache_key, json.dumps(result), ttl=300)
+    await cache_set(cache_key, json.dumps(result), ttl=300)  # 5-min TTL
     return result
 
 
@@ -1796,7 +1639,7 @@ async def admin_stats(db: Session = Depends(get_db)):
         "medium_risk":     db.query(DiagnosisModel).filter(DiagnosisModel.risk == "Medium").count(),
         "low_risk":        db.query(DiagnosisModel).filter(DiagnosisModel.risk == "Low").count(),
     }
-    await cache_set(cache_key, json.dumps(result), ttl=30)
+    await cache_set(cache_key, json.dumps(result), ttl=30)  # 30-sec TTL
     return result
 
 
@@ -1852,6 +1695,7 @@ async def delete_record(diag_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/v1/admin/models/reload")
 async def reload_models():
+    """Manual hot-reload of all .pkl models."""
     if not JOBLIB_AVAILABLE:
         raise HTTPException(status_code=501, detail="joblib not available")
     pkl_files = [f for f in os.listdir(MODELS_DIR) if f.endswith(".pkl")]
@@ -1864,6 +1708,20 @@ async def reload_models():
 
 
 # ─────────────────────────────────────────────────────────────
+# ROUTES — API v1 Router prefix config (future v2 support)
+# ─────────────────────────────────────────────────────────────
+# All existing routes are under /api/v1/.
+# To add /api/v2/ without breaking v1, use APIRouter:
+#
+#   from fastapi import APIRouter
+#   v2_router = APIRouter(prefix="/api/v2")
+#   @v2_router.get("/symptoms/start") ...
+#   app.include_router(v2_router)
+#
+# When v2 goes live, set response header:
+#   X-API-Deprecated: true   on v1 endpoints (see middleware).
+
+# ─────────────────────────────────────────────────────────────
 # ENTRYPOINT
 # ─────────────────────────────────────────────────────────────
 if __name__ == "__main__":
@@ -1872,5 +1730,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=settings.port,
-        reload=False,
+        reload=False,          # Use watchdog for model reloads; uvicorn reload off in prod
     )
