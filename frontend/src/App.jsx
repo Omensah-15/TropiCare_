@@ -911,7 +911,7 @@ export default function App() {
       <div className={`splash${splashFade ? " fading" : ""}`}>
         <div className="splash-logo"><MedicalHeartSplash /></div>
         <div className="splash-title">TropiCare</div>
-        <div className="splash-sub">AI-Powered Symptom Assessment</div>
+        <div className="splash-sub">Guided Clinical Assessment</div>
         <div className="splash-dots">
           <div className="splash-dot" /><div className="splash-dot" /><div className="splash-dot" />
         </div>
