@@ -1048,7 +1048,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # Prometheus instrumentation
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
