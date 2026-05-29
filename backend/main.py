@@ -803,9 +803,14 @@ Rules:
         try:
             t0 = time.monotonic()
             result = await asyncio.wait_for(
-                _do_openrouter_request(headers, payload),
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    lambda: asyncio.run(_do_openrouter_request(headers, payload))
+                ),
                 timeout=15,
             )
+            # Use direct async call instead
+            result = await _do_openrouter_request(headers, payload)
             OPENROUTER_LATENCY.observe(time.monotonic() - t0)
             if result and settings.enable_ai_cache:
                 await cache_set(cache_key, json.dumps(result), ttl=86400)
@@ -1024,7 +1029,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="TropiCare API",
     version="1.0.0",
-    description="AI Tropical Disease Checker",
+    description="KNUST Final Year Project — AI Tropical Disease Checker",
     lifespan=lifespan,
 )
 
@@ -1249,7 +1254,7 @@ async def health_startup():
 # ─────────────────────────────────────────────────────────────
 
 @app.post("/api/v1/auth/register", status_code=201)
-@limiter.limit("500/hour")
+@limiter.limit("100/hour")
 async def register(request: Request, req: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(UserModel).filter(UserModel.email == req.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -1271,7 +1276,7 @@ async def register(request: Request, req: RegisterRequest, db: Session = Depends
 
 
 @app.post("/api/v1/auth/login")
-@limiter.limit("500/hour")
+@limiter.limit("100/hour")
 async def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
     await _check_password_rate_limit(req.email)
     user = db.query(UserModel).filter(UserModel.email == req.email).first()
@@ -1704,6 +1709,20 @@ async def reload_models():
         await loop.run_in_executor(None, _load_single_model, fname)
     return {"reloaded": pkl_files, "models": list(LOADED_MODELS.keys())}
 
+
+# ─────────────────────────────────────────────────────────────
+# ROUTES — API v1 Router prefix config (future v2 support)
+# ─────────────────────────────────────────────────────────────
+# All existing routes are under /api/v1/.
+# To add /api/v2/ without breaking v1, use APIRouter:
+#
+#   from fastapi import APIRouter
+#   v2_router = APIRouter(prefix="/api/v2")
+#   @v2_router.get("/symptoms/start") ...
+#   app.include_router(v2_router)
+#
+# When v2 goes live, set response header:
+#   X-API-Deprecated: true   on v1 endpoints (see middleware).
 
 # ─────────────────────────────────────────────────────────────
 # ENTRYPOINT
