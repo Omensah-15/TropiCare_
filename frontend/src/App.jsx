@@ -3,17 +3,17 @@
  * Backend: FastAPI (tropicare.onrender.com)
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
+
+import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
 
 // ─────────────────────────────────────────────
 // BACKEND CONFIG
 // ─────────────────────────────────────────────
-const BASE_URL  = "https://tropicare.onrender.com";
-const API_BASE  = `${BASE_URL}/api/v1`;
-const HEALTH_URL = `${BASE_URL}/health/live`;
+const API_BASE = "https://tropicare.onrender.com/api/v1";
 
 // ─────────────────────────────────────────────
-// API CLIENT  — timeout + retry + cold-start aware
+// API CLIENT
 // ─────────────────────────────────────────────
 let _token = null;
 
@@ -26,90 +26,23 @@ const api = {
     ...(_token ? { Authorization: `Bearer ${_token}` } : {}),
   }),
 
-  /**
-   * Single fetch attempt with AbortController timeout.
-   * Throws on network error or non-OK HTTP.
-   */
-  async _attempt(method, path, body, timeoutMs = 30000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(`${API_BASE}${path}`, {
-        method,
-        headers: api.headers(),
-        body: body ? JSON.stringify(body) : undefined,
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        const msg = err.detail || `HTTP ${res.status}`;
-        throw new Error(msg);
-      }
-      return await res.json();
-    } catch (e) {
-      clearTimeout(timer);
-      if (e.name === "AbortError") {
-        throw new Error("TIMEOUT");
-      }
-      throw e;
+  async call(method, path, body) {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: api.headers(),
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
     }
+    return res.json();
   },
 
-  /**
-   * Retry wrapper: up to maxRetries attempts with exponential backoff.
-   * On TIMEOUT it waits longer and tries again.
-   */
-  async call(method, path, body, { maxRetries = 2, onRetry } = {}) {
-    let lastErr;
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        const timeoutMs = attempt === 0 ? 20000 : 40000;
-        return await api._attempt(method, path, body, timeoutMs);
-      } catch (e) {
-        lastErr = e;
-        const isTimeout  = e.message === "TIMEOUT";
-        const isNetwork  = e.message?.toLowerCase().includes("fetch") ||
-                           e.message?.toLowerCase().includes("network") ||
-                           e.message?.toLowerCase().includes("failed to fetch");
-        const isRetryable = isTimeout || isNetwork;
-
-        if (attempt < maxRetries && isRetryable) {
-          const waitMs = 3000 * Math.pow(2, attempt); // 3s, 6s
-          if (onRetry) onRetry(attempt + 1, maxRetries + 1, waitMs);
-          await new Promise((r) => setTimeout(r, waitMs));
-        } else {
-          break;
-        }
-      }
-    }
-    throw lastErr;
-  },
-
-  get:    (path, opts)       => api.call("GET",    path, undefined, opts),
-  post:   (path, body, opts) => api.call("POST",   path, body, opts),
-  put:    (path, body, opts) => api.call("PUT",    path, body, opts),
-  delete: (path, opts)       => api.call("DELETE", path, undefined, opts),
-
-  /**
-   * Ping the health endpoint, with a long timeout for cold-start.
-   * Returns true if server is alive, false otherwise.
-   */
-  async ping(timeoutMs = 60000) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const res = await fetch(HEALTH_URL, {
-        signal: controller.signal,
-        cache: "no-store",
-      });
-      clearTimeout(timer);
-      return res.ok;
-    } catch {
-      clearTimeout(timer);
-      return false;
-    }
-  },
+  get:    (path)       => api.call("GET",    path),
+  post:   (path, body) => api.call("POST",   path, body),
+  put:    (path, body) => api.call("PUT",    path, body),
+  delete: (path)       => api.call("DELETE", path),
 };
 
 // ─────────────────────────────────────────────
@@ -435,17 +368,6 @@ const injectStyles = () => {
     .pw-wrap    { position: relative; }
     .pw-toggle  { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--muted-l); display: flex; }
 
-    /* Server status banner */
-    .server-banner { border-radius: var(--radius-s); padding: 11px 14px; margin-bottom: 14px; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 9px; line-height: 1.45; }
-    .server-banner-warn { background: var(--amber-l); border: 1px solid #fde68a; color: #78350f; }
-    .server-banner-info { background: var(--teal-xl); border: 1px solid var(--teal-l); color: var(--teal-d); }
-    .server-banner-ok   { background: var(--green-l); border: 1px solid #bbf7d0; color: #15803d; }
-    .server-banner-err  { background: var(--red-l); border: 1px solid #fecaca; color: #991b1b; }
-
-    /* Spinner inside button */
-    .btn-spinner { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.35); border-top-color: #fff; border-radius: 50%; animation: spin 0.7s linear infinite; flex-shrink: 0; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-
     .home-header { display: flex; align-items: center; justify-content: space-between; padding: 24px 24px 16px; }
     @media (max-width: 767px) { .home-header { padding: 20px 16px 14px; } }
     .greeting    { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
@@ -584,6 +506,7 @@ const injectStyles = () => {
     .notif   { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); background: var(--ink-2); color: #fff; padding: 10px 22px; border-radius: var(--radius-s); font-size: 13px; font-weight: 500; z-index: 9999; animation: notif-in 0.3s ease; white-space: nowrap; }
     @keyframes notif-in { from{opacity:0;transform:translateX(-50%) translateY(-12px);} to{opacity:1;transform:translateX(-50%) translateY(0);} }
 
+    /* Profile */
     .profile-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
     .ps-card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 18px 14px; text-align: center; }
     .ps-val  { font-size: 26px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
@@ -591,6 +514,7 @@ const injectStyles = () => {
     .edit-panel       { background: var(--border-l); border-radius: var(--radius); padding: 18px; margin-bottom: 14px; border: 1px solid var(--border); }
     .edit-panel-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 14px; }
 
+    /* Privacy & Security */
     .sec-section       { margin-bottom: 20px; }
     .sec-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 10px; }
     .sec-row       { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); }
@@ -601,6 +525,7 @@ const injectStyles = () => {
     .sec-row-hint  { font-size: 12px; color: var(--muted); }
     .sec-field-wrap { background: var(--border-l); border-radius: var(--radius); padding: 16px; margin-top: 10px; border: 1px solid var(--border); }
 
+    /* About */
     .about-hero        { background: linear-gradient(135deg, var(--teal) 0%, var(--teal-d) 100%); border-radius: var(--radius-l); padding: 28px 24px; margin-bottom: 20px; position: relative; overflow: hidden; }
     .about-hero-bg     { position: absolute; top: -30px; right: -30px; opacity: 0.07; }
     .about-hero-eyebrow { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(255,255,255,0.6); margin-bottom: 8px; }
@@ -631,7 +556,7 @@ const injectStyles = () => {
 };
 
 // ─────────────────────────────────────────────
-// SVG COMPONENTS  (unchanged from original)
+// SVG COMPONENTS
 // ─────────────────────────────────────────────
 function MedicalHeartMark({ size = 22, color = "#fff" }) {
   return (
@@ -694,7 +619,7 @@ function HealthProfessionalIllus({ width = 120, height = 140 }) {
 }
 
 // ─────────────────────────────────────────────
-// CATEGORY ILLUSTRATIONS  (unchanged)
+// CATEGORY ILLUSTRATIONS
 // ─────────────────────────────────────────────
 const IllusGeneral = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
@@ -793,12 +718,24 @@ const CATEGORY_ILLUS = {
 };
 
 function QuestionIllus({ question }) {
+  const imgPath = question ? SYMPTOM_IMAGES[question.id] : null;
+  const catPath = question ? getCategoryImage(question.category) : null;
+  const src = imgPath || catPath;
+
+  if (src) {
+    return (
+      <div className="q-illus">
+        <img src={src} alt={question?.category || "symptom"} style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }} />
+      </div>
+    );
+  }
+
   const Comp = question ? (CATEGORY_ILLUS[question.category] || IllusDoctor) : IllusDoctor;
   return <div className="q-illus"><Comp /></div>;
 }
 
 // ─────────────────────────────────────────────
-// ICONS  (unchanged)
+// ICONS
 // ─────────────────────────────────────────────
 function Icon({ name, size = 18, color = "currentColor", className = "" }) {
   const s = { width: size, height: size, flexShrink: 0 };
@@ -825,8 +762,6 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "eye":        return <svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
     case "eyeOff":     return <svg {...p}><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>;
     case "calendar":   return <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
-    case "wifi-off":   return <svg {...p}><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0119 12.55"/><path d="M5 12.55a10.94 10.94 0 015.17-2.39"/><path d="M10.71 5.05A16 16 0 0122.56 9"/><path d="M1.42 9a15.91 15.91 0 014.7-2.88"/><path d="M8.53 16.11a6 6 0 016.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>;
-    case "loader":     return <svg {...p} style={{...s, animation:"spin 1s linear infinite"}}><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="4.93" y1="4.93" x2="7.76" y2="7.76"/><line x1="16.24" y1="16.24" x2="19.07" y2="19.07"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><line x1="4.93" y1="19.07" x2="7.76" y2="16.24"/><line x1="16.24" y1="7.76" x2="19.07" y2="4.93"/></svg>;
     default:           return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
@@ -859,33 +794,6 @@ function RecBubble({ icon, label, text, accent, bg }) {
 }
 
 // ─────────────────────────────────────────────
-// SERVER STATUS HOOK
-// Pings the health endpoint on mount and exposes status.
-// ─────────────────────────────────────────────
-function useServerStatus() {
-  const [status, setStatus] = useState("checking"); // "checking" | "ok" | "sleeping" | "error"
-
-  useEffect(() => {
-    let cancelled = false;
-    const check = async () => {
-      try {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 8000);
-        const res = await fetch(HEALTH_URL, { signal: controller.signal, cache: "no-store" });
-        clearTimeout(timer);
-        if (!cancelled) setStatus(res.ok ? "ok" : "error");
-      } catch {
-        if (!cancelled) setStatus("sleeping");
-      }
-    };
-    check();
-    return () => { cancelled = true; };
-  }, []);
-
-  return status;
-}
-
-// ─────────────────────────────────────────────
 // MAIN APP
 // ─────────────────────────────────────────────
 export default function App() {
@@ -911,7 +819,7 @@ export default function App() {
   const toast = useCallback((msg) => {
     setNotif(msg);
     clearTimeout(_notifTimer);
-    _notifTimer = setTimeout(() => setNotif(""), 3200);
+    _notifTimer = setTimeout(() => setNotif(""), 2600);
   }, []);
 
   useEffect(() => {
@@ -1080,128 +988,35 @@ export default function App() {
 }
 
 // ─────────────────────────────────────────────
-// AUTH SCREEN  — fully rebuilt with cold-start handling
+// AUTH SCREEN
 // ─────────────────────────────────────────────
 function AuthScreen({ onLogin, toast }) {
-  const serverStatus = useServerStatus();
-
-  const [mode,       setMode]       = useState("login");
-  const [name,       setName]       = useState("");
-  const [email,      setEmail]      = useState("");
-  const [pw,         setPw]         = useState("");
-  const [age,        setAge]        = useState("");
-  const [gender,     setGender]     = useState("");
-  const [showPw,     setShowPw]     = useState(false);
-  const [loading,    setLoading]    = useState(false);
-  const [loadingMsg, setLoadingMsg] = useState("");
-
-  // Wake the server proactively as soon as auth screen mounts
-  // so that by the time the user fills the form it may already be up.
-  const hasWoken = useRef(false);
-  useEffect(() => {
-    if (hasWoken.current) return;
-    hasWoken.current = true;
-    if (serverStatus !== "ok") {
-      api.ping(60000).catch(() => {});
-    }
-  }, [serverStatus]);
+  const [mode,    setMode]    = useState("login");
+  const [name,    setName]    = useState("");
+  const [email,   setEmail]   = useState("");
+  const [pw,      setPw]      = useState("");
+  const [age,     setAge]     = useState("");
+  const [gender,  setGender]  = useState("");
+  const [showPw,  setShowPw]  = useState(false);
+  const [loading, setLoading] = useState(false);
 
   const submit = async () => {
     if (!email.trim() || !pw.trim()) { toast("Please fill in all required fields."); return; }
     if (mode === "register" && !name.trim()) { toast("Please enter your full name."); return; }
-    if (pw.length < 6) { toast("Password must be at least 6 characters."); return; }
-
     setLoading(true);
-    setLoadingMsg("Connecting to server...");
-
-    // If server status is not confirmed ok, do a fresh ping first.
-    // This warms the cold-start and gives us a realistic timeout expectation.
-    if (serverStatus !== "ok") {
-      setLoadingMsg("Waking up server, please wait...");
-      const alive = await api.ping(60000);
-      if (!alive) {
-        setLoading(false);
-        setLoadingMsg("");
-        toast("Server is not responding. Please check your connection and try again.");
-        return;
-      }
-    }
-
-    setLoadingMsg(mode === "login" ? "Signing in..." : "Creating your account...");
-
-    const onRetry = (attempt, total, waitMs) => {
-      setLoadingMsg(`Connection slow, retrying (${attempt}/${total})...`);
-    };
-
     try {
       let data;
       if (mode === "register") {
-        data = await api.post(
-          "/auth/register",
-          { email: email.trim(), password: pw, name: name.trim(), age, gender },
-          { maxRetries: 2, onRetry }
-        );
+        data = await api.post("/auth/register", { email: email.trim(), password: pw, name: name.trim(), age, gender });
       } else {
-        data = await api.post(
-          "/auth/login",
-          { email: email.trim(), password: pw },
-          { maxRetries: 2, onRetry }
-        );
+        data = await api.post("/auth/login", { email: email.trim(), password: pw });
       }
       onLogin({ ...data.user, token: data.access_token });
     } catch (e) {
-      const msg = e.message || "";
-      if (msg === "TIMEOUT" || msg.toLowerCase().includes("timeout")) {
-        toast("Request timed out. The server may still be starting up. Please try again.");
-      } else if (msg.toLowerCase().includes("fetch") || msg.toLowerCase().includes("network") || msg.toLowerCase().includes("failed to fetch")) {
-        toast("Network error. Check your internet connection and try again.");
-      } else if (msg.toLowerCase().includes("400") || msg.toLowerCase().includes("already")) {
-        toast("An account with this email already exists. Please sign in instead.");
-      } else if (msg.toLowerCase().includes("401") || msg.toLowerCase().includes("invalid")) {
-        toast("Incorrect email or password. Please try again.");
-      } else {
-        toast(msg || "Something went wrong. Please try again.");
-      }
+      toast(e.message || "Something went wrong. Please try again.");
     } finally {
       setLoading(false);
-      setLoadingMsg("");
     }
-  };
-
-  const serverBanner = () => {
-    if (serverStatus === "ok") {
-      return (
-        <div className="server-banner server-banner-ok">
-          <Icon name="check" size={14} color="#15803d" />
-          <span>Server is online and ready.</span>
-        </div>
-      );
-    }
-    if (serverStatus === "checking") {
-      return (
-        <div className="server-banner server-banner-info">
-          <Icon name="loader" size={14} color="var(--teal-d)" />
-          <span>Checking server status...</span>
-        </div>
-      );
-    }
-    if (serverStatus === "sleeping") {
-      return (
-        <div className="server-banner server-banner-warn">
-          <Icon name="alert" size={14} color="#92400e" />
-          <span>
-            Server is starting up (free tier). First sign-in may take up to 60 seconds.
-            The page will wait for it automatically.
-          </span>
-        </div>
-      );
-    }
-    return (
-      <div className="server-banner server-banner-err">
-        <Icon name="wifi-off" size={14} color="#991b1b" />
-        <span>Server unreachable. Check your connection or try again shortly.</span>
-      </div>
-    );
   };
 
   return (
@@ -1213,10 +1028,9 @@ function AuthScreen({ onLogin, toast }) {
           <div className="auth-hint">Guided symptom assessment for tropical diseases</div>
         </div>
         <div className="card card-p" style={{ boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
-          {serverBanner()}
           <div className="tabs mb-3">
             {["login","register"].map((m) => (
-              <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => { setMode(m); setPw(""); }}>
+              <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => setMode(m)}>
                 {m === "login" ? "Sign In" : "Create Account"}
               </button>
             ))}
@@ -1224,55 +1038,24 @@ function AuthScreen({ onLogin, toast }) {
           {mode === "register" && (
             <div className="field">
               <label className="field-label">Full Name</label>
-              <input
-                className="field-input"
-                placeholder="e.g. Kofi Mensah"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                disabled={loading}
-                autoComplete="name"
-              />
+              <input className="field-input" placeholder="e.g. Kofi Mensah" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
           )}
           <div className="field">
             <label className="field-label">Email Address</label>
-            <input
-              className="field-input"
-              type="email"
-              placeholder="you@email.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              disabled={loading}
-              autoComplete="email"
-            />
+            <input className="field-input" type="email" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
           </div>
           {mode === "register" && (
             <div className="grid-2">
               <div className="field">
                 <label className="field-label">Age</label>
-                <input
-                  className="field-input"
-                  type="number"
-                  placeholder="25"
-                  value={age}
-                  onChange={(e) => setAge(e.target.value)}
-                  disabled={loading}
-                  min="1"
-                  max="120"
-                />
+                <input className="field-input" type="number" placeholder="25" value={age} onChange={(e) => setAge(e.target.value)} />
               </div>
               <div className="field">
                 <label className="field-label">Gender</label>
-                <select
-                  className="field-input field-select"
-                  value={gender}
-                  onChange={(e) => setGender(e.target.value)}
-                  disabled={loading}
-                >
+                <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
                   <option value="">Select</option>
-                  <option>Male</option>
-                  <option>Female</option>
-                  <option>Other</option>
+                  <option>Male</option><option>Female</option><option>Other</option>
                 </select>
               </div>
             </div>
@@ -1280,39 +1063,16 @@ function AuthScreen({ onLogin, toast }) {
           <div className="field">
             <label className="field-label">Password</label>
             <div className="pw-wrap">
-              <input
-                className="field-input"
-                type={showPw ? "text" : "password"}
-                placeholder={mode === "register" ? "Min. 6 characters" : "Enter password"}
-                value={pw}
-                onChange={(e) => setPw(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && !loading && submit()}
-                disabled={loading}
-                autoComplete={mode === "register" ? "new-password" : "current-password"}
-                style={{ paddingRight: 46 }}
-              />
-              <button className="pw-toggle" type="button" onClick={() => setShowPw(!showPw)} disabled={loading}>
+              <input className="field-input" type={showPw ? "text" : "password"} placeholder="Enter password"
+                value={pw} onChange={(e) => setPw(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submit()} style={{ paddingRight: 46 }} />
+              <button className="pw-toggle" type="button" onClick={() => setShowPw(!showPw)}>
                 <Icon name={showPw ? "eyeOff" : "eye"} size={17} />
               </button>
             </div>
           </div>
-
-          {loading && loadingMsg && (
-            <div className="server-banner server-banner-info" style={{ marginBottom: 12 }}>
-              <div className="btn-spinner" style={{ borderColor: "rgba(13,148,136,0.3)", borderTopColor: "var(--teal-d)" }} />
-              <span>{loadingMsg}</span>
-            </div>
-          )}
-
-          <button
-            className="btn btn-primary btn-full btn-lg mt-2"
-            onClick={submit}
-            disabled={loading}
-          >
-            {loading
-              ? <><div className="btn-spinner" />Please wait...</>
-              : mode === "login" ? "Sign In" : "Create Account"
-            }
+          <button className="btn btn-primary btn-full btn-lg mt-2" onClick={submit} disabled={loading}>
+            {loading ? "Please wait..." : mode === "login" ? "Sign In" : "Create Account"}
           </button>
         </div>
         <div className="auth-foot">TropiCare · Symptom Checker for Tropical Diseases</div>
@@ -1411,9 +1171,9 @@ function HomeScreen({ user, onStart, onNav }) {
 // ─────────────────────────────────────────────
 function AssessmentLanding({ onStart }) {
   const features = [
-    { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers.", color: "#0d9488", bg: "#f0fdfa" },
-    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases across West Africa.", color: "#3b82f6", bg: "#eff6ff" },
-    { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.", color: "#8b5cf6", bg: "#f5f3ff" },
+    { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "#0d9488", bg: "#f0fdfa" },
+    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "#3b82f6", bg: "#eff6ff" },
+    { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",           color: "#8b5cf6", bg: "#f5f3ff" },
   ];
 
   return (
@@ -1795,6 +1555,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
       </div>
 
       <div className="page-body">
+        {/* Identity card — hidden while editing */}
         {!editing && (
           <div className="card card-p text-c mb-3">
             <div className="avatar avatar-lg mx-auto mb-3">{(p.name || "P")[0].toUpperCase()}</div>
@@ -1811,6 +1572,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         )}
 
+        {/* Edit panel — only visible while editing */}
         {editing && (
           <div className="edit-panel mb-3">
             <div className="edit-panel-title">Edit Profile</div>
@@ -1840,6 +1602,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         )}
 
+        {/* Stats */}
         <div className="profile-stat-grid">
           <div className="ps-card">
             <div className="ps-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
@@ -1851,6 +1614,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         </div>
 
+        {/* Menu */}
         <div className="card card-p mb-3">
           <div className="menu-list">
             {menuItems.map((item) => (
@@ -1938,6 +1702,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
       </div>
 
       <div className="page-body">
+        {/* Account Security */}
         <div className="sec-section">
           <div className="sec-section-title">Account Security</div>
           <div className="card card-p">
@@ -2030,6 +1795,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
           </div>
         </div>
 
+        {/* Privacy */}
         <div className="sec-section">
           <div className="sec-section-title">Your Privacy</div>
           <div className="card card-p">
@@ -2047,6 +1813,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
           </div>
         </div>
 
+        {/* Danger Zone */}
         <div className="sec-section">
           <div className="sec-section-title">Danger Zone</div>
           <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
@@ -2080,7 +1847,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
 function AboutScreen({ onBack }) {
   const features = [
     { icon: "activity",  color: "#0d9488", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers, no irrelevant questions, no wasted time." },
-    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 22 tropical and common diseases." },
+    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset 22 tropical and common diseases." },
     { icon: "shield",    color: "#8b5cf6", bg: "#f5f3ff",        title: "Risk Stratification",         desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
     { icon: "heart",     color: "#ef4444", bg: "#fef2f2",        title: "AI-Powered Recommendations",  desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
     { icon: "clipboard", color: "#f59e0b", bg: "#fffbeb",        title: "Assessment History",          desc: "All past results are stored securely so you and your care provider can track changes over time." },
@@ -2088,9 +1855,9 @@ function AboutScreen({ onBack }) {
   ];
 
   const team = [
-    { initials: "OA", name: "Obed Mensah",          role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
-    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping", color: "#3b82f6", bg: "#eff6ff" },
-    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST", color: "#8b5cf6", bg: "#f5f3ff" },
+    { initials: "OA", name: "Obed Mensah",       role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
+    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping",    color: "#3b82f6", bg: "#eff6ff" },
+    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                color: "#8b5cf6", bg: "#f5f3ff" },
   ];
 
   const versionInfo = [
