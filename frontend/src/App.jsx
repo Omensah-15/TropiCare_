@@ -14,23 +14,32 @@ const API_BASE = "https://tropicare.onrender.com/api/v1";
 
 // ─────────────────────────────────────────────
 // API CLIENT
+// Single source of truth: localStorage key "tc_token"
+// No module-level variable — reads fresh on every call.
 // ─────────────────────────────────────────────
-let _token = null;
+const TOKEN_KEY = "tc_token";
+const USER_KEY  = "tc_user";
 
 const api = {
-  setToken: (t) => { _token = t; },
-  getToken: () => _token,
+  setToken: (t) => {
+    if (t) localStorage.setItem(TOKEN_KEY, t);
+    else   localStorage.removeItem(TOKEN_KEY);
+  },
+  getToken: () => localStorage.getItem(TOKEN_KEY) || null,
 
-  headers: () => ({
-    "Content-Type": "application/json",
-    ...(_token ? { Authorization: `Bearer ${_token}` } : {}),
-  }),
+  headers: () => {
+    const token = api.getToken();
+    return {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    };
+  },
 
   async call(method, path, body) {
     const res = await fetch(`${API_BASE}${path}`, {
       method,
       headers: api.headers(),
-      body: body ? JSON.stringify(body) : undefined,
+      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({}));
@@ -49,9 +58,9 @@ const api = {
 // LOCAL SESSION STORE
 // ─────────────────────────────────────────────
 const Store = {
-  get:    (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+  get:    (k)    => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
   set:    (k, v) => localStorage.setItem(k, JSON.stringify(v)),
-  remove: (k) => localStorage.removeItem(k),
+  remove: (k)    => localStorage.removeItem(k),
 };
 
 // ─────────────────────────────────────────────
@@ -506,7 +515,6 @@ const injectStyles = () => {
     .notif   { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); background: var(--ink-2); color: #fff; padding: 10px 22px; border-radius: var(--radius-s); font-size: 13px; font-weight: 500; z-index: 9999; animation: notif-in 0.3s ease; white-space: nowrap; }
     @keyframes notif-in { from{opacity:0;transform:translateX(-50%) translateY(-12px);} to{opacity:1;transform:translateX(-50%) translateY(0);} }
 
-    /* Profile */
     .profile-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
     .ps-card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 18px 14px; text-align: center; }
     .ps-val  { font-size: 26px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
@@ -514,7 +522,6 @@ const injectStyles = () => {
     .edit-panel       { background: var(--border-l); border-radius: var(--radius); padding: 18px; margin-bottom: 14px; border: 1px solid var(--border); }
     .edit-panel-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 14px; }
 
-    /* Privacy & Security */
     .sec-section       { margin-bottom: 20px; }
     .sec-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 10px; }
     .sec-row       { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); }
@@ -525,7 +532,6 @@ const injectStyles = () => {
     .sec-row-hint  { font-size: 12px; color: var(--muted); }
     .sec-field-wrap { background: var(--border-l); border-radius: var(--radius); padding: 16px; margin-top: 10px; border: 1px solid var(--border); }
 
-    /* About */
     .about-hero        { background: linear-gradient(135deg, var(--teal) 0%, var(--teal-d) 100%); border-radius: var(--radius-l); padding: 28px 24px; margin-bottom: 20px; position: relative; overflow: hidden; }
     .about-hero-bg     { position: absolute; top: -30px; right: -30px; opacity: 0.07; }
     .about-hero-eyebrow { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(255,255,255,0.6); margin-bottom: 8px; }
@@ -822,30 +828,50 @@ export default function App() {
     _notifTimer = setTimeout(() => setNotif(""), 2600);
   }, []);
 
+  // ── Restore session from localStorage on mount
   useEffect(() => {
     const t1 = setTimeout(() => setSplashFade(true), 1900);
     const t2 = setTimeout(() => {
       setSplash(false);
-      const saved = Store.get("tc_user");
-      if (saved) { api.setToken(saved.token || null); setUser(saved); }
+      const saved = Store.get(USER_KEY);
+      const token = localStorage.getItem(TOKEN_KEY);
+      // Both must exist and match for auto-login to succeed
+      if (saved && token && saved.token === token) {
+        setUser(saved);
+      } else {
+        // Stale or mismatched — clear everything cleanly
+        Store.remove(USER_KEY);
+        localStorage.removeItem(TOKEN_KEY);
+        setUser(null);
+      }
     }, 2300);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
+  // ── login: write token to localStorage, then set React state
   const login = (u) => {
-    Store.set("tc_user", u);
-    api.setToken(u.token || null);
+    // u.token comes from the API response access_token field
+    api.setToken(u.token);           // writes to localStorage["tc_token"]
+    Store.set(USER_KEY, u);          // writes to localStorage["tc_user"]
     setUser(u);
     setPage("home");
   };
 
+  // ── logout: clear everything, reset all state
   const logout = () => {
-    Store.remove("tc_user");
-    api.setToken(null);
+    api.setToken(null);              // removes localStorage["tc_token"]
+    Store.remove(USER_KEY);          // removes localStorage["tc_user"]
     setUser(null);
-    setAssActive(false); setResult(null); setAnalyzing(false);
-    setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0); setSessionId(null);
+    setAssActive(false);
+    setResult(null);
+    setAnalyzing(false);
+    setAnswers({});
+    setAsked([]);
+    setCurrentQ(null);
+    setQIdx(0);
+    setSessionId(null);
     setPage("home");
+    setDetailRec(null);
     toast("Signed out successfully.");
   };
 
@@ -1000,6 +1026,12 @@ function AuthScreen({ onLogin, toast }) {
   const [showPw,  setShowPw]  = useState(false);
   const [loading, setLoading] = useState(false);
 
+  // Clear form fields when switching between login and register
+  const switchMode = (m) => {
+    setMode(m);
+    setName(""); setEmail(""); setPw(""); setAge(""); setGender("");
+  };
+
   const submit = async () => {
     if (!email.trim() || !pw.trim()) { toast("Please fill in all required fields."); return; }
     if (mode === "register" && !name.trim()) { toast("Please enter your full name."); return; }
@@ -1011,6 +1043,7 @@ function AuthScreen({ onLogin, toast }) {
       } else {
         data = await api.post("/auth/login", { email: email.trim(), password: pw });
       }
+      // Normalise: access_token → token on the user object
       onLogin({ ...data.user, token: data.access_token });
     } catch (e) {
       toast(e.message || "Something went wrong. Please try again.");
@@ -1030,7 +1063,7 @@ function AuthScreen({ onLogin, toast }) {
         <div className="card card-p" style={{ boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
           <div className="tabs mb-3">
             {["login","register"].map((m) => (
-              <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => setMode(m)}>
+              <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => switchMode(m)}>
                 {m === "login" ? "Sign In" : "Create Account"}
               </button>
             ))}
@@ -1517,7 +1550,9 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
     try {
       const data = await api.put("/user/profile", { name, age, gender });
       setProfile((prev) => ({ ...prev, ...data }));
-      Store.set("tc_user", { ...user, name, age, gender });
+      // Update localStorage with new name/age/gender but keep the existing token
+      const existing = Store.get(USER_KEY) || {};
+      Store.set(USER_KEY, { ...existing, name, age, gender });
       toast("Profile updated.");
       setEditing(false);
     } catch {
@@ -1555,7 +1590,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
       </div>
 
       <div className="page-body">
-        {/* Identity card — hidden while editing */}
         {!editing && (
           <div className="card card-p text-c mb-3">
             <div className="avatar avatar-lg mx-auto mb-3">{(p.name || "P")[0].toUpperCase()}</div>
@@ -1572,7 +1606,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         )}
 
-        {/* Edit panel — only visible while editing */}
         {editing && (
           <div className="edit-panel mb-3">
             <div className="edit-panel-title">Edit Profile</div>
@@ -1602,7 +1635,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         )}
 
-        {/* Stats */}
         <div className="profile-stat-grid">
           <div className="ps-card">
             <div className="ps-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
@@ -1614,7 +1646,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         </div>
 
-        {/* Menu */}
         <div className="card card-p mb-3">
           <div className="menu-list">
             {menuItems.map((item) => (
@@ -1676,8 +1707,8 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
     setDeleteLoading(true);
     try {
       await api.delete("/user/account");
-      Store.remove("tc_user");
       api.setToken(null);
+      Store.remove(USER_KEY);
       window.location.reload();
     } catch {
       toast("Could not delete account. Please try again.");
@@ -1702,7 +1733,6 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
       </div>
 
       <div className="page-body">
-        {/* Account Security */}
         <div className="sec-section">
           <div className="sec-section-title">Account Security</div>
           <div className="card card-p">
@@ -1795,7 +1825,6 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
           </div>
         </div>
 
-        {/* Privacy */}
         <div className="sec-section">
           <div className="sec-section-title">Your Privacy</div>
           <div className="card card-p">
@@ -1813,7 +1842,6 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
           </div>
         </div>
 
-        {/* Danger Zone */}
         <div className="sec-section">
           <div className="sec-section-title">Danger Zone</div>
           <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
@@ -1847,7 +1875,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
 function AboutScreen({ onBack }) {
   const features = [
     { icon: "activity",  color: "#0d9488", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers, no irrelevant questions, no wasted time." },
-    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset 22 tropical and common diseases." },
+    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 22 tropical and common diseases." },
     { icon: "shield",    color: "#8b5cf6", bg: "#f5f3ff",        title: "Risk Stratification",         desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
     { icon: "heart",     color: "#ef4444", bg: "#fef2f2",        title: "AI-Powered Recommendations",  desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
     { icon: "clipboard", color: "#f59e0b", bg: "#fffbeb",        title: "Assessment History",          desc: "All past results are stored securely so you and your care provider can track changes over time." },
@@ -1855,9 +1883,9 @@ function AboutScreen({ onBack }) {
   ];
 
   const team = [
-    { initials: "OA", name: "Obed Mensah",       role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
-    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping",    color: "#3b82f6", bg: "#eff6ff" },
-    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                color: "#8b5cf6", bg: "#f5f3ff" },
+    { initials: "OA", name: "Obed Mensah",          role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
+    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping", color: "#3b82f6", bg: "#eff6ff" },
+    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                    color: "#8b5cf6", bg: "#f5f3ff" },
   ];
 
   const versionInfo = [
