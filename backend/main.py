@@ -4,9 +4,9 @@ TropiCare API
 
 from __future__ import annotations
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # STDLIB
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 import asyncio
 import hashlib
 import json
@@ -21,9 +21,9 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from typing import Annotated, Any, Dict, List, Optional
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # THIRD-PARTY
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 import aiohttp
 import numpy as np
 from dotenv import load_dotenv
@@ -49,9 +49,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# SQLAlchemy (sync — kept for full backward compatibility;
-# async layer wraps it via run_in_executor to avoid asyncpg dependency issues
-# while still freeing the event loop)
+# SQLAlchemy
 from sqlalchemy import (
     Boolean,
     Column,
@@ -102,9 +100,9 @@ except ImportError:
 
 load_dotenv()
 
-# ─────────────────────────────────────────────────────────────
-# CONFIG — Pydantic Settings
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# CONFIG
+# -----------------------------------------------------------------
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -116,6 +114,9 @@ class Settings(BaseSettings):
     database_url: str             = "sqlite:///./tropicare.db"
     allowed_origins: str          = "*"
     port: int                     = 8000
+
+    # Admin — set ADMIN_USER_ID in .env to restrict admin routes
+    admin_user_id: int = 1
 
     # OpenRouter
     openrouter_api_key: str  = ""
@@ -147,9 +148,9 @@ class Settings(BaseSettings):
 settings = Settings()
 MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # STRUCTURED JSON LOGGING
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 
 def _build_logger(name: str) -> logging.Logger:
     handler = logging.StreamHandler()
@@ -167,9 +168,9 @@ def _build_logger(name: str) -> logging.Logger:
 
 logger = _build_logger("tropicare")
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # PROMETHEUS CUSTOM METRICS
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 
 OPENROUTER_LATENCY = Histogram(
     "tropicare_openrouter_latency_seconds",
@@ -188,11 +189,11 @@ DB_POOL_ACTIVE = Gauge("tropicare_db_pool_active", "DB pool active connections")
 DB_POOL_IDLE   = Gauge("tropicare_db_pool_idle",   "DB pool idle connections")
 SESSION_CLEANUP_RUNS = Counter("tropicare_session_cleanup_runs_total", "Session cleanup scheduler runs")
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # REDIS CLIENT
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 
-_redis: Optional[Any] = None   # aioredis.Redis or None
+_redis: Optional[Any] = None
 
 
 async def get_redis() -> Optional[Any]:
@@ -249,13 +250,12 @@ async def cache_delete(key: str) -> None:
         pass
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # DATABASE
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 
 _connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 
-# Pool settings applied only for non-SQLite backends
 _pool_kwargs: dict = {}
 if not settings.database_url.startswith("sqlite"):
     _pool_kwargs = {
@@ -272,7 +272,7 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# Track pool usage for Prometheus (only meaningful for non-SQLite)
+
 @event.listens_for(engine, "checkout")
 def _on_checkout(dbapi_conn, conn_record, conn_proxy):
     pool = engine.pool
@@ -280,9 +280,9 @@ def _on_checkout(dbapi_conn, conn_record, conn_proxy):
     DB_POOL_IDLE.set(getattr(pool, "_pool", None) and pool._pool.qsize() or 0)
 
 
-# ─────────────────────────────────────────────────────────────
-# MODELS — DB (unchanged schema)
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# MODELS
+# -----------------------------------------------------------------
 
 class UserModel(Base):
     __tablename__ = "users"
@@ -314,7 +314,6 @@ class DiagnosisModel(Base):
     ml_scores       = Column(Text, nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
-    # Composite indexes for common query patterns
     __table_args__ = (
         Index("ix_diagnoses_user_created", "user_id", "created_at"),
         Index("ix_diagnoses_user_risk",    "user_id", "risk"),
@@ -337,9 +336,9 @@ class SessionModel(Base):
     )
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # DB HELPERS
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 
 def _load_json(value: Optional[str], default: Any) -> Any:
     if value is None:
@@ -362,24 +361,21 @@ def get_db():
         db.close()
 
 
-# Async wrapper — runs sync DB operations in the default thread pool
-# so the event loop is not blocked, without requiring asyncpg/aiosqlite.
 async def run_db(func, *args, **kwargs):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
 
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # ML MODELS + HOT-RELOAD
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 
-LOADED_MODELS: Dict[str, Any]          = {}
-PREVIOUS_MODELS: Dict[str, Any]        = {}   # fallback on bad reload
-ML_STARTUP_COMPLETE: asyncio.Event     = asyncio.Event()
+LOADED_MODELS: Dict[str, Any]      = {}
+PREVIOUS_MODELS: Dict[str, Any]    = {}
+ML_STARTUP_COMPLETE: asyncio.Event = asyncio.Event()
 
 
 def _load_single_model(fname: str) -> None:
-    """Load or reload one .pkl file."""
     key = fname.replace(".pkl", "")
     path = os.path.join(MODELS_DIR, fname)
     try:
@@ -389,7 +385,6 @@ def _load_single_model(fname: str) -> None:
         logger.info({"event": "model_loaded", "file": fname})
     except Exception as e:
         logger.error({"event": "model_load_failed", "file": fname, "error": str(e)})
-        # Roll back to previous if available
         if key in PREVIOUS_MODELS and PREVIOUS_MODELS[key] is not None:
             LOADED_MODELS[key] = PREVIOUS_MODELS[key]
             logger.warning({"event": "model_rollback", "key": key})
@@ -412,8 +407,6 @@ def load_ml_models() -> None:
 
 
 class _ModelFileHandler(FileSystemEventHandler):
-    """Watchdog handler — hot-reload changed .pkl files."""
-
     def on_modified(self, event):
         if isinstance(event, FileModifiedEvent) and event.src_path.endswith(".pkl"):
             fname = os.path.basename(event.src_path)
@@ -441,9 +434,9 @@ def stop_model_watcher() -> None:
         _watchdog_observer.join()
 
 
-# ─────────────────────────────────────────────────────────────
-# DISEASE DATA (unchanged)
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# DISEASE DATA
+# -----------------------------------------------------------------
 
 RISK_MAP: Dict[str, str] = {
     "Malaria": "High", "Typhoid": "High", "Dengue": "High",
@@ -568,33 +561,33 @@ ALL_QUESTIONS: List[Dict[str, str]] = [
 Q_INDEX: Dict[str, Dict] = {q["id"]: q for q in ALL_QUESTIONS}
 
 DEFAULT_RECS: Dict[str, Dict[str, str]] = {
-    "Malaria":                {"home_care":"Rest and drink plenty of fluids","test":"Malaria RDT or blood smear","doctor":"Go to clinic immediately for antimalarial treatment","safety":"Do not delay — malaria can become severe quickly"},
-    "Typhoid":                {"home_care":"Rest, eat soft foods, drink clean water only","test":"Widal test or blood culture","doctor":"See a doctor for antibiotic prescription","safety":"Avoid spreading infection — wash hands frequently"},
-    "Dengue":                 {"home_care":"Rest and drink fluids — avoid aspirin or ibuprofen","test":"Dengue NS1 antigen test","doctor":"Seek care immediately if you notice bleeding or severe pain","safety":"Aspirin can worsen bleeding in dengue"},
-    "Tuberculosis":           {"home_care":"Rest, isolate yourself, keep room well-ventilated","test":"Chest X-ray and sputum test","doctor":"Visit a TB clinic immediately","safety":"TB is contagious — wear a mask and avoid crowded places"},
-    "Hepatitis B":            {"home_care":"Rest and avoid alcohol completely","test":"Hepatitis B surface antigen (HBsAg) test","doctor":"See a doctor for antiviral medication evaluation","safety":"Hepatitis B is contagious — avoid sharing needles or razors"},
+    "Malaria":                {"home_care":"Rest and drink plenty of fluids","test":"Malaria RDT or blood smear","doctor":"Go to clinic immediately for antimalarial treatment","safety":"Do not delay - malaria can become severe quickly"},
+    "Typhoid":                {"home_care":"Rest, eat soft foods, drink clean water only","test":"Widal test or blood culture","doctor":"See a doctor for antibiotic prescription","safety":"Avoid spreading infection - wash hands frequently"},
+    "Dengue":                 {"home_care":"Rest and drink fluids - avoid aspirin or ibuprofen","test":"Dengue NS1 antigen test","doctor":"Seek care immediately if you notice bleeding or severe pain","safety":"Aspirin can worsen bleeding in dengue"},
+    "Tuberculosis":           {"home_care":"Rest, isolate yourself, keep room well-ventilated","test":"Chest X-ray and sputum test","doctor":"Visit a TB clinic immediately","safety":"TB is contagious - wear a mask and avoid crowded places"},
+    "Hepatitis B":            {"home_care":"Rest and avoid alcohol completely","test":"Hepatitis B surface antigen (HBsAg) test","doctor":"See a doctor for antiviral medication evaluation","safety":"Hepatitis B is contagious - avoid sharing needles or razors"},
     "Hepatitis C":            {"home_care":"Rest and avoid alcohol","test":"Hepatitis C antibody test","doctor":"See a specialist for antiviral treatment","safety":"Avoid sharing sharp objects with others"},
-    "Hepatitis D":            {"home_care":"Rest and stop alcohol completely","test":"Hepatitis D antibody and liver function tests","doctor":"Seek specialist care urgently","safety":"Hepatitis D only occurs with hepatitis B — urgent care needed"},
-    "Pneumonia":              {"home_care":"Rest, keep warm, drink warm fluids","test":"Chest X-ray","doctor":"Visit clinic immediately for antibiotic treatment","safety":"Pneumonia can worsen quickly — do not wait"},
-    "Hepatitis A":            {"home_care":"Rest and drink clean water — eat lightly","test":"Hepatitis A IgM antibody test","doctor":"See a doctor if symptoms worsen","safety":"Avoid sharing food or drinks with others"},
-    "Hepatitis E":            {"home_care":"Rest and drink clean water only","test":"Hepatitis E IgM antibody test","doctor":"See a doctor — especially important if pregnant","safety":"Very dangerous during pregnancy — seek care urgently if pregnant"},
+    "Hepatitis D":            {"home_care":"Rest and stop alcohol completely","test":"Hepatitis D antibody and liver function tests","doctor":"Seek specialist care urgently","safety":"Hepatitis D only occurs with hepatitis B - urgent care needed"},
+    "Pneumonia":              {"home_care":"Rest, keep warm, drink warm fluids","test":"Chest X-ray","doctor":"Visit clinic immediately for antibiotic treatment","safety":"Pneumonia can worsen quickly - do not wait"},
+    "Hepatitis A":            {"home_care":"Rest and drink clean water - eat lightly","test":"Hepatitis A IgM antibody test","doctor":"See a doctor if symptoms worsen","safety":"Avoid sharing food or drinks with others"},
+    "Hepatitis E":            {"home_care":"Rest and drink clean water only","test":"Hepatitis E IgM antibody test","doctor":"See a doctor - especially important if pregnant","safety":"Very dangerous during pregnancy - seek care urgently if pregnant"},
     "Alcoholic Hepatitis":    {"home_care":"Stop alcohol completely and eat well","test":"Liver function tests (LFTs)","doctor":"Seek medical care urgently","safety":"Continued alcohol use can be fatal with this condition"},
-    "Jaundice":               {"home_care":"Rest and drink clean water","test":"Liver function tests and bilirubin level","doctor":"See a doctor to find the underlying cause","safety":"Jaundice is a sign of another condition — do not ignore it"},
-    "Chicken Pox":            {"home_care":"Rest, avoid scratching, apply calamine lotion","test":"No test usually needed","doctor":"See a doctor if blisters become infected or fever is very high","safety":"Highly contagious — stay home and avoid contact with others"},
+    "Jaundice":               {"home_care":"Rest and drink clean water","test":"Liver function tests and bilirubin level","doctor":"See a doctor to find the underlying cause","safety":"Jaundice is a sign of another condition - do not ignore it"},
+    "Chicken Pox":            {"home_care":"Rest, avoid scratching, apply calamine lotion","test":"No test usually needed","doctor":"See a doctor if blisters become infected or fever is very high","safety":"Highly contagious - stay home and avoid contact with others"},
     "Bronchial Asthma":       {"home_care":"Avoid triggers and use your prescribed inhaler","test":"Peak flow measurement or spirometry","doctor":"See a doctor for long-term management plan","safety":"Carry your inhaler at all times"},
-    "Urinary Tract Infection":{"home_care":"Drink plenty of water and avoid spicy food","test":"Urine culture and sensitivity test","doctor":"See a doctor for antibiotic prescription","safety":"Do not hold urine — empty your bladder regularly"},
+    "Urinary Tract Infection":{"home_care":"Drink plenty of water and avoid spicy food","test":"Urine culture and sensitivity test","doctor":"See a doctor for antibiotic prescription","safety":"Do not hold urine - empty your bladder regularly"},
     "Dimorphic Haemorrhoids": {"home_care":"Eat high-fibre foods and avoid straining on the toilet","test":"No test usually needed","doctor":"See a doctor if bleeding continues or worsens","safety":"Avoid sitting for long periods"},
-    "Peptic Ulcer Disease":   {"home_care":"Avoid spicy food, alcohol and pain tablets like aspirin","test":"H. pylori breath test or endoscopy if needed","doctor":"See a doctor for antacid or antibiotic treatment","safety":"Avoid aspirin and ibuprofen — they worsen ulcers"},
+    "Peptic Ulcer Disease":   {"home_care":"Avoid spicy food, alcohol and pain tablets like aspirin","test":"H. pylori breath test or endoscopy if needed","doctor":"See a doctor for antacid or antibiotic treatment","safety":"Avoid aspirin and ibuprofen - they worsen ulcers"},
     "Diabetes":               {"home_care":"Reduce sugar and refined carbohydrates in your diet","test":"Fasting blood glucose and HbA1c test","doctor":"See a doctor for a diabetes management plan","safety":"Monitor your blood sugar regularly if you have a glucometer"},
     "Fungal Infection":       {"home_care":"Keep the affected area dry and clean","test":"No test usually needed","doctor":"Visit a pharmacy for antifungal cream","safety":"Avoid sharing personal items like socks or towels"},
-    "Allergy":                {"home_care":"Avoid known triggers and stay indoors during high pollen periods","test":"Allergy skin prick test if symptoms are recurrent","doctor":"See a doctor for antihistamine prescription","safety":"If you have throat swelling or difficulty breathing — go to emergency immediately"},
+    "Allergy":                {"home_care":"Avoid known triggers and stay indoors during high pollen periods","test":"Allergy skin prick test if symptoms are recurrent","doctor":"See a doctor for antihistamine prescription","safety":"If you have throat swelling or difficulty breathing - go to emergency immediately"},
     "Common Cold":            {"home_care":"Rest and drink warm fluids","test":"No test needed","doctor":"Visit clinic if symptoms persist beyond 7 days","safety":"Wash hands frequently to avoid spreading"},
     "Drug Reaction":          {"home_care":"Stop the suspected medication immediately","test":"No test usually needed","doctor":"See a doctor immediately if rash spreads or breathing is affected","safety":"Seek emergency care if you have throat swelling or difficulty breathing"},
 }
 
-# ─────────────────────────────────────────────────────────────
-# CIRCUIT BREAKER — OpenRouter
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# CIRCUIT BREAKER
+# -----------------------------------------------------------------
 
 class _CBListener(pybreaker.CircuitBreakerListener):
     def state_change(self, cb, old_state, new_state):
@@ -609,9 +602,9 @@ _openrouter_cb = pybreaker.CircuitBreaker(
     listeners=[_CBListener()],
 )
 
-# ─────────────────────────────────────────────────────────────
-# ADAPTIVE ENGINE (unchanged logic)
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# ADAPTIVE ENGINE
+# -----------------------------------------------------------------
 
 def score_disease(disease: str, answers: dict) -> float:
     score = 0.0
@@ -689,17 +682,16 @@ def predict_with_ml(answers: dict) -> dict:
         "method":     "scoring",
     }
 
-# ─────────────────────────────────────────────────────────────
-# OPENROUTER AI — with circuit breaker + retry + cache fallback
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# OPENROUTER AI
+# -----------------------------------------------------------------
 
-_RETRY_BASE   = 1.0
-_RETRY_MAX    = 10.0
-_RETRY_TIMES  = 2
+_RETRY_BASE  = 1.0
+_RETRY_MAX   = 10.0
+_RETRY_TIMES = 2
 
 
 async def _do_openrouter_request(headers: dict, payload: dict) -> Optional[dict]:
-    """Single HTTP attempt — wrapped by circuit breaker."""
     async with aiohttp.ClientSession() as session:
         async with session.post(
             settings.openrouter_url,
@@ -715,7 +707,6 @@ async def _do_openrouter_request(headers: dict, payload: dict) -> Optional[dict]
                     resp.request_info, resp.history, status=resp.status
                 )
             if resp.status != 200:
-                body = await resp.text()
                 logger.warning({"event": "openrouter_non200", "status": resp.status})
                 return None
             data   = await resp.json()
@@ -738,7 +729,6 @@ async def call_openrouter(
         logger.info({"event": "openrouter_skip", "reason": "no api key"})
         return None
 
-    # Check Redis cache first (24h TTL per disease)
     cache_key = f"ai_response:{disease}"
     if settings.enable_ai_cache:
         cached = await cache_get(cache_key, key_type="ai_response")
@@ -750,8 +740,8 @@ async def call_openrouter(
 
     sym_text = ", ".join(s.replace("_", " ") for s in active_syms[:12]) or "general symptoms"
     urgency  = {
-        "High":   "URGENT — recommend visiting a hospital or clinic today",
-        "Medium": "advise a clinic visit within 1–2 days if symptoms persist",
+        "High":   "URGENT - recommend visiting a hospital or clinic today",
+        "Medium": "advise a clinic visit within 1-2 days if symptoms persist",
         "Low":    "advise rest at home and a clinic visit only if symptoms worsen",
     }.get(risk, "advise a clinic visit")
 
@@ -759,14 +749,14 @@ async def call_openrouter(
 
 Patient symptoms: {sym_text}
 Likely condition: {disease} (confidence: {round(confidence * 100)}%)
-Risk level: {risk} — {urgency}
+Risk level: {risk} - {urgency}
 
 Reply ONLY with a valid JSON object. No markdown. No extra text. Use this exact format:
 {{
   "explanation": "One short sentence on why these symptoms suggest {disease}.",
-  "home_care": "1–2 simple things the patient can do at home right now.",
+  "home_care": "1-2 simple things the patient can do at home right now.",
   "test": "One specific lab test or medical test to confirm, or 'No test needed' if not required.",
-  "doctor": "One clear instruction — visit hospital, clinic, or pharmacy.",
+  "doctor": "One clear instruction - visit hospital, clinic, or pharmacy.",
   "safety": "One brief safety warning if High risk, or empty string if Low/Medium."
 }}
 
@@ -802,14 +792,6 @@ Rules:
     for attempt in range(_RETRY_TIMES + 1):
         try:
             t0 = time.monotonic()
-            result = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: asyncio.run(_do_openrouter_request(headers, payload))
-                ),
-                timeout=15,
-            )
-            # Use direct async call instead
             result = await _do_openrouter_request(headers, payload)
             OPENROUTER_LATENCY.observe(time.monotonic() - t0)
             if result and settings.enable_ai_cache:
@@ -818,7 +800,6 @@ Rules:
         except pybreaker.CircuitBreakerError:
             OPENROUTER_ERRORS.labels(reason="circuit_open").inc()
             logger.warning({"event": "openrouter_circuit_open"})
-            # Return cached fallback if available
             fallback = await cache_get(cache_key, key_type="ai_fallback")
             if fallback:
                 try:
@@ -869,9 +850,9 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
         }
     return {**default, "explanation": f"Your symptoms are consistent with {disease}."}
 
-# ─────────────────────────────────────────────────────────────
-# PYDANTIC SCHEMAS (unchanged)
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# PYDANTIC SCHEMAS
+# -----------------------------------------------------------------
 
 class RegisterRequest(BaseModel):
     email:    str
@@ -901,9 +882,9 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password:     str
 
-# ─────────────────────────────────────────────────────────────
-# AUTH HELPERS (unchanged logic)
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# AUTH HELPERS
+# -----------------------------------------------------------------
 
 security = HTTPBearer()
 
@@ -924,6 +905,13 @@ def verify_token(creds: HTTPAuthorizationCredentials = Depends(security)) -> int
         raise HTTPException(status_code=401, detail="Invalid or expired token")
 
 
+def verify_admin(user_id: int = Depends(verify_token)) -> int:
+    """Dependency that checks the caller is the configured admin user."""
+    if user_id != settings.admin_user_id:
+        raise HTTPException(status_code=403, detail="Admin access only")
+    return user_id
+
+
 def hash_pw(pw: str) -> str:
     salt   = secrets.token_hex(16)
     hashed = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 260_000).hex()
@@ -933,7 +921,6 @@ def hash_pw(pw: str) -> str:
 def verify_pw(pw: str, stored: str) -> bool:
     try:
         salt, hashed = stored.split(":", 1)
-        # Support legacy sha256 format
         if len(hashed) == 64:
             import hashlib as _hl
             return _hl.sha256((salt + pw).encode()).hexdigest() == hashed
@@ -941,15 +928,15 @@ def verify_pw(pw: str, stored: str) -> bool:
     except Exception:
         return False
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # RATE LIMITER
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 
 limiter = Limiter(key_func=get_remote_address, enabled=settings.enable_rate_limiting)
 
-# ─────────────────────────────────────────────────────────────
-# BACKGROUND SCHEDULER — session cleanup
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# BACKGROUND SCHEDULER
+# -----------------------------------------------------------------
 
 _scheduler = AsyncIOScheduler()
 
@@ -975,44 +962,38 @@ async def _cleanup_stale_sessions() -> None:
     finally:
         db.close()
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # LIFESPAN
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 
 _aiohttp_session: Optional[aiohttp.ClientSession] = None
 _pending_requests: int = 0
-_shutdown_event: asyncio.Event = asyncio.Event()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _aiohttp_session
 
-    # Startup
     Base.metadata.create_all(bind=engine)
     load_ml_models()
     start_model_watcher()
     _aiohttp_session = aiohttp.ClientSession()
 
-    # Init Redis (best-effort)
     await get_redis()
 
-    # Scheduler
     _scheduler.add_job(_cleanup_stale_sessions, "interval", hours=1, id="session_cleanup")
     _scheduler.start()
 
-    model_keys = list(LOADED_MODELS.keys()) or ["none — using scoring engine"]
+    model_keys = list(LOADED_MODELS.keys()) or ["none - using scoring engine"]
     logger.info({"event": "startup", "ml_models": model_keys, "openrouter": bool(settings.openrouter_api_key)})
 
     yield
 
-    # Shutdown — wait up to 30 seconds for pending requests
     logger.info({"event": "shutdown_initiated"})
     deadline = asyncio.get_event_loop().time() + 30
     while _pending_requests > 0 and asyncio.get_event_loop().time() < deadline:
         await asyncio.sleep(0.5)
 
-    # Close resources
     _scheduler.shutdown(wait=False)
     if _aiohttp_session:
         await _aiohttp_session.close()
@@ -1022,25 +1003,22 @@ async def lifespan(app: FastAPI):
     engine.dispose()
     logger.info({"event": "shutdown_complete"})
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # APP
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 
 app = FastAPI(
     title="TropiCare API",
     version="1.0.0",
-    description="KNUST Final Year Project — AI Tropical Disease Checker",
+    description="KNUST Final Year Project - AI Tropical Disease Checker",
     lifespan=lifespan,
 )
 
-# Rate limit error handler
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# GZip compression (responses > 1KB)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins_list,
@@ -1049,17 +1027,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Prometheus instrumentation
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
-# ─────────────────────────────────────────────────────────────
-# MIDDLEWARE — Request ID + Structured Logging + Security Headers
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# MIDDLEWARE
+# -----------------------------------------------------------------
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
+
 def _sanitize(value: str) -> str:
-    """Strip control characters from string input."""
     return _CONTROL_CHAR_RE.sub("", value)
 
 
@@ -1067,14 +1044,12 @@ def _sanitize(value: str) -> str:
 async def request_middleware(request: Request, call_next):
     global _pending_requests
 
-    # Pass OPTIONS through immediately — let CORS middleware handle it
     if request.method == "OPTIONS":
         return await call_next(request)
 
     req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     request.state.request_id = req_id
 
-    # Body size limit
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > settings.max_body_size:
         return JSONResponse(
@@ -1083,7 +1058,6 @@ async def request_middleware(request: Request, call_next):
             headers={"X-Request-ID": req_id},
         )
 
-    # Content-Type enforcement for mutating methods
     if request.method in ("POST", "PUT", "PATCH"):
         ct = request.headers.get("content-type", "")
         if ct and "application/json" not in ct and "multipart" not in ct:
@@ -1096,7 +1070,6 @@ async def request_middleware(request: Request, call_next):
     start = time.monotonic()
     _pending_requests += 1
 
-    # Extract user_id from JWT if present (best-effort, no failure)
     user_id_log: Optional[int] = None
     auth_header = request.headers.get("authorization", "")
     if auth_header.startswith("Bearer "):
@@ -1121,19 +1094,14 @@ async def request_middleware(request: Request, call_next):
 
     duration_ms = round((time.monotonic() - start) * 1000, 2)
 
-    # Security headers
     response.headers["X-Request-ID"]             = req_id
     response.headers["X-Content-Type-Options"]   = "nosniff"
     response.headers["X-Frame-Options"]           = "DENY"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     response.headers["Content-Security-Policy"]   = "default-src 'none'"
 
-    # No-store for authenticated endpoints
     if user_id_log:
         response.headers["Cache-Control"] = "no-store"
-
-    # API versioning support header (v2 would set this)
-    # response.headers["X-API-Deprecated"] = "true"   # enable when v2 ships
 
     logger.info({
         "event":       "request",
@@ -1147,12 +1115,11 @@ async def request_middleware(request: Request, call_next):
 
     return response
 
-# ─────────────────────────────────────────────────────────────
-# MIDDLEWARE — Password attempt rate limiting via Redis
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# PASSWORD RATE LIMITING
+# -----------------------------------------------------------------
 
 async def _check_password_rate_limit(email: str) -> None:
-    """Allow max 3 password attempts per email per minute."""
     r = await get_redis()
     if r is None:
         return
@@ -1172,13 +1139,12 @@ async def _check_password_rate_limit(email: str) -> None:
     except Exception:
         pass
 
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # HEALTH ENDPOINTS
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 
 @app.get("/api/v1/health")
 async def health():
-    """Original health endpoint — preserved for backward compat."""
     return {
         "status":             "healthy",
         "timestamp":          datetime.utcnow().isoformat(),
@@ -1190,29 +1156,25 @@ async def health():
 
 @app.get("/health/live")
 async def health_live():
-    """Liveness — process is up, no dependency checks."""
     return {"status": "alive", "timestamp": datetime.utcnow().isoformat()}
 
 
 @app.get("/health/ready")
 async def health_ready():
-    """Readiness — checks DB, Redis, and OpenRouter reachability."""
     checks: Dict[str, str] = {}
 
-    # DB check
     try:
-        async def _db_ping():
-            db = SessionLocal()
-            try:
-                db.execute(__import__("sqlalchemy").text("SELECT 1"))
-            finally:
-                db.close()
-        await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, lambda: SessionLocal().execute(__import__("sqlalchemy").text("SELECT 1"))), timeout=5)
+        await asyncio.wait_for(
+            asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: SessionLocal().execute(__import__("sqlalchemy").text("SELECT 1"))
+            ),
+            timeout=5,
+        )
         checks["db"] = "ok"
     except Exception as e:
         checks["db"] = f"fail: {e}"
 
-    # Redis check
     try:
         r = await asyncio.wait_for(get_redis(), timeout=5)
         if r:
@@ -1223,7 +1185,6 @@ async def health_ready():
     except Exception as e:
         checks["redis"] = f"fail: {e}"
 
-    # OpenRouter reachability (HEAD-like check)
     if settings.openrouter_api_key:
         try:
             async with aiohttp.ClientSession() as s:
@@ -1244,14 +1205,13 @@ async def health_ready():
 
 @app.get("/health/startup")
 async def health_startup():
-    """Startup probe — returns 200 only when ML models are fully loaded."""
     if ML_STARTUP_COMPLETE.is_set():
         return {"status": "started", "models": list(LOADED_MODELS.keys())}
     return JSONResponse(status_code=503, content={"status": "loading"})
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Auth
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# ROUTES - Auth
+# -----------------------------------------------------------------
 
 @app.post("/api/v1/auth/register", status_code=201)
 @limiter.limit("100/hour")
@@ -1288,9 +1248,9 @@ async def login(request: Request, req: LoginRequest, db: Session = Depends(get_d
         "user":         {"id": user.id, "email": user.email, "name": user.name},
     }
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Assessment
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# ROUTES - Assessment
+# -----------------------------------------------------------------
 
 @app.post("/api/v1/symptoms/start", status_code=201)
 @limiter.limit("5/second")
@@ -1308,7 +1268,6 @@ async def start_assessment(
     )
     db.add(session)
     db.commit()
-    # Cache session state in Redis to reduce DB round-trips
     await cache_set(f"session:{sid}", _dump_json({"answers": {}, "asked": [], "completed": False}), ttl=3600)
     return {
         "session_id":      sid,
@@ -1347,7 +1306,6 @@ async def next_question(
     s.asked_questions = _dump_json(asked)
     db.commit()
 
-    # Update cache
     await cache_set(
         f"session:{session_id}",
         _dump_json({"answers": answers, "asked": asked, "completed": s.completed}),
@@ -1367,10 +1325,9 @@ async def next_question(
 
     return {"completed": False, "next_question": next_q}
 
-
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Diagnosis (with idempotency key support)
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# ROUTES - Diagnosis
+# -----------------------------------------------------------------
 
 @app.post("/api/v1/diagnosis/analyze")
 @limiter.limit("5/second")
@@ -1381,7 +1338,6 @@ async def analyze(
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    # Idempotency key
     idem_key = request.headers.get("Idempotency-Key")
     if idem_key:
         cached_resp = await cache_get(f"idem:{idem_key}", key_type="idempotency")
@@ -1431,7 +1387,6 @@ async def analyze(
     db.commit()
     db.refresh(diag)
 
-    # Invalidate user profile cache (diagnosis count changed)
     await cache_delete(f"profile:{user_id}")
 
     response_body = {
@@ -1451,29 +1406,23 @@ async def analyze(
         "ai_used": ai_result is not None,
     }
 
-    # Store idempotency response (24h)
     if idem_key:
         await cache_set(f"idem:{idem_key}", json.dumps(response_body), ttl=86400)
 
     return response_body
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Patient History (cursor-based pagination)
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# ROUTES - Patient History
+# -----------------------------------------------------------------
 
 @app.get("/api/v1/patient/history")
 async def get_history(
     request: Request,
-    cursor: Optional[int] = None,   # cursor = last seen diagnosis id
+    cursor: Optional[int] = None,
     limit: int = 20,
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
-    """
-    Cursor-based pagination. Pass ?cursor=<id>&limit=20.
-    Falls back to returning up to 100 records when no cursor provided
-    (backward compatible — original frontend used no cursor param).
-    """
     limit = min(limit, 100)
     query = (
         db.query(DiagnosisModel)
@@ -1484,7 +1433,6 @@ async def get_history(
 
     rows = query.order_by(DiagnosisModel.id.desc()).limit(limit).all()
 
-    # Eager load user in one query to avoid N+1
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
     patient_name = user.name if user else "Unknown"
 
@@ -1542,9 +1490,9 @@ async def get_diagnosis(
         "ml_scores":   _load_json(d.ml_scores, {}),
     }
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — User Profile (with Redis cache)
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# ROUTES - User Profile
+# -----------------------------------------------------------------
 
 @app.get("/api/v1/user/profile")
 async def get_profile(
@@ -1574,7 +1522,7 @@ async def get_profile(
         "assessment_count": count,
         "high_risk_count":  high,
     }
-    await cache_set(cache_key, json.dumps(result), ttl=300)  # 5-min TTL
+    await cache_set(cache_key, json.dumps(result), ttl=300)
     return result
 
 
@@ -1625,12 +1573,19 @@ async def delete_account(
     await cache_delete(f"profile:{user_id}")
     return {"message": "Account deleted"}
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Admin (with Redis cache for stats)
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# ROUTES - Admin
+# All admin routes require verify_admin which enforces:
+#   1. Valid JWT (via verify_token)
+#   2. user_id must match settings.admin_user_id
+# Set ADMIN_USER_ID in your .env file.
+# -----------------------------------------------------------------
 
 @app.get("/api/v1/admin/stats")
-async def admin_stats(db: Session = Depends(get_db)):
+async def admin_stats(
+    admin_id: int = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
     cache_key = "admin:stats"
     cached = await cache_get(cache_key, key_type="admin_stats")
     if cached:
@@ -1642,12 +1597,15 @@ async def admin_stats(db: Session = Depends(get_db)):
         "medium_risk":     db.query(DiagnosisModel).filter(DiagnosisModel.risk == "Medium").count(),
         "low_risk":        db.query(DiagnosisModel).filter(DiagnosisModel.risk == "Low").count(),
     }
-    await cache_set(cache_key, json.dumps(result), ttl=30)  # 30-sec TTL
+    await cache_set(cache_key, json.dumps(result), ttl=30)
     return result
 
 
 @app.get("/api/v1/admin/all-records")
-async def all_records(db: Session = Depends(get_db)):
+async def all_records(
+    admin_id: int = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
     rows = (
         db.query(DiagnosisModel)
         .order_by(DiagnosisModel.created_at.desc())
@@ -1673,7 +1631,10 @@ async def all_records(db: Session = Depends(get_db)):
 
 
 @app.delete("/api/v1/admin/clear-database")
-async def clear_database(db: Session = Depends(get_db)):
+async def clear_database(
+    admin_id: int = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
     deleted = db.query(DiagnosisModel).delete()
     db.query(SessionModel).delete()
     db.commit()
@@ -1682,7 +1643,11 @@ async def clear_database(db: Session = Depends(get_db)):
 
 
 @app.delete("/api/v1/admin/record/{diag_id}")
-async def delete_record(diag_id: int, db: Session = Depends(get_db)):
+async def delete_record(
+    diag_id: int,
+    admin_id: int = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
     d = db.query(DiagnosisModel).filter(DiagnosisModel.id == diag_id).first()
     if not d:
         raise HTTPException(status_code=404, detail="Not found")
@@ -1691,14 +1656,12 @@ async def delete_record(diag_id: int, db: Session = Depends(get_db)):
     await cache_delete("admin:stats")
     return {"message": "Record deleted"}
 
-
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Admin: Model Reload
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+# ROUTES - Admin: Model Reload
+# -----------------------------------------------------------------
 
 @app.post("/api/v1/admin/models/reload")
-async def reload_models():
-    """Manual hot-reload of all .pkl models."""
+async def reload_models(admin_id: int = Depends(verify_admin)):
     if not JOBLIB_AVAILABLE:
         raise HTTPException(status_code=501, detail="joblib not available")
     pkl_files = [f for f in os.listdir(MODELS_DIR) if f.endswith(".pkl")]
@@ -1709,29 +1672,15 @@ async def reload_models():
         await loop.run_in_executor(None, _load_single_model, fname)
     return {"reloaded": pkl_files, "models": list(LOADED_MODELS.keys())}
 
-
-# ─────────────────────────────────────────────────────────────
-# ROUTES — API v1 Router prefix config (future v2 support)
-# ─────────────────────────────────────────────────────────────
-# All existing routes are under /api/v1/.
-# To add /api/v2/ without breaking v1, use APIRouter:
-#
-#   from fastapi import APIRouter
-#   v2_router = APIRouter(prefix="/api/v2")
-#   @v2_router.get("/symptoms/start") ...
-#   app.include_router(v2_router)
-#
-# When v2 goes live, set response header:
-#   X-API-Deprecated: true   on v1 endpoints (see middleware).
-
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
 # ENTRYPOINT
-# ─────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=settings.port,
-        reload=False,          # Use watchdog for model reloads; uvicorn reload off in prod
+        reload=False,
     )
