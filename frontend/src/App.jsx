@@ -1,10 +1,20 @@
 /*
- * TropiCare — App.jsx
- * Backend: FastAPI (tropicare.onrender.com)
+ * TropiCare — App.jsx (patched)
+ *
+ * Fixes applied:
+ *  1. Post-logout crash — all async effects now check a `cancelled` ref and
+ *     the global `loggedOut` flag before calling setState. HomeScreen receives
+ *     `user` as a prop so its effect re-runs / cancels cleanly on auth change.
+ *  2. Data isolation — the "Database" admin screen is replaced with a personal
+ *     "My Data" screen that only reads/deletes the current user's own records
+ *     via /patient/history and /patient/history/:id  (backend already scopes
+ *     these by JWT).  The /admin/* routes are removed from the UI entirely.
+ *  3. Race conditions — token and user state are cleared atomically before any
+ *     React state update; a module-level `currentUserId` guard prevents stale
+ *     API responses from a previous session being applied to a new one.
  */
 
-import { useState, useEffect, useCallback } from "react";
-
+import { useState, useEffect, useCallback, useRef } from "react";
 import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
 
 // ─────────────────────────────────────────────
@@ -14,11 +24,16 @@ const API_BASE = "https://tropicare.onrender.com/api/v1";
 
 // ─────────────────────────────────────────────
 // API CLIENT
-// Single source of truth: localStorage key "tc_token"
-// No module-level variable — reads fresh on every call.
 // ─────────────────────────────────────────────
 const TOKEN_KEY = "tc_token";
 const USER_KEY  = "tc_user";
+
+/*
+ * Module-level flag: set to true the moment logout() fires.
+ * Any in-flight .then() callbacks check this before calling setState.
+ * Reset to false when a new login completes.
+ */
+let _loggingOut = false;
 
 const api = {
   setToken: (t) => {
@@ -55,7 +70,7 @@ const api = {
 };
 
 // ─────────────────────────────────────────────
-// LOCAL SESSION STORE
+// LOCAL STORE
 // ─────────────────────────────────────────────
 const Store = {
   get:    (k)    => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
@@ -206,7 +221,6 @@ function getNextQuestionOffline(answers, asked) {
     .sort((a, b) => b.sc - a.sc)
     .slice(0, 6)
     .map((x) => x.d);
-
   for (const disease of ranked) {
     for (const sym of DISEASE_SYMPTOM_MAP[disease] || []) {
       if (!asked.includes(sym)) {
@@ -226,14 +240,10 @@ function predictOffline(answers) {
       return { d, sc: scoreDisease(d, answers), conf: Math.min(0.95, Math.max(0.35, yes / Math.max(syms.length, 1))) };
     })
     .sort((a, b) => b.sc - a.sc);
-
   const top  = sorted[0];
   const risk = RISK_MAP[top.d] || "Medium";
-
   return {
-    disease:    top.d,
-    confidence: top.conf,
-    risk,
+    disease: top.d, confidence: top.conf, risk,
     explanation: `The reported symptoms are consistent with ${top.d}.`,
     recommendation: {
       home_care: "Rest, stay hydrated, and monitor your symptoms closely.",
@@ -255,308 +265,263 @@ const injectStyles = () => {
   el.id = "tc-styles";
   el.textContent = `
     @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap');
-
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-
     :root {
-      --teal:     #0d9488; --teal-d:   #0f766e; --teal-l:   #ccfbf1; --teal-xl:  #f0fdfa;
-      --red:      #ef4444; --red-l:    #fef2f2;
-      --amber:    #f59e0b; --amber-l:  #fffbeb;
-      --green:    #22c55e; --green-l:  #f0fdf4;
-      --blue:     #3b82f6; --blue-l:   #eff6ff;
-      --purple:   #8b5cf6; --purple-l: #f5f3ff;
-      --ink:      #0f172a; --ink-2:    #1e293b; --ink-3: #334155;
-      --muted:    #64748b; --muted-l:  #94a3b8;
-      --border:   #e2e8f0; --border-l: #f1f5f9;
-      --surface:  #ffffff; --bg:       #f8fafc;
-      --font:     'Sora', sans-serif;
-      --display:  'Playfair Display', serif;
-      --radius-s: 10px; --radius: 16px; --radius-l: 24px;
-      --shadow-s: 0 1px 4px rgba(0,0,0,0.06);
-      --shadow:   0 4px 20px rgba(0,0,0,0.08);
-      --shadow-l: 0 8px 40px rgba(0,0,0,0.12);
+      --teal:#0d9488;--teal-d:#0f766e;--teal-l:#ccfbf1;--teal-xl:#f0fdfa;
+      --red:#ef4444;--red-l:#fef2f2;--amber:#f59e0b;--amber-l:#fffbeb;
+      --green:#22c55e;--green-l:#f0fdf4;--blue:#3b82f6;--blue-l:#eff6ff;
+      --purple:#8b5cf6;--purple-l:#f5f3ff;
+      --ink:#0f172a;--ink-2:#1e293b;--ink-3:#334155;
+      --muted:#64748b;--muted-l:#94a3b8;
+      --border:#e2e8f0;--border-l:#f1f5f9;
+      --surface:#ffffff;--bg:#f8fafc;
+      --font:'Sora',sans-serif;--display:'Playfair Display',serif;
+      --radius-s:10px;--radius:16px;--radius-l:24px;
+      --shadow-s:0 1px 4px rgba(0,0,0,0.06);
+      --shadow:0 4px 20px rgba(0,0,0,0.08);
+      --shadow-l:0 8px 40px rgba(0,0,0,0.12);
     }
-
-    html, body { height: 100%; font-family: var(--font); background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; }
-    #root { height: 100%; }
-
-    .shell   { display: flex; height: 100vh; overflow: hidden; }
-    .sidebar { width: 240px; min-height: 100vh; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; padding: 28px 0; }
-    .main    { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
-    @media (max-width: 767px) { .sidebar { display: none; } .main { padding-bottom: 72px; } }
-
-    .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 0 20px 28px; }
-    .brand-mark    { width: 36px; height: 36px; background: var(--teal); border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .brand-name    { font-family: var(--display); font-size: 18px; font-weight: 700; color: var(--ink); }
-    .brand-sub     { font-size: 10px; color: var(--muted); font-weight: 500; letter-spacing: 0.03em; }
-    .sidebar-nav   { flex: 1; padding: 0 10px; }
-    .nav-item      { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 14px; border-radius: var(--radius-s); border: none; background: none; font-family: var(--font); font-size: 14px; font-weight: 500; color: var(--muted); cursor: pointer; transition: all 0.18s; margin-bottom: 2px; text-align: left; }
-    .nav-item:hover  { background: var(--teal-xl); color: var(--teal); }
-    .nav-item.active { background: var(--teal-xl); color: var(--teal); font-weight: 600; }
-    .sidebar-foot  { padding: 16px 10px 0; border-top: 1px solid var(--border); margin: 0 10px; }
-
-    .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--border); display: none; z-index: 100; padding: 8px 0 calc(8px + env(safe-area-inset-bottom)); }
-    @media (max-width: 767px) { .bottom-nav { display: flex; } }
-    .bnav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 4px; border: none; background: none; font-family: var(--font); font-size: 10px; font-weight: 600; color: var(--muted-l); cursor: pointer; transition: color 0.15s; }
-    .bnav-item.active { color: var(--teal); }
-    .bnav-item svg { width: 20px; height: 20px; }
-
-    .page      { animation: pageIn 0.25s ease; }
-    @keyframes pageIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
-    .page-head { padding: 24px 24px 0; }
-    .page-body { padding: 20px 24px 40px; }
-    @media (max-width: 767px) { .page-head { padding: 20px 16px 0; } .page-body { padding: 16px 16px 32px; } }
-
-    .t-display  { font-family: var(--display); font-size: 26px; font-weight: 700; color: var(--ink); line-height: 1.2; }
-    .t-title    { font-size: 18px; font-weight: 700; color: var(--ink); line-height: 1.3; }
-    .t-subtitle { font-size: 14px; color: var(--muted); font-weight: 400; line-height: 1.55; }
-    .t-label    { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
-    .t-mono     { font-feature-settings: 'tnum'; }
-
-    .card   { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-s); border: 1px solid var(--border); }
-    .card-p { padding: 20px; }
-
-    .btn          { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 13px 22px; border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; font-weight: 600; cursor: pointer; border: none; transition: all 0.18s; line-height: 1; }
-    .btn:active   { transform: scale(0.97); }
-    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
-    .btn-primary  { background: var(--teal); color: #fff; box-shadow: 0 4px 14px rgba(13,148,136,0.28); }
-    .btn-primary:hover:not(:disabled)   { background: var(--teal-d); box-shadow: 0 6px 18px rgba(13,148,136,0.36); }
-    .btn-secondary { background: var(--border-l); color: var(--ink-2); }
-    .btn-secondary:hover:not(:disabled) { background: var(--border); }
-    .btn-danger   { background: var(--red); color: #fff; }
-    .btn-danger:hover:not(:disabled)    { background: #dc2626; }
-    .btn-outline  { background: transparent; color: var(--teal); border: 2px solid var(--teal); }
-    .btn-outline:hover:not(:disabled)   { background: var(--teal-xl); }
-    .btn-full { width: 100%; }
-    .btn-lg   { padding: 16px 28px; font-size: 15px; border-radius: var(--radius); }
-    .btn-sm   { padding: 9px 16px; font-size: 12px; }
-
-    .field       { margin-bottom: 14px; }
-    .field-label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 6px; }
-    .field-input { width: 100%; padding: 12px 14px; border: 2px solid var(--border); border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; color: var(--ink); background: var(--surface); outline: none; transition: border-color 0.18s; }
-    .field-input:focus { border-color: var(--teal); }
-    .field-input::placeholder { color: var(--muted-l); }
-    .field-select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 16px; cursor: pointer; }
-
-    .badge        { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 700; }
-    .badge-High   { background: var(--red-l);   color: var(--red); }
-    .badge-Medium { background: var(--amber-l); color: #92400e; }
-    .badge-Low    { background: var(--green-l); color: #15803d; }
-    .badge-teal   { background: var(--teal-xl); color: var(--teal); }
-
-    .prog-track { height: 5px; background: var(--border-l); border-radius: 99px; overflow: hidden; }
-    .prog-fill  { height: 100%; background: linear-gradient(90deg, #2dd4bf, var(--teal)); border-radius: 99px; transition: width 0.4s cubic-bezier(0.4,0,0.2,1); }
-
-    .avatar    { width: 38px; height: 38px; border-radius: 99px; background: var(--teal-xl); display: flex; align-items: center; justify-content: center; color: var(--teal); font-weight: 700; font-size: 14px; flex-shrink: 0; }
-    .avatar-lg { width: 64px; height: 64px; font-size: 22px; background: linear-gradient(135deg, var(--teal-l), var(--teal-xl)); }
-    .mx-auto   { margin-left: auto; margin-right: auto; }
-
-    .splash { position: fixed; inset: 0; background: linear-gradient(145deg, var(--teal-d) 0%, #0a4f4a 100%); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; transition: opacity 0.45s ease; }
-    .splash.fading { opacity: 0; pointer-events: none; }
-    .splash-logo  { width: 76px; height: 76px; background: rgba(255,255,255,0.12); border-radius: 22px; display: flex; align-items: center; justify-content: center; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.18); animation: breathe 2.4s ease-in-out infinite; }
-    @keyframes breathe { 0%,100%{transform:scale(1);} 50%{transform:scale(1.04);} }
-    .splash-title { font-family: var(--display); font-size: 38px; color: #fff; font-weight: 700; letter-spacing: -0.5px; }
-    .splash-sub   { color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 6px; letter-spacing: 0.04em; }
-    .splash-dots  { display: flex; gap: 6px; margin-top: 52px; }
-    .splash-dot   { width: 6px; height: 6px; border-radius: 99px; background: rgba(255,255,255,0.4); animation: dot-bounce 1.3s ease-in-out infinite; }
-    .splash-dot:nth-child(2) { animation-delay: 0.18s; }
-    .splash-dot:nth-child(3) { animation-delay: 0.36s; }
-    @keyframes dot-bounce { 0%,80%,100%{transform:scale(0.7);opacity:0.4;} 40%{transform:scale(1.1);opacity:1;} }
-
-    .auth-wrap  { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; background: linear-gradient(160deg, var(--teal-xl) 0%, var(--bg) 55%); }
-    .auth-box   { width: 100%; max-width: 420px; }
-    .auth-logo  { text-align: center; margin-bottom: 36px; }
-    .auth-icon  { width: 60px; height: 60px; background: var(--teal); border-radius: 18px; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
-    .auth-title { font-family: var(--display); font-size: 28px; color: var(--ink); font-weight: 700; }
-    .auth-hint  { font-size: 13px; color: var(--muted); margin-top: 5px; }
-    .auth-foot  { text-align: center; margin-top: 18px; font-size: 11px; color: var(--muted-l); line-height: 1.7; }
-    .tabs       { display: flex; background: var(--border-l); border-radius: var(--radius-s); padding: 4px; margin-bottom: 22px; }
-    .tab        { flex: 1; padding: 9px; text-align: center; border-radius: 8px; font-family: var(--font); font-size: 13px; font-weight: 600; cursor: pointer; border: none; background: none; color: var(--muted); transition: all 0.18s; }
-    .tab.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-s); }
-    .grid-2     { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-    .pw-wrap    { position: relative; }
-    .pw-toggle  { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--muted-l); display: flex; }
-
-    .home-header { display: flex; align-items: center; justify-content: space-between; padding: 24px 24px 16px; }
-    @media (max-width: 767px) { .home-header { padding: 20px 16px 14px; } }
-    .greeting    { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
-    .hero-card   { margin: 0 24px 20px; padding: 28px; border-radius: var(--radius-l); background: linear-gradient(135deg, var(--teal) 0%, var(--teal-d) 100%); position: relative; overflow: hidden; }
-    @media (max-width: 767px) { .hero-card { margin: 0 16px 16px; padding: 22px 20px; } }
-    .hero-bg-icon  { position: absolute; top: -16px; right: -16px; opacity: 0.08; }
-    .hero-eyebrow  { font-size: 11px; color: rgba(255,255,255,0.65); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
-    .hero-headline { font-family: var(--display); font-size: 22px; color: #fff; line-height: 1.3; margin-bottom: 18px; }
-    .hero-btn      { display: inline-flex; align-items: center; gap: 6px; background: #fff; color: var(--teal-d); font-family: var(--font); font-size: 13px; font-weight: 700; padding: 11px 20px; border-radius: 10px; border: none; cursor: pointer; transition: box-shadow 0.18s; }
-    .hero-btn:hover { box-shadow: 0 6px 20px rgba(0,0,0,0.15); }
-
-    .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 0 24px 20px; }
-    @media (max-width: 767px) { .stats-row { padding: 0 16px 16px; gap: 8px; } }
-    .stat-card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 16px 12px; text-align: center; }
-    .stat-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin: 0 auto 8px; }
-    .stat-val  { font-size: 20px; font-weight: 800; color: var(--ink); line-height: 1; }
-    .stat-lbl  { font-size: 10px; color: var(--muted); font-weight: 600; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.05em; }
-
-    .section     { padding: 0 24px 20px; }
-    @media (max-width: 767px) { .section { padding: 0 16px 16px; } }
-    .section-ttl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 10px; }
-
-    .rec-list   { display: flex; flex-direction: column; gap: 8px; }
-    .rec-card   { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 14px 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: box-shadow 0.18s; }
-    .rec-card:hover { box-shadow: var(--shadow); }
-    .rec-icon-wrap { width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .rec-info   { flex: 1; min-width: 0; }
-    .rec-name   { font-size: 14px; font-weight: 600; color: var(--ink); }
-    .rec-meta   { font-size: 12px; color: var(--muted); margin-top: 2px; }
-
-    .disease-grid { display: flex; flex-wrap: wrap; gap: 6px; }
-
-    .al-hero { background: linear-gradient(135deg, var(--teal-xl) 0%, #e0f2fe 100%); border-radius: var(--radius-l); padding: 28px 24px 24px; margin-bottom: 16px; display: flex; gap: 20px; align-items: center; }
-    @media (max-width: 480px) { .al-hero { flex-direction: column; text-align: center; } }
-    .al-hero-text  { flex: 1; }
-    .al-hero-illus { flex-shrink: 0; width: 120px; height: 140px; }
-
-    .feat-list { display: flex; flex-direction: column; gap: 0; }
-    .feat-row  { display: flex; align-items: flex-start; gap: 14px; padding: 14px 0; }
-    .feat-row + .feat-row { border-top: 1px solid var(--border); }
-    .feat-icon  { width: 36px; height: 36px; background: var(--teal-xl); border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .feat-title { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 2px; }
-    .feat-desc  { font-size: 12px; color: var(--muted); line-height: 1.55; }
-
-    .q-screen  { height: 100vh; display: flex; flex-direction: column; background: var(--bg); }
-    .q-topbar  { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
-    .q-close   { width: 34px; height: 34px; background: var(--border-l); border-radius: 8px; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
-    .q-counter { font-size: 12px; font-weight: 700; color: var(--muted); width: 38px; text-align: right; flex-shrink: 0; }
-    .q-body    { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 20px; }
-    .q-cat-pill { display: inline-flex; padding: 4px 12px; background: var(--teal-xl); color: var(--teal); border-radius: 99px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 20px; }
-    .q-illus   { width: 160px; height: 160px; margin-bottom: 24px; }
-    .q-illus-svg { width: 100%; height: 100%; }
-    .q-text    { font-family: var(--display); font-size: 22px; font-weight: 700; color: var(--ink); text-align: center; line-height: 1.35; margin-bottom: 32px; max-width: 320px; }
-    .q-answers { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 340px; }
-    .ans-btn   { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-radius: var(--radius); border: 2px solid var(--border); background: var(--surface); font-family: var(--font); font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.18s; }
-    .ans-btn:active { transform: scale(0.97); }
-    .ans-btn.yes { border-color: #2dd4bf; background: var(--teal-xl); color: var(--teal-d); }
-    .ans-btn.yes:hover { background: #ccfbf1; }
-    .ans-btn.no  { border-color: var(--border); background: var(--border-l); color: var(--ink-3); }
-    .ans-btn.no:hover  { background: var(--border); }
-    .ans-btn-icon { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .ans-yes-icon { background: #ccfbf1; }
-    .ans-no-icon  { background: var(--border); }
-    .q-anim    { animation: qSlide 0.28s cubic-bezier(0.4,0,0.2,1); }
-    @keyframes qSlide { from{opacity:0;transform:translateY(14px);} to{opacity:1;transform:none;} }
-
-    .analyzing  { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); }
-    .spin-ring  { width: 140px; height: 140px; margin-bottom: 28px; animation: spin-slow 3s linear infinite; }
-    @keyframes spin-slow { to { transform: rotate(360deg); } }
-    .loading-dots { display: flex; gap: 7px; margin-top: 24px; }
-    .ldot       { width: 9px; height: 9px; border-radius: 99px; background: var(--teal); animation: dot-bounce 1.2s ease-in-out infinite; }
-    .ldot:nth-child(2) { animation-delay: 0.18s; }
-    .ldot:nth-child(3) { animation-delay: 0.36s; }
-
-    .result-ring        { width: 110px; height: 110px; border-radius: 99px; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; animation: ring-in 0.45s cubic-bezier(0.34,1.56,0.64,1); }
-    @keyframes ring-in  { from{transform:scale(0.6);opacity:0;} to{transform:scale(1);opacity:1;} }
-    .result-ring-High   { background: linear-gradient(135deg, #fee2e2, #fecaca); box-shadow: 0 0 0 10px rgba(239,68,68,0.08); }
-    .result-ring-Medium { background: linear-gradient(135deg, #fef3c7, #fde68a); box-shadow: 0 0 0 10px rgba(245,158,11,0.08); }
-    .result-ring-Low    { background: linear-gradient(135deg, #dcfce7, #bbf7d0); box-shadow: 0 0 0 10px rgba(34,197,94,0.08); }
-
-    .rec-bubbles    { display: flex; flex-direction: column; gap: 10px; }
-    .rec-bubble     { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: var(--radius); border-left: 4px solid transparent; background: var(--surface); box-shadow: var(--shadow-s); animation: bubble-in 0.35s ease both; }
-    .rec-bubble:nth-child(1){ animation-delay: 0.05s; }
-    .rec-bubble:nth-child(2){ animation-delay: 0.12s; }
-    .rec-bubble:nth-child(3){ animation-delay: 0.19s; }
-    .rec-bubble:nth-child(4){ animation-delay: 0.26s; }
-    @keyframes bubble-in { from{opacity:0;transform:translateX(-8px);} to{opacity:1;transform:none;} }
-    .rec-bubble-icon  { width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .rec-bubble-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 3px; }
-    .rec-bubble-text  { font-size: 13px; color: var(--ink-2); line-height: 1.5; font-weight: 500; }
-
-    .score-bar-row   { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
-    .score-bar-name  { font-size: 12px; color: var(--muted); width: 150px; flex-shrink: 0; }
-    .score-bar-track { flex: 1; height: 4px; background: var(--border-l); border-radius: 99px; overflow: hidden; }
-    .score-bar-fill  { height: 100%; background: var(--border); border-radius: 99px; }
-    .score-bar-pct   { font-size: 12px; color: var(--muted); width: 30px; text-align: right; }
-
-    .disclaimer   { display: flex; gap: 10px; align-items: flex-start; background: var(--amber-l); border: 1px solid #fde68a; border-radius: var(--radius-s); padding: 12px 14px; }
-    .disclaimer p { font-size: 12px; color: #78350f; line-height: 1.55; }
-
-    .search-wrap  { position: relative; margin-bottom: 12px; }
-    .search-icon  { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--muted-l); }
-    .search-input { width: 100%; padding: 11px 14px 11px 40px; border: 1.5px solid var(--border); border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; color: var(--ink); background: var(--surface); outline: none; transition: border-color 0.18s; }
-    .search-input:focus { border-color: var(--teal); }
-    .chip-row { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
-    .chip     { padding: 6px 14px; border-radius: 99px; border: 1.5px solid var(--border); font-family: var(--font); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; background: var(--surface); color: var(--muted); }
-    .chip.on  { border-color: var(--teal); background: var(--teal-xl); color: var(--teal); }
-    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 56px 24px; gap: 10px; text-align: center; }
-
-    .menu-list  { display: flex; flex-direction: column; }
-    .menu-item  { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); cursor: pointer; transition: opacity 0.15s; }
-    .menu-item:last-child { border-bottom: none; }
-    .menu-item:hover { opacity: 0.75; }
-    .menu-ico   { width: 34px; height: 34px; background: var(--border-l); border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-
-    .toggle-row    { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }
-    .toggle        { position: relative; width: 42px; height: 23px; }
-    .toggle input  { opacity: 0; width: 0; height: 0; }
-    .toggle-slider { position: absolute; inset: 0; background: var(--border); border-radius: 99px; cursor: pointer; transition: 0.28s; }
-    .toggle input:checked + .toggle-slider { background: var(--teal); }
-    .toggle-slider::before { content: ''; position: absolute; height: 17px; width: 17px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.28s; box-shadow: var(--shadow-s); }
-    .toggle input:checked + .toggle-slider::before { transform: translateX(19px); }
-
-    .danger-zone { border: 1.5px solid var(--red); border-radius: var(--radius); padding: 18px; margin-bottom: 20px; }
-
-    .flex      { display: flex; }
-    .items-c   { align-items: center; }
-    .justify-b { justify-content: space-between; }
-    .gap-2     { gap: 8px; }
-    .gap-3     { gap: 12px; }
-    .mt-1 { margin-top: 4px; }  .mt-2 { margin-top: 8px; }   .mt-3 { margin-top: 12px; }  .mt-4 { margin-top: 16px; }
-    .mb-2 { margin-bottom: 8px; } .mb-3 { margin-bottom: 12px; } .mb-4 { margin-bottom: 16px; }
-    .w-full  { width: 100%; }
-    .text-c  { text-align: center; }
-    .italic  { font-style: italic; }
-    .notif   { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); background: var(--ink-2); color: #fff; padding: 10px 22px; border-radius: var(--radius-s); font-size: 13px; font-weight: 500; z-index: 9999; animation: notif-in 0.3s ease; white-space: nowrap; }
-    @keyframes notif-in { from{opacity:0;transform:translateX(-50%) translateY(-12px);} to{opacity:1;transform:translateX(-50%) translateY(0);} }
-
-    .profile-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
-    .ps-card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 18px 14px; text-align: center; }
-    .ps-val  { font-size: 26px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
-    .ps-lbl  { font-size: 10px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; }
-    .edit-panel       { background: var(--border-l); border-radius: var(--radius); padding: 18px; margin-bottom: 14px; border: 1px solid var(--border); }
-    .edit-panel-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 14px; }
-
-    .sec-section       { margin-bottom: 20px; }
-    .sec-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 10px; }
-    .sec-row       { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); }
-    .sec-row:last-child { border-bottom: none; }
-    .sec-row-icon  { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .sec-row-body  { flex: 1; min-width: 0; }
-    .sec-row-label { font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 2px; }
-    .sec-row-hint  { font-size: 12px; color: var(--muted); }
-    .sec-field-wrap { background: var(--border-l); border-radius: var(--radius); padding: 16px; margin-top: 10px; border: 1px solid var(--border); }
-
-    .about-hero        { background: linear-gradient(135deg, var(--teal) 0%, var(--teal-d) 100%); border-radius: var(--radius-l); padding: 28px 24px; margin-bottom: 20px; position: relative; overflow: hidden; }
-    .about-hero-bg     { position: absolute; top: -30px; right: -30px; opacity: 0.07; }
-    .about-hero-eyebrow { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(255,255,255,0.6); margin-bottom: 8px; }
-    .about-hero-title  { font-family: var(--display); font-size: 28px; color: #fff; font-weight: 700; line-height: 1.2; margin-bottom: 10px; }
-    .about-hero-sub    { font-size: 13px; color: rgba(255,255,255,0.72); line-height: 1.6; }
-    .about-mission     { background: var(--teal-xl); border-radius: var(--radius); border: 1px solid var(--teal-l); padding: 20px; margin-bottom: 16px; }
-    .about-mission-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--teal); margin-bottom: 8px; }
-    .about-mission-text  { font-size: 14px; color: var(--ink-2); line-height: 1.65; font-weight: 500; }
-    .about-fact-grid   { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
-    .about-fact        { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; text-align: center; }
-    .about-fact-val    { font-family: var(--display); font-size: 26px; font-weight: 700; color: var(--teal); line-height: 1; margin-bottom: 4px; }
-    .about-fact-lbl    { font-size: 11px; color: var(--muted); font-weight: 600; }
-    .about-feature-row { display: flex; align-items: flex-start; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--border); }
-    .about-feature-row:last-child { border-bottom: none; }
-    .about-feature-icon  { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-    .about-feature-title { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 3px; }
-    .about-feature-desc  { font-size: 12px; color: var(--muted); line-height: 1.55; }
-    .about-team-card   { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 10px; display: flex; align-items: center; gap: 14px; }
-    .about-team-avatar { width: 46px; height: 46px; border-radius: 99px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; flex-shrink: 0; }
-    .about-team-name   { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 2px; }
-    .about-team-role   { font-size: 12px; color: var(--muted); }
-    .about-version-strip { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--border); }
-    .about-version-strip:last-child { border-bottom: none; }
-    .about-version-key { font-size: 13px; color: var(--muted); }
-    .about-version-val { font-size: 13px; font-weight: 600; color: var(--ink); }
+    html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;}
+    #root{height:100%;}
+    .shell{display:flex;height:100vh;overflow:hidden;}
+    .sidebar{width:240px;min-height:100vh;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;padding:28px 0;}
+    .main{flex:1;overflow-y:auto;scroll-behavior:smooth;}
+    @media(max-width:767px){.sidebar{display:none;}.main{padding-bottom:72px;}}
+    .sidebar-brand{display:flex;align-items:center;gap:10px;padding:0 20px 28px;}
+    .brand-mark{width:36px;height:36px;background:var(--teal);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .brand-name{font-family:var(--display);font-size:18px;font-weight:700;color:var(--ink);}
+    .brand-sub{font-size:10px;color:var(--muted);font-weight:500;letter-spacing:0.03em;}
+    .sidebar-nav{flex:1;padding:0 10px;}
+    .nav-item{display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px;border-radius:var(--radius-s);border:none;background:none;font-family:var(--font);font-size:14px;font-weight:500;color:var(--muted);cursor:pointer;transition:all 0.18s;margin-bottom:2px;text-align:left;}
+    .nav-item:hover{background:var(--teal-xl);color:var(--teal);}
+    .nav-item.active{background:var(--teal-xl);color:var(--teal);font-weight:600;}
+    .sidebar-foot{padding:16px 10px 0;border-top:1px solid var(--border);margin:0 10px;}
+    .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);display:none;z-index:100;padding:8px 0 calc(8px + env(safe-area-inset-bottom));}
+    @media(max-width:767px){.bottom-nav{display:flex;}}
+    .bnav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 4px;border:none;background:none;font-family:var(--font);font-size:10px;font-weight:600;color:var(--muted-l);cursor:pointer;transition:color 0.15s;}
+    .bnav-item.active{color:var(--teal);}
+    .bnav-item svg{width:20px;height:20px;}
+    .page{animation:pageIn 0.25s ease;}
+    @keyframes pageIn{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:none;}}
+    .page-head{padding:24px 24px 0;}
+    .page-body{padding:20px 24px 40px;}
+    @media(max-width:767px){.page-head{padding:20px 16px 0;}.page-body{padding:16px 16px 32px;}}
+    .t-display{font-family:var(--display);font-size:26px;font-weight:700;color:var(--ink);line-height:1.2;}
+    .t-title{font-size:18px;font-weight:700;color:var(--ink);line-height:1.3;}
+    .t-subtitle{font-size:14px;color:var(--muted);font-weight:400;line-height:1.55;}
+    .t-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);}
+    .t-mono{font-feature-settings:'tnum';}
+    .card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-s);border:1px solid var(--border);}
+    .card-p{padding:20px;}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:13px 22px;border-radius:var(--radius-s);font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.18s;line-height:1;}
+    .btn:active{transform:scale(0.97);}
+    .btn:disabled{opacity:0.55;cursor:not-allowed;}
+    .btn-primary{background:var(--teal);color:#fff;box-shadow:0 4px 14px rgba(13,148,136,0.28);}
+    .btn-primary:hover:not(:disabled){background:var(--teal-d);box-shadow:0 6px 18px rgba(13,148,136,0.36);}
+    .btn-secondary{background:var(--border-l);color:var(--ink-2);}
+    .btn-secondary:hover:not(:disabled){background:var(--border);}
+    .btn-danger{background:var(--red);color:#fff;}
+    .btn-danger:hover:not(:disabled){background:#dc2626;}
+    .btn-outline{background:transparent;color:var(--teal);border:2px solid var(--teal);}
+    .btn-outline:hover:not(:disabled){background:var(--teal-xl);}
+    .btn-full{width:100%;}
+    .btn-lg{padding:16px 28px;font-size:15px;border-radius:var(--radius);}
+    .btn-sm{padding:9px 16px;font-size:12px;}
+    .field{margin-bottom:14px;}
+    .field-label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:6px;}
+    .field-input{width:100%;padding:12px 14px;border:2px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:14px;color:var(--ink);background:var(--surface);outline:none;transition:border-color 0.18s;}
+    .field-input:focus{border-color:var(--teal);}
+    .field-input::placeholder{color:var(--muted-l);}
+    .field-select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px;cursor:pointer;}
+    .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;}
+    .badge-High{background:var(--red-l);color:var(--red);}
+    .badge-Medium{background:var(--amber-l);color:#92400e;}
+    .badge-Low{background:var(--green-l);color:#15803d;}
+    .badge-teal{background:var(--teal-xl);color:var(--teal);}
+    .prog-track{height:5px;background:var(--border-l);border-radius:99px;overflow:hidden;}
+    .prog-fill{height:100%;background:linear-gradient(90deg,#2dd4bf,var(--teal));border-radius:99px;transition:width 0.4s cubic-bezier(0.4,0,0.2,1);}
+    .avatar{width:38px;height:38px;border-radius:99px;background:var(--teal-xl);display:flex;align-items:center;justify-content:center;color:var(--teal);font-weight:700;font-size:14px;flex-shrink:0;}
+    .avatar-lg{width:64px;height:64px;font-size:22px;background:linear-gradient(135deg,var(--teal-l),var(--teal-xl));}
+    .mx-auto{margin-left:auto;margin-right:auto;}
+    .splash{position:fixed;inset:0;background:linear-gradient(145deg,var(--teal-d) 0%,#0a4f4a 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.45s ease;}
+    .splash.fading{opacity:0;pointer-events:none;}
+    .splash-logo{width:76px;height:76px;background:rgba(255,255,255,0.12);border-radius:22px;display:flex;align-items:center;justify-content:center;margin-bottom:20px;border:1px solid rgba(255,255,255,0.18);animation:breathe 2.4s ease-in-out infinite;}
+    @keyframes breathe{0%,100%{transform:scale(1);}50%{transform:scale(1.04);}}
+    .splash-title{font-family:var(--display);font-size:38px;color:#fff;font-weight:700;letter-spacing:-0.5px;}
+    .splash-sub{color:rgba(255,255,255,0.6);font-size:13px;margin-top:6px;letter-spacing:0.04em;}
+    .splash-dots{display:flex;gap:6px;margin-top:52px;}
+    .splash-dot{width:6px;height:6px;border-radius:99px;background:rgba(255,255,255,0.4);animation:dot-bounce 1.3s ease-in-out infinite;}
+    .splash-dot:nth-child(2){animation-delay:0.18s;}
+    .splash-dot:nth-child(3){animation-delay:0.36s;}
+    @keyframes dot-bounce{0%,80%,100%{transform:scale(0.7);opacity:0.4;}40%{transform:scale(1.1);opacity:1;}}
+    .auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:linear-gradient(160deg,var(--teal-xl) 0%,var(--bg) 55%);}
+    .auth-box{width:100%;max-width:420px;}
+    .auth-logo{text-align:center;margin-bottom:36px;}
+    .auth-icon{width:60px;height:60px;background:var(--teal);border-radius:18px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;}
+    .auth-title{font-family:var(--display);font-size:28px;color:var(--ink);font-weight:700;}
+    .auth-hint{font-size:13px;color:var(--muted);margin-top:5px;}
+    .auth-foot{text-align:center;margin-top:18px;font-size:11px;color:var(--muted-l);line-height:1.7;}
+    .tabs{display:flex;background:var(--border-l);border-radius:var(--radius-s);padding:4px;margin-bottom:22px;}
+    .tab{flex:1;padding:9px;text-align:center;border-radius:8px;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;border:none;background:none;color:var(--muted);transition:all 0.18s;}
+    .tab.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-s);}
+    .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
+    .pw-wrap{position:relative;}
+    .pw-toggle{position:absolute;right:13px;top:50%;transform:translateY(-50%);border:none;background:none;cursor:pointer;color:var(--muted-l);display:flex;}
+    .home-header{display:flex;align-items:center;justify-content:space-between;padding:24px 24px 16px;}
+    @media(max-width:767px){.home-header{padding:20px 16px 14px;}}
+    .greeting{font-size:12px;color:var(--muted);margin-bottom:3px;}
+    .hero-card{margin:0 24px 20px;padding:28px;border-radius:var(--radius-l);background:linear-gradient(135deg,var(--teal) 0%,var(--teal-d) 100%);position:relative;overflow:hidden;}
+    @media(max-width:767px){.hero-card{margin:0 16px 16px;padding:22px 20px;}}
+    .hero-bg-icon{position:absolute;top:-16px;right:-16px;opacity:0.08;}
+    .hero-eyebrow{font-size:11px;color:rgba(255,255,255,0.65);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;}
+    .hero-headline{font-family:var(--display);font-size:22px;color:#fff;line-height:1.3;margin-bottom:18px;}
+    .hero-btn{display:inline-flex;align-items:center;gap:6px;background:#fff;color:var(--teal-d);font-family:var(--font);font-size:13px;font-weight:700;padding:11px 20px;border-radius:10px;border:none;cursor:pointer;transition:box-shadow 0.18s;}
+    .hero-btn:hover{box-shadow:0 6px 20px rgba(0,0,0,0.15);}
+    .stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:0 24px 20px;}
+    @media(max-width:767px){.stats-row{padding:0 16px 16px;gap:8px;}}
+    .stat-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:16px 12px;text-align:center;}
+    .stat-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;margin:0 auto 8px;}
+    .stat-val{font-size:20px;font-weight:800;color:var(--ink);line-height:1;}
+    .stat-lbl{font-size:10px;color:var(--muted);font-weight:600;margin-top:3px;text-transform:uppercase;letter-spacing:0.05em;}
+    .section{padding:0 24px 20px;}
+    @media(max-width:767px){.section{padding:0 16px 16px;}}
+    .section-ttl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin-bottom:10px;}
+    .rec-list{display:flex;flex-direction:column;gap:8px;}
+    .rec-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:box-shadow 0.18s;}
+    .rec-card:hover{box-shadow:var(--shadow);}
+    .rec-icon-wrap{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .rec-info{flex:1;min-width:0;}
+    .rec-name{font-size:14px;font-weight:600;color:var(--ink);}
+    .rec-meta{font-size:12px;color:var(--muted);margin-top:2px;}
+    .disease-grid{display:flex;flex-wrap:wrap;gap:6px;}
+    .al-hero{background:linear-gradient(135deg,var(--teal-xl) 0%,#e0f2fe 100%);border-radius:var(--radius-l);padding:28px 24px 24px;margin-bottom:16px;display:flex;gap:20px;align-items:center;}
+    @media(max-width:480px){.al-hero{flex-direction:column;text-align:center;}}
+    .al-hero-text{flex:1;}
+    .al-hero-illus{flex-shrink:0;width:120px;height:140px;}
+    .feat-list{display:flex;flex-direction:column;gap:0;}
+    .feat-row{display:flex;align-items:flex-start;gap:14px;padding:14px 0;}
+    .feat-row+.feat-row{border-top:1px solid var(--border);}
+    .feat-icon{width:36px;height:36px;background:var(--teal-xl);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .feat-title{font-size:13px;font-weight:700;color:var(--ink);margin-bottom:2px;}
+    .feat-desc{font-size:12px;color:var(--muted);line-height:1.55;}
+    .q-screen{height:100vh;display:flex;flex-direction:column;background:var(--bg);}
+    .q-topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;}
+    .q-close{width:34px;height:34px;background:var(--border-l);border-radius:8px;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}
+    .q-counter{font-size:12px;font-weight:700;color:var(--muted);width:38px;text-align:right;flex-shrink:0;}
+    .q-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 20px;}
+    .q-cat-pill{display:inline-flex;padding:4px 12px;background:var(--teal-xl);color:var(--teal);border-radius:99px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:20px;}
+    .q-illus{width:160px;height:160px;margin-bottom:24px;}
+    .q-illus-svg{width:100%;height:100%;}
+    .q-text{font-family:var(--display);font-size:22px;font-weight:700;color:var(--ink);text-align:center;line-height:1.35;margin-bottom:32px;max-width:320px;}
+    .q-answers{display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px;}
+    .ans-btn{display:flex;align-items:center;gap:12px;padding:16px 18px;border-radius:var(--radius);border:2px solid var(--border);background:var(--surface);font-family:var(--font);font-size:15px;font-weight:600;cursor:pointer;transition:all 0.18s;}
+    .ans-btn:active{transform:scale(0.97);}
+    .ans-btn.yes{border-color:#2dd4bf;background:var(--teal-xl);color:var(--teal-d);}
+    .ans-btn.yes:hover{background:#ccfbf1;}
+    .ans-btn.no{border-color:var(--border);background:var(--border-l);color:var(--ink-3);}
+    .ans-btn.no:hover{background:var(--border);}
+    .ans-btn-icon{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .ans-yes-icon{background:#ccfbf1;}
+    .ans-no-icon{background:var(--border);}
+    .q-anim{animation:qSlide 0.28s cubic-bezier(0.4,0,0.2,1);}
+    @keyframes qSlide{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}
+    .analyzing{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);}
+    .spin-ring{width:140px;height:140px;margin-bottom:28px;animation:spin-slow 3s linear infinite;}
+    @keyframes spin-slow{to{transform:rotate(360deg);}}
+    .loading-dots{display:flex;gap:7px;margin-top:24px;}
+    .ldot{width:9px;height:9px;border-radius:99px;background:var(--teal);animation:dot-bounce 1.2s ease-in-out infinite;}
+    .ldot:nth-child(2){animation-delay:0.18s;}
+    .ldot:nth-child(3){animation-delay:0.36s;}
+    .result-ring{width:110px;height:110px;border-radius:99px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;animation:ring-in 0.45s cubic-bezier(0.34,1.56,0.64,1);}
+    @keyframes ring-in{from{transform:scale(0.6);opacity:0;}to{transform:scale(1);opacity:1;}}
+    .result-ring-High{background:linear-gradient(135deg,#fee2e2,#fecaca);box-shadow:0 0 0 10px rgba(239,68,68,0.08);}
+    .result-ring-Medium{background:linear-gradient(135deg,#fef3c7,#fde68a);box-shadow:0 0 0 10px rgba(245,158,11,0.08);}
+    .result-ring-Low{background:linear-gradient(135deg,#dcfce7,#bbf7d0);box-shadow:0 0 0 10px rgba(34,197,94,0.08);}
+    .rec-bubbles{display:flex;flex-direction:column;gap:10px;}
+    .rec-bubble{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:var(--radius);border-left:4px solid transparent;background:var(--surface);box-shadow:var(--shadow-s);animation:bubble-in 0.35s ease both;}
+    .rec-bubble:nth-child(1){animation-delay:0.05s;}
+    .rec-bubble:nth-child(2){animation-delay:0.12s;}
+    .rec-bubble:nth-child(3){animation-delay:0.19s;}
+    .rec-bubble:nth-child(4){animation-delay:0.26s;}
+    @keyframes bubble-in{from{opacity:0;transform:translateX(-8px);}to{opacity:1;transform:none;}}
+    .rec-bubble-icon{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .rec-bubble-label{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;}
+    .rec-bubble-text{font-size:13px;color:var(--ink-2);line-height:1.5;font-weight:500;}
+    .score-bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px;}
+    .score-bar-name{font-size:12px;color:var(--muted);width:150px;flex-shrink:0;}
+    .score-bar-track{flex:1;height:4px;background:var(--border-l);border-radius:99px;overflow:hidden;}
+    .score-bar-fill{height:100%;background:var(--border);border-radius:99px;}
+    .score-bar-pct{font-size:12px;color:var(--muted);width:30px;text-align:right;}
+    .disclaimer{display:flex;gap:10px;align-items:flex-start;background:var(--amber-l);border:1px solid #fde68a;border-radius:var(--radius-s);padding:12px 14px;}
+    .disclaimer p{font-size:12px;color:#78350f;line-height:1.55;}
+    .search-wrap{position:relative;margin-bottom:12px;}
+    .search-icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted-l);}
+    .search-input{width:100%;padding:11px 14px 11px 40px;border:1.5px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:14px;color:var(--ink);background:var(--surface);outline:none;transition:border-color 0.18s;}
+    .search-input:focus{border-color:var(--teal);}
+    .chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px;}
+    .chip{padding:6px 14px;border-radius:99px;border:1.5px solid var(--border);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;background:var(--surface);color:var(--muted);}
+    .chip.on{border-color:var(--teal);background:var(--teal-xl);color:var(--teal);}
+    .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:56px 24px;gap:10px;text-align:center;}
+    .menu-list{display:flex;flex-direction:column;}
+    .menu-item{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--border);cursor:pointer;transition:opacity 0.15s;}
+    .menu-item:last-child{border-bottom:none;}
+    .menu-item:hover{opacity:0.75;}
+    .menu-ico{width:34px;height:34px;background:var(--border-l);border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;}
+    .toggle{position:relative;width:42px;height:23px;}
+    .toggle input{opacity:0;width:0;height:0;}
+    .toggle-slider{position:absolute;inset:0;background:var(--border);border-radius:99px;cursor:pointer;transition:0.28s;}
+    .toggle input:checked+.toggle-slider{background:var(--teal);}
+    .toggle-slider::before{content:'';position:absolute;height:17px;width:17px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:0.28s;box-shadow:var(--shadow-s);}
+    .toggle input:checked+.toggle-slider::before{transform:translateX(19px);}
+    .danger-zone{border:1.5px solid var(--red);border-radius:var(--radius);padding:18px;margin-bottom:20px;}
+    .flex{display:flex;}.items-c{align-items:center;}.justify-b{justify-content:space-between;}
+    .gap-2{gap:8px;}.gap-3{gap:12px;}
+    .mt-1{margin-top:4px;}.mt-2{margin-top:8px;}.mt-3{margin-top:12px;}.mt-4{margin-top:16px;}
+    .mb-2{margin-bottom:8px;}.mb-3{margin-bottom:12px;}.mb-4{margin-bottom:16px;}
+    .w-full{width:100%;}.text-c{text-align:center;}.italic{font-style:italic;}
+    .notif{position:fixed;top:22px;left:50%;transform:translateX(-50%);background:var(--ink-2);color:#fff;padding:10px 22px;border-radius:var(--radius-s);font-size:13px;font-weight:500;z-index:9999;animation:notif-in 0.3s ease;white-space:nowrap;}
+    @keyframes notif-in{from{opacity:0;transform:translateX(-50%) translateY(-12px);}to{opacity:1;transform:translateX(-50%) translateY(0);}}
+    .profile-stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+    .ps-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:18px 14px;text-align:center;}
+    .ps-val{font-size:26px;font-weight:800;line-height:1;margin-bottom:4px;}
+    .ps-lbl{font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.07em;}
+    .edit-panel{background:var(--border-l);border-radius:var(--radius);padding:18px;margin-bottom:14px;border:1px solid var(--border);}
+    .edit-panel-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:14px;}
+    .sec-section{margin-bottom:20px;}
+    .sec-section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:10px;}
+    .sec-row{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--border);}
+    .sec-row:last-child{border-bottom:none;}
+    .sec-row-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .sec-row-body{flex:1;min-width:0;}
+    .sec-row-label{font-size:14px;font-weight:600;color:var(--ink);margin-bottom:2px;}
+    .sec-row-hint{font-size:12px;color:var(--muted);}
+    .sec-field-wrap{background:var(--border-l);border-radius:var(--radius);padding:16px;margin-top:10px;border:1px solid var(--border);}
+    .about-hero{background:linear-gradient(135deg,var(--teal) 0%,var(--teal-d) 100%);border-radius:var(--radius-l);padding:28px 24px;margin-bottom:20px;position:relative;overflow:hidden;}
+    .about-hero-bg{position:absolute;top:-30px;right:-30px;opacity:0.07;}
+    .about-hero-eyebrow{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:rgba(255,255,255,0.6);margin-bottom:8px;}
+    .about-hero-title{font-family:var(--display);font-size:28px;color:#fff;font-weight:700;line-height:1.2;margin-bottom:10px;}
+    .about-hero-sub{font-size:13px;color:rgba(255,255,255,0.72);line-height:1.6;}
+    .about-mission{background:var(--teal-xl);border-radius:var(--radius);border:1px solid var(--teal-l);padding:20px;margin-bottom:16px;}
+    .about-mission-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--teal);margin-bottom:8px;}
+    .about-mission-text{font-size:14px;color:var(--ink-2);line-height:1.65;font-weight:500;}
+    .about-fact-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+    .about-fact{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;}
+    .about-fact-val{font-family:var(--display);font-size:26px;font-weight:700;color:var(--teal);line-height:1;margin-bottom:4px;}
+    .about-fact-lbl{font-size:11px;color:var(--muted);font-weight:600;}
+    .about-feature-row{display:flex;align-items:flex-start;gap:14px;padding:14px 0;border-bottom:1px solid var(--border);}
+    .about-feature-row:last-child{border-bottom:none;}
+    .about-feature-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .about-feature-title{font-size:13px;font-weight:700;color:var(--ink);margin-bottom:3px;}
+    .about-feature-desc{font-size:12px;color:var(--muted);line-height:1.55;}
+    .about-team-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:10px;display:flex;align-items:center;gap:14px;}
+    .about-team-avatar{width:46px;height:46px;border-radius:99px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex-shrink:0;}
+    .about-team-name{font-size:14px;font-weight:700;color:var(--ink);margin-bottom:2px;}
+    .about-team-role{font-size:12px;color:var(--muted);}
+    .about-version-strip{display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid var(--border);}
+    .about-version-strip:last-child{border-bottom:none;}
+    .about-version-key{font-size:13px;color:var(--muted);}
+    .about-version-val{font-size:13px;font-weight:600;color:var(--ink);}
   `;
   document.head.appendChild(el);
 };
@@ -567,66 +532,61 @@ const injectStyles = () => {
 function MedicalHeartMark({ size = 22, color = "#fff" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
-      <path d="M12 21C12 21 3 14.5 3 8.5C3 5.42 5.42 3 8.5 3C10.24 3 11.91 3.81 13 5.08C14.09 3.81 15.76 3 17.5 3C20.58 3 23 5.42 23 8.5C23 14.5 12 21 12 21Z" fill={color} opacity="0.92" />
-      <polyline points="6,12 8.5,12 9.5,9 10.5,15 11.5,10.5 12.5,13 13.2,12 15.5,12 17.5,12" stroke="#0d9488" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <path d="M12 21C12 21 3 14.5 3 8.5C3 5.42 5.42 3 8.5 3C10.24 3 11.91 3.81 13 5.08C14.09 3.81 15.76 3 17.5 3C20.58 3 23 5.42 23 8.5C23 14.5 12 21 12 21Z" fill={color} opacity="0.92"/>
+      <polyline points="6,12 8.5,12 9.5,9 10.5,15 11.5,10.5 12.5,13 13.2,12 15.5,12 17.5,12" stroke="#0d9488" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
     </svg>
   );
 }
-
 function MedicalHeartLarge({ size = 32, color = "#fff" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" fill="none">
-      <path d="M16 28C16 28 4 19.5 4 11.5C4 7.36 7.36 4 11.5 4C13.72 4 15.78 5.01 17.2 6.66C18.62 5.01 20.68 4 22.9 4C27.04 4 30.4 7.36 30.4 11.5C30.4 19.5 16 28 16 28Z" fill={color} opacity="0.9" />
-      <polyline points="8,16 11,16 12.5,12 14,20 15.5,14 16.5,17 17.5,16 20,16 23,16" stroke="#0d9488" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <path d="M16 28C16 28 4 19.5 4 11.5C4 7.36 7.36 4 11.5 4C13.72 4 15.78 5.01 17.2 6.66C18.62 5.01 20.68 4 22.9 4C27.04 4 30.4 7.36 30.4 11.5C30.4 19.5 16 28 16 28Z" fill={color} opacity="0.9"/>
+      <polyline points="8,16 11,16 12.5,12 14,20 15.5,14 16.5,17 17.5,16 20,16 23,16" stroke="#0d9488" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
     </svg>
   );
 }
-
 function MedicalHeartSplash() {
   return (
     <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
-      <path d="M22 38C22 38 6 27 6 16C6 10.48 10.48 6 16 6C18.9 6 21.56 7.38 23.2 9.6C24.84 7.38 27.5 6 30.4 6C35.92 6 40 10.48 40 16C40 27 22 38 22 38Z" fill="white" opacity="0.9" />
-      <polyline points="10,22 15,22 17,16 19,28 21,19 23,24 25,22 29,22 34,22" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+      <path d="M22 38C22 38 6 27 6 16C6 10.48 10.48 6 16 6C18.9 6 21.56 7.38 23.2 9.6C24.84 7.38 27.5 6 30.4 6C35.92 6 40 10.48 40 16C40 27 22 38 22 38Z" fill="white" opacity="0.9"/>
+      <polyline points="10,22 15,22 17,16 19,28 21,19 23,24 25,22 29,22 34,22" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
     </svg>
   );
 }
-
 function HealthProfessionalIllus({ width = 120, height = 140 }) {
   return (
     <svg width={width} height={height} viewBox="0 0 120 140" fill="none">
-      <circle cx="60" cy="70" r="58" fill="#e0f2f1" />
-      <rect x="30" y="72" width="60" height="60" rx="18" fill="#ffffff" />
-      <path d="M60 72 L45 80 L45 110 L60 104 L75 110 L75 80 Z" fill="#f0fdfa" stroke="#b2dfdb" strokeWidth="1" />
-      <path d="M48 82 Q44 90 44 98 Q44 106 52 106 Q60 106 60 98" stroke="#0d9488" strokeWidth="2.5" fill="none" strokeLinecap="round" />
-      <circle cx="60" cy="99" r="5" fill="#0d9488" />
-      <circle cx="60" cy="99" r="2.5" fill="#ccfbf1" />
-      <line x1="48" y1="82" x2="42" y2="76" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" />
-      <circle cx="42" cy="75" r="2" fill="#0d9488" />
-      <rect x="64" y="84" width="18" height="12" rx="3" fill="#e0f2f1" stroke="#b2dfdb" strokeWidth="1" />
-      <rect x="66" y="86" width="10" height="2" rx="1" fill="#0d9488" opacity="0.6" />
-      <rect x="53" y="58" width="14" height="18" rx="5" fill="#f5cba7" />
-      <ellipse cx="60" cy="46" rx="22" ry="24" fill="#f5cba7" />
-      <path d="M38 42 Q38 22 60 22 Q82 22 82 42 Q82 34 60 32 Q38 34 38 42 Z" fill="#4a3728" />
-      <ellipse cx="52" cy="46" rx="3.5" ry="4" fill="#fff" />
-      <ellipse cx="68" cy="46" rx="3.5" ry="4" fill="#fff" />
-      <circle cx="53" cy="47" r="2" fill="#3d2b1f" />
-      <circle cx="69" cy="47" r="2" fill="#3d2b1f" />
-      <path d="M53 60 Q60 65 67 60" stroke="#c9785c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
-      <ellipse cx="38" cy="48" rx="4" ry="6" fill="#f5cba7" />
-      <ellipse cx="82" cy="48" rx="4" ry="6" fill="#f5cba7" />
-      <rect x="18" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1" />
-      <rect x="88" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1" />
-      <ellipse cx="25" cy="118" rx="7" ry="6" fill="#f5cba7" />
-      <ellipse cx="95" cy="118" rx="7" ry="6" fill="#f5cba7" />
-      <rect x="56" y="88" width="8" height="2.5" rx="1.25" fill="#0d9488" opacity="0.8" />
-      <rect x="58.75" y="85.25" width="2.5" height="8" rx="1.25" fill="#0d9488" opacity="0.8" />
+      <circle cx="60" cy="70" r="58" fill="#e0f2f1"/>
+      <rect x="30" y="72" width="60" height="60" rx="18" fill="#ffffff"/>
+      <path d="M60 72 L45 80 L45 110 L60 104 L75 110 L75 80 Z" fill="#f0fdfa" stroke="#b2dfdb" strokeWidth="1"/>
+      <path d="M48 82 Q44 90 44 98 Q44 106 52 106 Q60 106 60 98" stroke="#0d9488" strokeWidth="2.5" fill="none" strokeLinecap="round"/>
+      <circle cx="60" cy="99" r="5" fill="#0d9488"/>
+      <circle cx="60" cy="99" r="2.5" fill="#ccfbf1"/>
+      <line x1="48" y1="82" x2="42" y2="76" stroke="#0d9488" strokeWidth="2" strokeLinecap="round"/>
+      <circle cx="42" cy="75" r="2" fill="#0d9488"/>
+      <rect x="64" y="84" width="18" height="12" rx="3" fill="#e0f2f1" stroke="#b2dfdb" strokeWidth="1"/>
+      <rect x="66" y="86" width="10" height="2" rx="1" fill="#0d9488" opacity="0.6"/>
+      <rect x="53" y="58" width="14" height="18" rx="5" fill="#f5cba7"/>
+      <ellipse cx="60" cy="46" rx="22" ry="24" fill="#f5cba7"/>
+      <path d="M38 42 Q38 22 60 22 Q82 22 82 42 Q82 34 60 32 Q38 34 38 42 Z" fill="#4a3728"/>
+      <ellipse cx="52" cy="46" rx="3.5" ry="4" fill="#fff"/>
+      <ellipse cx="68" cy="46" rx="3.5" ry="4" fill="#fff"/>
+      <circle cx="53" cy="47" r="2" fill="#3d2b1f"/>
+      <circle cx="69" cy="47" r="2" fill="#3d2b1f"/>
+      <path d="M53 60 Q60 65 67 60" stroke="#c9785c" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
+      <ellipse cx="38" cy="48" rx="4" ry="6" fill="#f5cba7"/>
+      <ellipse cx="82" cy="48" rx="4" ry="6" fill="#f5cba7"/>
+      <rect x="18" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1"/>
+      <rect x="88" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1"/>
+      <ellipse cx="25" cy="118" rx="7" ry="6" fill="#f5cba7"/>
+      <ellipse cx="95" cy="118" rx="7" ry="6" fill="#f5cba7"/>
+      <rect x="56" y="88" width="8" height="2.5" rx="1.25" fill="#0d9488" opacity="0.8"/>
+      <rect x="58.75" y="85.25" width="2.5" height="8" rx="1.25" fill="#0d9488" opacity="0.8"/>
     </svg>
   );
 }
 
-// ─────────────────────────────────────────────
-// CATEGORY ILLUSTRATIONS
-// ─────────────────────────────────────────────
+// Category illustrations
 const IllusGeneral = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#fef2f2"/>
@@ -727,7 +687,6 @@ function QuestionIllus({ question }) {
   const imgPath = question ? SYMPTOM_IMAGES[question.id] : null;
   const catPath = question ? getCategoryImage(question.category) : null;
   const src = imgPath || catPath;
-
   if (src) {
     return (
       <div className="q-illus">
@@ -735,7 +694,6 @@ function QuestionIllus({ question }) {
       </div>
     );
   }
-
   const Comp = question ? (CATEGORY_ILLUS[question.category] || IllusDoctor) : IllusDoctor;
   return <div className="q-illus"><Comp /></div>;
 }
@@ -747,28 +705,28 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
   const s = { width: size, height: size, flexShrink: 0 };
   const p = { viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", style: s, className };
   switch (name) {
-    case "home":       return <svg {...p}><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>;
-    case "activity":   return <svg {...p}><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
-    case "clipboard":  return <svg {...p}><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/></svg>;
-    case "user":       return <svg {...p}><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
-    case "settings":   return <svg {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>;
-    case "heart":      return <svg {...p}><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>;
-    case "alert":      return <svg {...p}><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
-    case "info":       return <svg {...p}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>;
-    case "check":      return <svg {...p}><polyline points="20 6 9 17 4 12"/></svg>;
-    case "x":          return <svg {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
-    case "logout":     return <svg {...p}><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>;
-    case "chevR":      return <svg {...p}><polyline points="9 18 15 12 9 6"/></svg>;
-    case "chevL":      return <svg {...p}><polyline points="15 18 9 12 15 6"/></svg>;
-    case "edit":       return <svg {...p}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
-    case "trash":      return <svg {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>;
-    case "search":     return <svg {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
-    case "shield":     return <svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>;
-    case "database":   return <svg {...p}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>;
-    case "eye":        return <svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
-    case "eyeOff":     return <svg {...p}><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>;
-    case "calendar":   return <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
-    default:           return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
+    case "home":      return <svg {...p}><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>;
+    case "activity":  return <svg {...p}><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
+    case "clipboard": return <svg {...p}><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/></svg>;
+    case "user":      return <svg {...p}><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+    case "settings":  return <svg {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>;
+    case "heart":     return <svg {...p}><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>;
+    case "alert":     return <svg {...p}><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+    case "info":      return <svg {...p}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>;
+    case "check":     return <svg {...p}><polyline points="20 6 9 17 4 12"/></svg>;
+    case "x":         return <svg {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
+    case "logout":    return <svg {...p}><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>;
+    case "chevR":     return <svg {...p}><polyline points="9 18 15 12 9 6"/></svg>;
+    case "chevL":     return <svg {...p}><polyline points="15 18 9 12 15 6"/></svg>;
+    case "edit":      return <svg {...p}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+    case "trash":     return <svg {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>;
+    case "search":    return <svg {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
+    case "shield":    return <svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>;
+    case "database":  return <svg {...p}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>;
+    case "eye":       return <svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
+    case "eyeOff":    return <svg {...p}><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>;
+    case "calendar":  return <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
+    default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
 
@@ -828,18 +786,17 @@ export default function App() {
     _notifTimer = setTimeout(() => setNotif(""), 2600);
   }, []);
 
-  // ── Restore session from localStorage on mount
+  // Restore session on mount
   useEffect(() => {
     const t1 = setTimeout(() => setSplashFade(true), 1900);
     const t2 = setTimeout(() => {
       setSplash(false);
       const saved = Store.get(USER_KEY);
       const token = localStorage.getItem(TOKEN_KEY);
-      // Both must exist and match for auto-login to succeed
       if (saved && token && saved.token === token) {
+        _loggingOut = false;
         setUser(saved);
       } else {
-        // Stale or mismatched — clear everything cleanly
         Store.remove(USER_KEY);
         localStorage.removeItem(TOKEN_KEY);
         setUser(null);
@@ -848,38 +805,36 @@ export default function App() {
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
-  // ── login: write token to localStorage, then set React state
   const login = (u) => {
-    // u.token comes from the API response access_token field
-    api.setToken(u.token);           // writes to localStorage["tc_token"]
-    Store.set(USER_KEY, u);          // writes to localStorage["tc_user"]
+    _loggingOut = false;
+    api.setToken(u.token);
+    Store.set(USER_KEY, u);
     setUser(u);
     setPage("home");
   };
 
-  // ── logout: clear everything, reset all state
- const logout = () => {
-  // Clear storage FIRST before any state changes
-  api.setToken(null);
-  Store.remove(USER_KEY);
-  
-  // Reset ALL state atomically
-  setAssActive(false);
-  setResult(null);
-  setAnalyzing(false);
-  setAnswers({});
-  setAsked([]);
-  setCurrentQ(null);
-  setQIdx(0);
-  setSessionId(null);
-  setDetailRec(null);
-  setPage("home");
-  
-  // Set user null LAST so nothing tries to render an authenticated screen
-  // while the token is already gone
-  setUser(null);
-  toast("Signed out successfully.");
-};
+  // FIX 1: Set _loggingOut flag FIRST, clear storage SECOND, reset state THIRD.
+  // This prevents any in-flight async .then() from calling setState after logout.
+  const logout = useCallback(() => {
+    _loggingOut = true;           // signal all async callbacks to bail out
+    api.setToken(null);           // clear token from localStorage immediately
+    Store.remove(USER_KEY);       // clear user from localStorage
+
+    // Reset all assessment state atomically
+    setAssActive(false);
+    setResult(null);
+    setAnalyzing(false);
+    setAnswers({});
+    setAsked([]);
+    setCurrentQ(null);
+    setQIdx(0);
+    setSessionId(null);
+    setDetailRec(null);
+    setPage("home");
+    setUser(null);                // triggers re-render to AuthScreen
+    setNotif("");
+    toast("Signed out successfully.");
+  }, [toast]);
 
   const startAssessment = async () => {
     setAnswers({}); setAsked([]); setQIdx(0);
@@ -888,10 +843,12 @@ export default function App() {
     let sid    = null;
     try {
       const data = await api.post("/symptoms/start", {});
+      if (_loggingOut) return;
       sid    = data.session_id;
       firstQ = data.first_question || ALL_QUESTIONS[0];
       setSessionId(sid);
     } catch { /* offline fallback */ }
+    if (_loggingOut) return;
     setCurrentQ(firstQ);
     setAssActive(true);
     setPage("assessment");
@@ -907,12 +864,14 @@ export default function App() {
     if (sessionId) {
       try {
         const res = await api.post(`/symptoms/next?session_id=${sessionId}`, { question_id: currentQ.id, answer: val });
+        if (_loggingOut) return;
         if (res.completed) { finishAssessment(newAnswers); return; }
         next = res.next_question;
       } catch { next = getNextQuestionOffline(newAnswers, newAsked); }
     } else {
       next = getNextQuestionOffline(newAnswers, newAsked);
     }
+    if (_loggingOut) return;
     if (!next) { finishAssessment(newAnswers); return; }
     setCurrentQ(next);
     setQIdx(qIdx + 1);
@@ -922,11 +881,16 @@ export default function App() {
     setAssActive(false);
     setAnalyzing(true);
     await new Promise((r) => setTimeout(r, 2400));
+    if (_loggingOut) return;
     let pred = null;
     if (sessionId) {
-      try { pred = await api.post(`/diagnosis/analyze?session_id=${sessionId}`, {}); } catch {}
+      try {
+        pred = await api.post(`/diagnosis/analyze?session_id=${sessionId}`, {});
+        if (_loggingOut) return;
+      } catch {}
     }
     if (!pred) pred = predictOffline(finalAnswers);
+    if (_loggingOut) return;
     setResult(pred);
     setAnalyzing(false);
     setPage("result");
@@ -965,15 +929,17 @@ export default function App() {
 
   const renderPage = () => {
     switch (page) {
-      case "home":       return <HomeScreen user={user} onStart={startAssessment} onNav={setPage} />;
+      // FIX 2: Pass user.id into HomeScreen so its effect re-mounts on user change
+      case "home":       return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
       case "assessment": return <AssessmentLanding onStart={startAssessment} />;
       case "records":    return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
       case "profile":    return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
       case "settings":   return <SettingsScreen onBack={() => setPage("profile")} toast={toast} />;
-      case "privacy":    return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} />;
+      case "privacy":    return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} onLogout={logout} />;
       case "about":      return <AboutScreen onBack={() => setPage("profile")} />;
-      case "admin":      return <AdminScreen onBack={() => setPage("profile")} toast={toast} />;
-      default:           return <HomeScreen user={user} onStart={startAssessment} onNav={setPage} />;
+      // FIX 3: "database" now shows the user's own data only — no admin routes
+      case "mydata":     return <MyDataScreen onBack={() => setPage("profile")} toast={toast} />;
+      default:           return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
     }
   };
 
@@ -1032,7 +998,6 @@ function AuthScreen({ onLogin, toast }) {
   const [showPw,  setShowPw]  = useState(false);
   const [loading, setLoading] = useState(false);
 
-  // Clear form fields when switching between login and register
   const switchMode = (m) => {
     setMode(m);
     setName(""); setEmail(""); setPw(""); setAge(""); setGender("");
@@ -1049,7 +1014,6 @@ function AuthScreen({ onLogin, toast }) {
       } else {
         data = await api.post("/auth/login", { email: email.trim(), password: pw });
       }
-      // Normalise: access_token → token on the user object
       onLogin({ ...data.user, token: data.access_token });
     } catch (e) {
       toast(e.message || "Something went wrong. Please try again.");
@@ -1122,17 +1086,26 @@ function AuthScreen({ onLogin, toast }) {
 
 // ─────────────────────────────────────────────
 // HOME SCREEN
+// FIX: receives userId as a separate prop so the effect key changes on login/logout,
+// preventing the stale closure from a previous user's session from calling setState.
 // ─────────────────────────────────────────────
-function HomeScreen({ user, onStart, onNav }) {
+function HomeScreen({ userId, user, onStart, onNav }) {
   const [records, setRecords] = useState([]);
 
   useEffect(() => {
-  let cancelled = false;
-  api.get("/patient/history")
-    .then((d) => { if (!cancelled) setRecords(d.slice(0, 3)); })
-    .catch(() => { if (!cancelled) setRecords([]); }); // swallow auth errors silently
-  return () => { cancelled = true; }; // cleanup prevents setState after unmount
-}, []);
+    let cancelled = false;
+    api.get("/patient/history")
+      .then((d) => {
+        // Guard: don't update if component unmounted OR global logout fired
+        if (cancelled || _loggingOut) return;
+        setRecords(d.slice(0, 3));
+      })
+      .catch(() => {
+        if (cancelled || _loggingOut) return;
+        setRecords([]);
+      });
+    return () => { cancelled = true; };
+  }, [userId]); // re-run when userId changes (new login after logout)
 
   const stats = [
     { label: "Assessments", val: records.length,                                        icon: "activity", color: "#0d9488" },
@@ -1218,7 +1191,6 @@ function AssessmentLanding({ onStart }) {
     { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "#3b82f6", bg: "#eff6ff" },
     { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",           color: "#8b5cf6", bg: "#f5f3ff" },
   ];
-
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div className="al-hero">
@@ -1242,7 +1214,6 @@ function AssessmentLanding({ onStart }) {
         </div>
         <div className="al-hero-illus"><HealthProfessionalIllus width={120} height={140} /></div>
       </div>
-
       <div className="page-body" style={{ flex: 1 }}>
         <div className="card card-p mb-4">
           <div className="section-ttl mb-1">How it works</div>
@@ -1279,9 +1250,7 @@ function AssessmentLanding({ onStart }) {
 function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
   const [animKey, setAnimKey] = useState(0);
   const progress = (qIdx / total) * 100;
-
   const answer = (val) => { setAnimKey((k) => k + 1); onAnswer(val); };
-
   return (
     <div className="q-screen">
       <div className="q-topbar">
@@ -1316,12 +1285,10 @@ function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
 function AnalyzingScreen() {
   const [step, setStep] = useState(0);
   const steps = ["Processing your responses...","Running diagnostic models...","Calculating risk level...","Preparing your recommendations..."];
-
   useEffect(() => {
     const t = setInterval(() => setStep((s) => Math.min(s + 1, steps.length - 1)), 680);
     return () => clearInterval(t);
   }, []);
-
   return (
     <div className="analyzing">
       <div className="spin-ring"><IllusAnalysis /></div>
@@ -1343,7 +1310,6 @@ function ResultScreen({ result, onReset, onNewCheck }) {
   const scores = result.all_scores
     ? Object.entries(result.all_scores).filter(([d]) => d !== result.disease).slice(0, 4)
     : [];
-
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -1352,7 +1318,6 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           <Icon name="x" size={16} color="var(--muted)" />
         </button>
       </div>
-
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "24px 16px 64px" }}>
         <div className="text-c mb-4">
           <div className={`result-ring result-ring-${risk}`}>
@@ -1360,7 +1325,6 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           </div>
           <span className={`badge badge-${risk}`} style={{ fontSize: 12, padding: "4px 14px" }}>{risk} Risk</span>
         </div>
-
         <div className="card card-p mb-3 text-c">
           <div className="t-label mb-2">Predicted Condition</div>
           <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12 }}>{result.disease}</div>
@@ -1374,7 +1338,6 @@ function ResultScreen({ result, onReset, onNewCheck }) {
             </div>
           )}
         </div>
-
         <div className="section-ttl mb-2">What to Do</div>
         <div className="rec-bubbles mb-4">
           <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16a34a" bg="#f0fdf4" />
@@ -1382,7 +1345,6 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}   bg={bg} />
           {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />}
         </div>
-
         {scores.length > 0 && (
           <div className="card card-p mb-4">
             <div className="section-ttl mb-3">Other Possibilities</div>
@@ -1397,12 +1359,10 @@ function ResultScreen({ result, onReset, onNewCheck }) {
             ))}
           </div>
         )}
-
         <div className="disclaimer mb-4">
           <Icon name="alert" size={14} color="var(--amber)" />
           <p>This result is for informational purposes only. It does not replace a clinical diagnosis. Consult a qualified healthcare professional before making any medical decisions.</p>
         </div>
-
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Start New Assessment</button>
           <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
@@ -1414,6 +1374,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
 
 // ─────────────────────────────────────────────
 // RECORDS SCREEN
+// Uses /patient/history which is JWT-scoped to the current user.
 // ─────────────────────────────────────────────
 function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
   const [records, setRecords] = useState([]);
@@ -1425,9 +1386,15 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
 
   const load = async () => {
     setLoading(true);
-    try { setRecords(await api.get("/patient/history")); }
-    catch { setRecords([]); }
-    finally { setLoading(false); }
+    try {
+      const data = await api.get("/patient/history");
+      if (_loggingOut) return;
+      setRecords(data);
+    } catch {
+      if (!_loggingOut) setRecords([]);
+    } finally {
+      if (!_loggingOut) setLoading(false);
+    }
   };
 
   if (detail) return <RecordDetail record={detail} onBack={onClearDetail} />;
@@ -1442,7 +1409,7 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
   return (
     <div>
       <div className="page-head">
-        <div className="t-display">Patient Records</div>
+        <div className="t-display">My Records</div>
         <div className="t-subtitle mt-1">{records.length} total assessment{records.length !== 1 ? "s" : ""}</div>
       </div>
       <div className="page-body">
@@ -1490,7 +1457,6 @@ function RecordDetail({ record, onBack }) {
   const bg    = RISK_BG[record.risk]   || "#f0fdfa";
   const rec   = record.recommendation  || {};
   const syms  = (record.active_symptoms || []).map((s) => s.replace(/_/g, " "));
-
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
@@ -1552,15 +1518,19 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    api.get("/user/profile").then(setProfile).catch(() => setProfile(user || {}));
+    let cancelled = false;
+    api.get("/user/profile")
+      .then((d) => { if (!cancelled && !_loggingOut) setProfile(d); })
+      .catch(() => { if (!cancelled && !_loggingOut) setProfile(user || {}); });
+    return () => { cancelled = true; };
   }, []);
 
   const saveProfile = async () => {
     setLoading(true);
     try {
       const data = await api.put("/user/profile", { name, age, gender });
+      if (_loggingOut) return;
       setProfile((prev) => ({ ...prev, ...data }));
-      // Update localStorage with new name/age/gender but keep the existing token
       const existing = Store.get(USER_KEY) || {};
       Store.set(USER_KEY, { ...existing, name, age, gender });
       toast("Profile updated.");
@@ -1573,19 +1543,18 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
   };
 
   const cancelEdit = () => {
-    setName(user?.name || "");
-    setAge(user?.age   || "");
-    setGender(user?.gender || "");
+    setName(user?.name || ""); setAge(user?.age || ""); setGender(user?.gender || "");
     setEditing(false);
   };
 
   const p = { ...user, ...profile };
 
+  // FIX: "Database" menu item now routes to "mydata" (personal data only)
   const menuItems = [
     { label: "Settings",           icon: "settings", action: () => onNav("settings") },
     { label: "Privacy & Security", icon: "shield",   action: () => onNav("privacy")  },
     { label: "About TropiCare",    icon: "info",     action: () => onNav("about")    },
-    { label: "Database",           icon: "database", action: () => onNav("admin")    },
+    { label: "My Data",            icon: "database", action: () => onNav("mydata")   },
   ];
 
   return (
@@ -1598,7 +1567,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </button>
         )}
       </div>
-
       <div className="page-body">
         {!editing && (
           <div className="card card-p text-c mb-3">
@@ -1615,7 +1583,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             </div>
           </div>
         )}
-
         {editing && (
           <div className="edit-panel mb-3">
             <div className="edit-panel-title">Edit Profile</div>
@@ -1644,7 +1611,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             </div>
           </div>
         )}
-
         <div className="profile-stat-grid">
           <div className="ps-card">
             <div className="ps-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
@@ -1655,7 +1621,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             <div className="ps-lbl">High Risk</div>
           </div>
         </div>
-
         <div className="card card-p mb-3">
           <div className="menu-list">
             {menuItems.map((item) => (
@@ -1667,11 +1632,9 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             ))}
           </div>
         </div>
-
         <button className="btn btn-danger btn-full" onClick={onLogout}>
           <Icon name="logout" size={15} color="#fff" /> Sign Out
         </button>
-
         <div className="text-c mt-4" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.7 }}>
           TropiCare v1.0 · Symptom Checker for Tropical Diseases
         </div>
@@ -1681,9 +1644,133 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
 }
 
 // ─────────────────────────────────────────────
+// MY DATA SCREEN  (replaces admin screen)
+// Shows ONLY the current user's own records.
+// Delete calls /patient/history/:id — backend enforces ownership via JWT.
+// ─────────────────────────────────────────────
+function MyDataScreen({ onBack, toast }) {
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [search,  setSearch]  = useState("");
+  const [delId,   setDelId]   = useState(null); // id awaiting 2nd-tap confirm
+
+  useEffect(() => { load(); }, []);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const data = await api.get("/patient/history");
+      if (!_loggingOut) setRecords(data);
+    } catch {
+      if (!_loggingOut) setRecords([]);
+    } finally {
+      if (!_loggingOut) setLoading(false);
+    }
+  };
+
+  // Delete a single record — backend only allows the owner's JWT to delete
+  const deleteRecord = async (id) => {
+    if (delId !== id) {
+      // First tap: set confirm target, auto-clear after 5 s
+      setDelId(id);
+      setTimeout(() => setDelId((cur) => cur === id ? null : cur), 5000);
+      return;
+    }
+    // Second tap: confirmed
+    try {
+      await api.delete(`/patient/history/${id}`);
+      setRecords((prev) => prev.filter((r) => r.id !== id));
+      setDelId(null);
+      toast("Record deleted.");
+    } catch {
+      toast("Could not delete. Please try again.");
+    }
+  };
+
+  const counts = { High: 0, Medium: 0, Low: 0 };
+  records.forEach((r) => { if (counts[r.risk] !== undefined) counts[r.risk]++; });
+
+  const shown = records.filter((r) =>
+    (r.disease || "").toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div className="t-display">My Data</div>
+      </div>
+      <div className="page-body">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
+          {[["High","#ef4444"],["Medium","#f59e0b"],["Low","#22c55e"]].map(([r,c]) => (
+            <div key={r} className="stat-card">
+              <div className="stat-val" style={{ color: c }}>{counts[r]}</div>
+              <div className="stat-lbl">{r}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ background: "var(--teal-xl)", border: "1px solid var(--teal-l)", borderRadius: "var(--radius)", padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-start" }}>
+          <Icon name="shield" size={16} color="var(--teal)" />
+          <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, margin: 0 }}>
+            This screen shows only your own assessments. No other user's data is accessible here.
+          </p>
+        </div>
+
+        <div className="section-ttl mb-2">My Assessments ({records.length})</div>
+        <div className="search-wrap mb-3">
+          <span className="search-icon"><Icon name="search" size={15} /></span>
+          <input className="search-input" placeholder="Search by disease..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+
+        {loading ? (
+          <div className="empty-state"><div className="t-subtitle">Loading...</div></div>
+        ) : shown.length === 0 ? (
+          <div className="empty-state">
+            <Icon name="database" size={36} color="var(--muted-l)" />
+            <div className="t-subtitle">No assessments yet</div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {shown.map((r) => (
+              <div key={r.id} className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>{r.disease}</div>
+                  <div className="t-subtitle" style={{ fontSize: 11 }}>{fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}% match</div>
+                </div>
+                <span className={`badge badge-${r.risk}`}>{r.risk}</span>
+                {delId === r.id ? (
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button onClick={() => deleteRecord(r.id)}
+                      style={{ border: "none", background: "#ef4444", color: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                      Confirm
+                    </button>
+                    <button onClick={() => setDelId(null)}
+                      style={{ border: "none", background: "var(--border-l)", color: "var(--muted)", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={() => deleteRecord(r.id)}
+                    style={{ border: "none", background: "#fef2f2", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
+                    <Icon name="trash" size={13} color="#ef4444" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // PRIVACY & SECURITY SCREEN
 // ─────────────────────────────────────────────
-function PrivacySecurityScreen({ onBack, toast, user }) {
+function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
   const [currentPw,     setCurrentPw]     = useState("");
   const [newPw,         setNewPw]         = useState("");
   const [confirmPw,     setConfirmPw]     = useState("");
@@ -1713,13 +1800,16 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
   };
 
   const deleteAccount = async () => {
-    if (!deleteConfirm) { setDeleteConfirm(true); setTimeout(() => setDeleteConfirm(false), 6000); return; }
+    if (!deleteConfirm) {
+      setDeleteConfirm(true);
+      setTimeout(() => setDeleteConfirm(false), 6000);
+      return;
+    }
     setDeleteLoading(true);
     try {
       await api.delete("/user/account");
-      api.setToken(null);
-      Store.remove(USER_KEY);
-      window.location.reload();
+      // Use onLogout so the parent clears everything cleanly (no window.location.reload)
+      onLogout();
     } catch {
       toast("Could not delete account. Please try again.");
       setDeleteLoading(false);
@@ -1727,7 +1817,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
   };
 
   const privacyPoints = [
-    { icon: "database", color: "#0d9488", bg: "var(--teal-xl)", label: "Local data only",        desc: "Your assessment history is stored in a secured database tied to your account only." },
+    { icon: "database", color: "#0d9488", bg: "var(--teal-xl)", label: "Data stays yours",        desc: "Your assessment history is stored in a secured database tied to your account only." },
     { icon: "user",     color: "#3b82f6", bg: "#eff6ff",        label: "No third-party sharing", desc: "Your personal health data is never sold or shared with advertisers or third parties." },
     { icon: "shield",   color: "#8b5cf6", bg: "#f5f3ff",        label: "Encrypted in transit",   desc: "All data between your device and our servers is protected using HTTPS encryption." },
     { icon: "trash",    color: "#ef4444", bg: "#fef2f2",        label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
@@ -1741,7 +1831,6 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
         </button>
         <div className="t-display">Privacy & Security</div>
       </div>
-
       <div className="page-body">
         <div className="sec-section">
           <div className="sec-section-title">Account Security</div>
@@ -1759,7 +1848,6 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
                 {pwExpanded ? "Cancel" : "Change"}
               </button>
             </div>
-
             {pwExpanded && (
               <div className="sec-field-wrap">
                 <div className="field">
@@ -1793,7 +1881,6 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
                     </button>
                   </div>
                 </div>
-
                 {newPw.length > 0 && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "8px 12px", borderRadius: 8,
                     background: newPw.length < 8 ? "#fef2f2" : "#f0fdf4",
@@ -1804,7 +1891,6 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
                     </span>
                   </div>
                 )}
-
                 {confirmPw.length > 0 && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", borderRadius: 8,
                     background: newPw !== confirmPw ? "#fef2f2" : "#f0fdf4",
@@ -1815,13 +1901,11 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
                     </span>
                   </div>
                 )}
-
                 <button className="btn btn-primary btn-full" onClick={changePassword} disabled={pwLoading}>
                   {pwLoading ? "Updating..." : "Update Password"}
                 </button>
               </div>
             )}
-
             <div className="sec-row">
               <div className="sec-row-icon" style={{ background: "var(--teal-xl)" }}>
                 <Icon name="user" size={16} color="var(--teal)" />
@@ -1891,13 +1975,11 @@ function AboutScreen({ onBack }) {
     { icon: "clipboard", color: "#f59e0b", bg: "#fffbeb",        title: "Assessment History",          desc: "All past results are stored securely so you and your care provider can track changes over time." },
     { icon: "user",      color: "#22c55e", bg: "#f0fdf4",        title: "Built for West Africa",       desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
   ];
-
   const team = [
     { initials: "OA", name: "Obed Mensah",          role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
     { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping", color: "#3b82f6", bg: "#eff6ff" },
     { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                    color: "#8b5cf6", bg: "#f5f3ff" },
   ];
-
   const versionInfo = [
     { key: "Version",     val: "1.0.0" },
     { key: "Release",     val: "May 2026" },
@@ -1905,7 +1987,6 @@ function AboutScreen({ onBack }) {
     { key: "Institution", val: "KNUST, Ghana" },
     { key: "License",     val: "Academic use only" },
   ];
-
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
@@ -1914,7 +1995,6 @@ function AboutScreen({ onBack }) {
         </button>
         <div className="t-display">About TropiCare</div>
       </div>
-
       <div className="page-body">
         <div className="about-hero">
           <div className="about-hero-bg"><Icon name="heart" size={160} color="#fff" /></div>
@@ -1925,7 +2005,6 @@ function AboutScreen({ onBack }) {
             faster with clear risk levels and personalised recommendations.
           </div>
         </div>
-
         <div className="about-mission mb-4">
           <div className="about-mission-label">Our Mission</div>
           <div className="about-mission-text">
@@ -1934,7 +2013,6 @@ function AboutScreen({ onBack }) {
             to patients and triage staff before a doctor is available.
           </div>
         </div>
-
         <div className="about-fact-grid mb-4">
           {[{val:"22",lbl:"Diseases covered"},{val:"76",lbl:"Tracked symptoms"},{val:"15",lbl:"Max questions"},{val:"2",lbl:"ML algorithms"}].map((f) => (
             <div key={f.lbl} className="about-fact">
@@ -1943,7 +2021,6 @@ function AboutScreen({ onBack }) {
             </div>
           ))}
         </div>
-
         <div className="section-ttl mb-2">What TropiCare Does</div>
         <div className="card card-p mb-4">
           {features.map((f) => (
@@ -1958,12 +2035,10 @@ function AboutScreen({ onBack }) {
             </div>
           ))}
         </div>
-
         <div className="disclaimer mb-4">
           <Icon name="alert" size={14} color="var(--amber)" />
           <p>TropiCare is an informational tool only. It does not replace a clinical examination or a qualified healthcare professional. Always consult a doctor for a definitive diagnosis.</p>
         </div>
-
         <div className="section-ttl mb-2">The Team</div>
         {team.map((t) => (
           <div key={t.name} className="about-team-card">
@@ -1974,7 +2049,6 @@ function AboutScreen({ onBack }) {
             </div>
           </div>
         ))}
-
         <div className="section-ttl mt-4 mb-2">Version Info</div>
         <div className="card card-p mb-4">
           {versionInfo.map((v) => (
@@ -1984,7 +2058,6 @@ function AboutScreen({ onBack }) {
             </div>
           ))}
         </div>
-
         <div className="text-c" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.8 }}>
           TropiCare · Symptom Checker for Tropical Diseases<br />
           Kwame Nkrumah University of Science and Technology
@@ -2006,12 +2079,7 @@ function SettingsScreen({ onBack, toast }) {
 
   useEffect(() => {
     const s = Store.get("tc_settings");
-    if (s) {
-      setTheme(s.theme || "light");
-      setNotifs(s.notifications !== false);
-      setLang(s.language || "en");
-      setFontSize(s.fontSize || "medium");
-    }
+    if (s) { setTheme(s.theme || "light"); setNotifs(s.notifications !== false); setLang(s.language || "en"); setFontSize(s.fontSize || "medium"); }
   }, []);
 
   const save = () => {
@@ -2106,116 +2174,6 @@ function SettingsScreen({ onBack, toast }) {
           </div>
         ))}
         <button className="btn btn-primary btn-full" onClick={save}>Save Settings</button>
-      </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────
-// ADMIN SCREEN
-// ─────────────────────────────────────────────
-function AdminScreen({ onBack, toast }) {
-  const [records, setRecords] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [confirm, setConfirm] = useState(false);
-  const [search,  setSearch]  = useState("");
-
-  useEffect(() => { load(); }, []);
-
-  const load = async () => {
-    setLoading(true);
-    try { setRecords(await api.get("/admin/all-records")); }
-    catch { setRecords([]); }
-    finally { setLoading(false); }
-  };
-
-  const clearAll = async () => {
-    if (!confirm) { setConfirm(true); setTimeout(() => setConfirm(false), 5000); return; }
-    try {
-      await api.delete("/admin/clear-database");
-      setRecords([]); setConfirm(false); toast("All records cleared.");
-    } catch { toast("Failed to clear records."); }
-  };
-
-  const del = async (id) => {
-    try { await api.delete(`/admin/record/${id}`); } catch {}
-    setRecords((r) => r.filter((x) => x.id !== id));
-    toast("Record deleted.");
-  };
-
-  const counts = { High: 0, Medium: 0, Low: 0 };
-  records.forEach((r) => { if (counts[r.risk] !== undefined) counts[r.risk]++; });
-
-  const shown = records.filter((r) =>
-    (r.disease || "").toLowerCase().includes(search.toLowerCase()) ||
-    (r.patient_name || "").toLowerCase().includes(search.toLowerCase())
-  );
-
-  return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
-          <Icon name="chevL" size={16} color="var(--ink)" />
-        </button>
-        <div className="t-display">Database</div>
-      </div>
-      <div className="page-body">
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
-          {[["High","#ef4444"],["Medium","#f59e0b"],["Low","#22c55e"]].map(([r,c]) => (
-            <div key={r} className="stat-card">
-              <div className="stat-val" style={{ color: c }}>{counts[r]}</div>
-              <div className="stat-lbl">{r}</div>
-            </div>
-          ))}
-        </div>
-
-        <div className="danger-zone mb-4">
-          <div style={{ fontWeight: 700, color: "#ef4444", marginBottom: 4 }}>Clear All Records</div>
-          <div className="t-subtitle mb-3">Permanently deletes all assessment data. This cannot be undone.</div>
-          {confirm && (
-            <div className="disclaimer mb-3">
-              <Icon name="alert" size={14} color="var(--amber)" />
-              <p>Click again to confirm deletion of {records.length} record{records.length !== 1 ? "s" : ""}.</p>
-            </div>
-          )}
-          <button className="btn btn-danger btn-full" onClick={clearAll} disabled={records.length === 0}>
-            <Icon name="trash" size={14} color="#fff" />
-            {confirm ? "Confirm Delete All" : "Clear All Records"}
-          </button>
-          {confirm && (
-            <button className="btn btn-secondary btn-full mt-2" onClick={() => setConfirm(false)}>Cancel</button>
-          )}
-        </div>
-
-        <div className="section-ttl mb-2">All Records ({records.length})</div>
-        <div className="search-wrap mb-3">
-          <span className="search-icon"><Icon name="search" size={15} /></span>
-          <input className="search-input" placeholder="Search records..." value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-
-        {loading ? (
-          <div className="empty-state"><div className="t-subtitle">Loading...</div></div>
-        ) : shown.length === 0 ? (
-          <div className="empty-state">
-            <Icon name="database" size={36} color="var(--muted-l)" />
-            <div className="t-subtitle">No records found</div>
-          </div>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {shown.map((r) => (
-              <div key={r.id} className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13 }}>{r.disease}</div>
-                  <div className="t-subtitle" style={{ fontSize: 11 }}>{r.patient_name} · {fmtDate(r.created_at)}</div>
-                </div>
-                <span className={`badge badge-${r.risk}`}>{r.risk}</span>
-                <button onClick={() => del(r.id)} style={{ border: "none", background: "#fef2f2", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
-                  <Icon name="trash" size={13} color="#ef4444" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
       </div>
     </div>
   );
