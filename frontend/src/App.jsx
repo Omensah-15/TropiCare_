@@ -1,6 +1,13 @@
 /*
  * TropiCare — App.jsx
  * Backend: FastAPI (tropicare.onrender.com)
+ *
+ * AUTH FIXES APPLIED:
+ *  1. api.call() auto-clears stale token on 401 + friendly error messages
+ *  2. login() wipes stale session before writing new one
+ *  3. logout() kills splash timer race + clears storage before state
+ *  4. useEffect splash restore re-reads storage at fire time (not closure)
+ *  5. AuthScreen submit() lowercases email + min-length password check
  */
 
 import { useState, useEffect, useCallback } from "react";
@@ -14,8 +21,6 @@ const API_BASE = "https://tropicare.onrender.com/api/v1";
 
 // ─────────────────────────────────────────────
 // API CLIENT
-// Single source of truth: localStorage key "tc_token"
-// No module-level variable — reads fresh on every call.
 // ─────────────────────────────────────────────
 const TOKEN_KEY = "tc_token";
 const USER_KEY  = "tc_user";
@@ -35,6 +40,7 @@ const api = {
     };
   },
 
+  // FIX 1: Auto-clear stale token on 401 + friendly error messages
   async call(method, path, body) {
     const res = await fetch(`${API_BASE}${path}`, {
       method,
@@ -42,7 +48,15 @@ const api = {
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) {
+      // Clear stale token on 401 so auth screen works cleanly
+      if (res.status === 401) {
+        api.setToken(null);
+        localStorage.removeItem(USER_KEY);
+      }
       const err = await res.json().catch(() => ({}));
+      if (res.status === 429) throw new Error("Too many attempts — please wait a minute and try again.");
+      if (res.status === 400) throw new Error(err.detail || "That email may already be registered.");
+      if (res.status === 401) throw new Error("Incorrect email or password.");
       throw new Error(err.detail || `HTTP ${res.status}`);
     }
     return res.json();
@@ -828,19 +842,20 @@ export default function App() {
     _notifTimer = setTimeout(() => setNotif(""), 2600);
   }, []);
 
-  // ── Restore session from localStorage on mount
+  // FIX 4: Re-read storage at timer fire time, not at closure capture time.
+  // This prevents a logout that happens mid-splash from being overridden.
   useEffect(() => {
     const t1 = setTimeout(() => setSplashFade(true), 1900);
     const t2 = setTimeout(() => {
       setSplash(false);
+      // Read fresh from storage at fire time
       const saved = Store.get(USER_KEY);
       const token = localStorage.getItem(TOKEN_KEY);
-      // Both must exist and match for auto-login to succeed
       if (saved && token && saved.token === token) {
         setUser(saved);
       } else {
-        // Stale or mismatched — clear everything cleanly
-        Store.remove(USER_KEY);
+        // Mismatch or missing — ensure clean slate
+        localStorage.removeItem(USER_KEY);
         localStorage.removeItem(TOKEN_KEY);
         setUser(null);
       }
@@ -848,19 +863,31 @@ export default function App() {
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
-  // ── login: write token to localStorage, then set React state
+  // FIX 2: Wipe stale session before writing new one; guarantee token-first order
   const login = (u) => {
-    // u.token comes from the API response access_token field
-    api.setToken(u.token);           // writes to localStorage["tc_token"]
-    Store.set(USER_KEY, u);          // writes to localStorage["tc_user"]
-    setUser(u);
+    // Clear any previous session first to prevent ghost-login
+    api.setToken(null);
+    localStorage.removeItem(USER_KEY);
+    // Write fresh — token must be in localStorage before setUser triggers re-renders
+    const userRecord = { ...u, token: u.token };
+    api.setToken(u.token);
+    Store.set(USER_KEY, userRecord);
+    setUser(userRecord);
     setPage("home");
   };
 
-  // ── logout: clear everything, reset all state
+  // FIX 3: Kill splash timer race + clear storage atomically before state update
   const logout = () => {
-    api.setToken(null);              // removes localStorage["tc_token"]
-    Store.remove(USER_KEY);          // removes localStorage["tc_user"]
+    // Force-dismiss splash immediately so user isn't confused by it
+    // re-appearing after logout (the 2300ms timer may still be pending)
+    setSplash(false);
+    setSplashFade(false);
+
+    // Clear storage BEFORE state updates
+    api.setToken(null);
+    localStorage.removeItem(USER_KEY);
+
+    // Reset all app state
     setUser(null);
     setAssActive(false);
     setResult(null);
@@ -1032,20 +1059,32 @@ function AuthScreen({ onLogin, toast }) {
     setName(""); setEmail(""); setPw(""); setAge(""); setGender("");
   };
 
+  // FIX 5: lowercase email, min-length check, clear errors surfaced from api.call()
   const submit = async () => {
     if (!email.trim() || !pw.trim()) { toast("Please fill in all required fields."); return; }
     if (mode === "register" && !name.trim()) { toast("Please enter your full name."); return; }
+    if (mode === "register" && pw.length < 8) { toast("Password must be at least 8 characters."); return; }
     setLoading(true);
     try {
       let data;
       if (mode === "register") {
-        data = await api.post("/auth/register", { email: email.trim(), password: pw, name: name.trim(), age, gender });
+        data = await api.post("/auth/register", {
+          email:    email.trim().toLowerCase(),
+          password: pw,
+          name:     name.trim(),
+          age,
+          gender,
+        });
       } else {
-        data = await api.post("/auth/login", { email: email.trim(), password: pw });
+        data = await api.post("/auth/login", {
+          email:    email.trim().toLowerCase(),
+          password: pw,
+        });
       }
-      // Normalise: access_token → token on the user object
+      // api response: { access_token, token_type, user: { id, email, name } }
       onLogin({ ...data.user, token: data.access_token });
     } catch (e) {
+      // api.call() now produces friendly messages for 400/401/429
       toast(e.message || "Something went wrong. Please try again.");
     } finally {
       setLoading(false);
@@ -1550,7 +1589,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
     try {
       const data = await api.put("/user/profile", { name, age, gender });
       setProfile((prev) => ({ ...prev, ...data }));
-      // Update localStorage with new name/age/gender but keep the existing token
       const existing = Store.get(USER_KEY) || {};
       Store.set(USER_KEY, { ...existing, name, age, gender });
       toast("Profile updated.");
@@ -1708,7 +1746,7 @@ function PrivacySecurityScreen({ onBack, toast, user }) {
     try {
       await api.delete("/user/account");
       api.setToken(null);
-      Store.remove(USER_KEY);
+      localStorage.removeItem(USER_KEY);
       window.location.reload();
     } catch {
       toast("Could not delete account. Please try again.");
