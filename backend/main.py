@@ -1,1734 +1,2192 @@
-"""
-TropiCare API
-"""
+/*
+ * TropiCare — App.jsx
+ * Backend: FastAPI (tropicare.onrender.com)
+ */
 
-from __future__ import annotations
+import { useState, useEffect, useCallback } from "react";
 
-# ─────────────────────────────────────────────────────────────
-# STDLIB
-# ─────────────────────────────────────────────────────────────
-import asyncio
-import hashlib
-import json
-import logging
-import os
-import re
-import secrets
-import time
-import unicodedata
-import uuid
-from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
-from typing import Annotated, Any, Dict, List, Optional
+import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
 
-# ─────────────────────────────────────────────────────────────
-# THIRD-PARTY
-# ─────────────────────────────────────────────────────────────
-import aiohttp
-import numpy as np
-from dotenv import load_dotenv
-from jose import JWTError, jwt
-from pythonjsonlogger import jsonlogger
+// ─────────────────────────────────────────────
+// BACKEND CONFIG
+// ─────────────────────────────────────────────
+const API_BASE = "https://tropicare.onrender.com/api/v1";
 
-# FastAPI
-from fastapi import (
-    BackgroundTasks,
-    Depends,
-    FastAPI,
-    HTTPException,
-    Request,
-    Response,
-    status,
-)
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+// ─────────────────────────────────────────────
+// API CLIENT
+// ─────────────────────────────────────────────
+let _token = null;
 
-# Pydantic / Settings
-from pydantic import BaseModel
-from pydantic_settings import BaseSettings, SettingsConfigDict
+const api = {
+  setToken: (t) => { _token = t; },
+  getToken: () => _token,
 
-# SQLAlchemy (sync — kept for full backward compatibility;
-# async layer wraps it via run_in_executor to avoid asyncpg dependency issues
-# while still freeing the event loop)
-from sqlalchemy import (
-    Boolean,
-    Column,
-    DateTime,
-    Float,
-    ForeignKey,
-    Index,
-    Integer,
-    String,
-    Text,
-    create_engine,
-    event,
-)
-from sqlalchemy.orm import Session, declarative_base, sessionmaker
+  headers: () => ({
+    "Content-Type": "application/json",
+    ...(_token ? { Authorization: `Bearer ${_token}` } : {}),
+  }),
 
-# Rate limiting
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
-
-# Prometheus
-from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
-
-# APScheduler
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-# Circuit breaker
-import pybreaker
-
-# Watchdog
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileModifiedEvent
-
-# Optional: joblib
-try:
-    import joblib
-    JOBLIB_AVAILABLE = True
-except ImportError:
-    JOBLIB_AVAILABLE = False
-
-# Optional: aioredis
-try:
-    import redis.asyncio as aioredis
-    AIOREDIS_AVAILABLE = True
-except ImportError:
-    AIOREDIS_AVAILABLE = False
-
-load_dotenv()
-
-# ─────────────────────────────────────────────────────────────
-# CONFIG — Pydantic Settings
-# ─────────────────────────────────────────────────────────────
-
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
-
-    # Core
-    secret_key: str               = "tropicare-fallback-secret-2024"
-    algorithm: str                = "HS256"
-    access_token_expire_days: int = 7
-    database_url: str             = "sqlite:///./tropicare.db"
-    allowed_origins: str          = "*"
-    port: int                     = 8000
-
-    # OpenRouter
-    openrouter_api_key: str  = ""
-    openrouter_url: str      = "https://openrouter.ai/api/v1/chat/completions"
-    openrouter_model: str    = "mistralai/mistral-7b-instruct:free"
-    site_url: str            = "http://localhost:8000"
-    site_name: str           = "TropiCare"
-
-    # Redis
-    redis_url: str = "redis://localhost:6379/0"
-
-    # Feature flags
-    enable_ai_cache: bool      = True
-    enable_rate_limiting: bool = True
-    async_mode: bool           = True
-
-    # DB pool
-    db_pool_min: int = 5
-    db_pool_max: int = 20
-
-    # Body size limit (bytes)
-    max_body_size: int = 5 * 1024 * 1024  # 5 MB
-
-    @property
-    def origins_list(self) -> list[str]:
-        return self.allowed_origins.split(",")
-
-
-settings = Settings()
-MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
-
-# ─────────────────────────────────────────────────────────────
-# STRUCTURED JSON LOGGING
-# ─────────────────────────────────────────────────────────────
-
-def _build_logger(name: str) -> logging.Logger:
-    handler = logging.StreamHandler()
-    formatter = jsonlogger.JsonFormatter(
-        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
-        datefmt="%Y-%m-%dT%H:%M:%S",
-    )
-    handler.setFormatter(formatter)
-    log = logging.getLogger(name)
-    log.setLevel(logging.INFO)
-    log.handlers = [handler]
-    log.propagate = False
-    return log
-
-
-logger = _build_logger("tropicare")
-
-# ─────────────────────────────────────────────────────────────
-# PROMETHEUS CUSTOM METRICS
-# ─────────────────────────────────────────────────────────────
-
-OPENROUTER_LATENCY = Histogram(
-    "tropicare_openrouter_latency_seconds",
-    "OpenRouter call duration",
-    buckets=[0.1, 0.5, 1, 2, 5, 10, 15],
-)
-OPENROUTER_ERRORS = Counter(
-    "tropicare_openrouter_errors_total",
-    "OpenRouter error count",
-    ["reason"],
-)
-CACHE_HITS   = Counter("tropicare_cache_hits_total",   "Redis cache hits",   ["key_type"])
-CACHE_MISSES = Counter("tropicare_cache_misses_total",  "Redis cache misses", ["key_type"])
-CB_STATE     = Gauge("tropicare_circuit_breaker_open",  "Circuit breaker open (1=open)")
-DB_POOL_ACTIVE = Gauge("tropicare_db_pool_active", "DB pool active connections")
-DB_POOL_IDLE   = Gauge("tropicare_db_pool_idle",   "DB pool idle connections")
-SESSION_CLEANUP_RUNS = Counter("tropicare_session_cleanup_runs_total", "Session cleanup scheduler runs")
-
-# ─────────────────────────────────────────────────────────────
-# REDIS CLIENT
-# ─────────────────────────────────────────────────────────────
-
-_redis: Optional[Any] = None   # aioredis.Redis or None
-
-
-async def get_redis() -> Optional[Any]:
-    global _redis
-    if not AIOREDIS_AVAILABLE or not settings.enable_ai_cache:
-        return None
-    if _redis is None:
-        try:
-            _redis = await aioredis.from_url(
-                settings.redis_url,
-                encoding="utf-8",
-                decode_responses=True,
-                max_connections=20,
-            )
-            await _redis.ping()
-        except Exception as e:
-            logger.warning({"event": "redis_connect_failed", "error": str(e)})
-            _redis = None
-    return _redis
-
-
-async def cache_get(key: str, key_type: str = "generic") -> Optional[str]:
-    r = await get_redis()
-    if r is None:
-        return None
-    try:
-        val = await r.get(key)
-        if val is not None:
-            CACHE_HITS.labels(key_type=key_type).inc()
-        else:
-            CACHE_MISSES.labels(key_type=key_type).inc()
-        return val
-    except Exception:
-        return None
-
-
-async def cache_set(key: str, value: str, ttl: int) -> None:
-    r = await get_redis()
-    if r is None:
-        return
-    try:
-        await r.setex(key, ttl, value)
-    except Exception:
-        pass
-
-
-async def cache_delete(key: str) -> None:
-    r = await get_redis()
-    if r is None:
-        return
-    try:
-        await r.delete(key)
-    except Exception:
-        pass
-
-
-# ─────────────────────────────────────────────────────────────
-# DATABASE
-# ─────────────────────────────────────────────────────────────
-
-_connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-
-# Pool settings applied only for non-SQLite backends
-_pool_kwargs: dict = {}
-if not settings.database_url.startswith("sqlite"):
-    _pool_kwargs = {
-        "pool_size": settings.db_pool_min,
-        "max_overflow": settings.db_pool_max - settings.db_pool_min,
-        "pool_pre_ping": True,
+  async call(method, path, body) {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: api.headers(),
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
     }
+    return res.json();
+  },
 
-engine = create_engine(
-    settings.database_url,
-    connect_args=_connect_args,
-    **_pool_kwargs,
-)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+  get:    (path)       => api.call("GET",    path),
+  post:   (path, body) => api.call("POST",   path, body),
+  put:    (path, body) => api.call("PUT",    path, body),
+  delete: (path)       => api.call("DELETE", path),
+};
 
-# Track pool usage for Prometheus (only meaningful for non-SQLite)
-@event.listens_for(engine, "checkout")
-def _on_checkout(dbapi_conn, conn_record, conn_proxy):
-    pool = engine.pool
-    DB_POOL_ACTIVE.set(getattr(pool, "_checked_out", 0))
-    DB_POOL_IDLE.set(getattr(pool, "_pool", None) and pool._pool.qsize() or 0)
+// ─────────────────────────────────────────────
+// LOCAL SESSION STORE
+// ─────────────────────────────────────────────
+const Store = {
+  get:    (k) => { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
+  set:    (k, v) => localStorage.setItem(k, JSON.stringify(v)),
+  remove: (k) => localStorage.removeItem(k),
+};
 
+// ─────────────────────────────────────────────
+// RISK HELPERS
+// ─────────────────────────────────────────────
+const RISK_COLOR = { High: "#ef4444", Medium: "#f59e0b", Low: "#22c55e" };
+const RISK_BG    = { High: "#fef2f2", Medium: "#fffbeb", Low: "#f0fdf4" };
 
-# ─────────────────────────────────────────────────────────────
-# MODELS — DB (unchanged schema)
-# ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// DISEASE / SYMPTOM DATA
+// ─────────────────────────────────────────────
+const DISEASE_SYMPTOM_MAP = {
+  Malaria:                  ["high_fever","chills","sweating","headache","muscle_pain","vomiting","fatigue","joint_pain","nausea","malaise","loss_of_appetite","fast_heart_rate","confusion","coma"],
+  Typhoid:                  ["high_fever","headache","fatigue","loss_of_appetite","vomiting","constipation","toxic_look","abdominal_pain","diarrhoea","loss_of_appetite_fever","fast_heart_rate","red_spots_over_body","confusion"],
+  Dengue:                   ["high_fever","headache","pain_behind_eyes","muscle_pain","joint_pain","skin_rash","red_spots_over_body","vomiting","fatigue","malaise","fast_heart_rate","swelled_lymph_nodes"],
+  Tuberculosis:             ["cough","blood_in_sputum","weight_loss","fatigue","sweating","chest_pain","breathlessness","phlegm","loss_of_appetite","high_fever","swollen_lymph_neck","family_history"],
+  "Hepatitis B":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","blood_transfusion","unsterile_injections","abdominal_pain","nausea","loss_of_appetite","internal_itching","acute_liver_failure"],
+  "Hepatitis C":            ["yellowing_of_eyes","yellowish_skin","fatigue","nausea","loss_of_appetite","blood_transfusion","dark_urine","weight_loss","internal_itching","abdominal_pain"],
+  "Hepatitis D":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","acute_liver_failure","fluid_overload","blood_transfusion","unsterile_injections","swelling_stomach"],
+  Pneumonia:                ["cough","breathlessness","chest_pain","high_fever","rusty_sputum","chills","fatigue","phlegm","loss_of_appetite","malaise"],
+  "Hepatitis A":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","loss_of_appetite","nausea","abdominal_pain","vomiting","mild_fever","malaise","distension_of_abdomen"],
+  "Hepatitis E":            ["yellowing_of_eyes","yellowish_skin","fatigue","loss_of_appetite","nausea","mild_fever","yellow_urine","abdominal_pain","malaise"],
+  "Alcoholic Hepatitis":    ["yellowing_of_eyes","vomiting","abdominal_pain","alcohol_history","swelling_stomach","fluid_overload","yellowish_skin","acute_liver_failure","distension_of_abdomen"],
+  Jaundice:                 ["yellowing_of_eyes","yellowish_skin","dark_urine","yellow_urine","itching","fatigue","abdominal_pain","internal_itching","fluid_overload","distension_of_abdomen"],
+  "Chicken Pox":            ["skin_rash","itching","red_spots_over_body","mild_fever","fatigue","headache","loss_of_appetite","nodal_skin_eruptions"],
+  "Bronchial Asthma":       ["breathlessness","cough","phlegm","chest_pain","fatigue"],
+  "Urinary Tract Infection":["burning_micturition","urinating_frequently","continuous_feel_of_urine","bladder_discomfort","foul_smell_of_urine","spotting_urination","back_pain"],
+  "Dimorphic Haemorrhoids": ["bloody_stool","pain_anal_region","pain_bowel_movements","constipation","passage_of_gases","irritation_anus"],
+  "Peptic Ulcer Disease":   ["stomach_pain","indigestion","vomiting","loss_of_appetite","nausea","stomach_bleeding","abdominal_pain","passage_of_gases"],
+  Diabetes:                 ["polyuria","excessive_hunger","irregular_sugar_level","weight_loss","fatigue","blurred_vision","urinating_frequently","increased_appetite","family_history","obesity"],
+  "Fungal Infection":       ["itching","skin_rash","dischromic_patches","nodal_skin_eruptions","irritation_anus"],
+  Allergy:                  ["continuous_sneezing","runny_nose","itching","watering_from_eyes","skin_rash","redness_of_eyes","throat_irritation","mild_fever","joint_pain"],
+  "Common Cold":            ["runny_nose","continuous_sneezing","throat_irritation","mild_fever","cough","headache","sinus_pressure","watering_from_eyes","loss_of_smell"],
+  "Drug Reaction":          ["itching","skin_rash","red_spots_over_body","fatigue","nausea","diarrhoea"],
+};
 
-class UserModel(Base):
-    __tablename__ = "users"
-    id         = Column(Integer, primary_key=True, index=True)
-    email      = Column(String(255), unique=True, index=True, nullable=False)
-    name       = Column(String(255), nullable=False)
-    pw_hash    = Column(String(512), nullable=True)
-    age        = Column(String(10), nullable=True)
-    gender     = Column(String(20), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+const RISK_MAP = {
+  Malaria:"High", Typhoid:"High", Dengue:"High", Tuberculosis:"High",
+  "Hepatitis B":"High", "Hepatitis C":"High", "Hepatitis D":"High", Pneumonia:"High",
+  "Hepatitis A":"Medium", "Hepatitis E":"Medium", "Alcoholic Hepatitis":"Medium",
+  Jaundice:"Medium", "Chicken Pox":"Medium", "Bronchial Asthma":"Medium",
+  "Urinary Tract Infection":"Medium", "Dimorphic Haemorrhoids":"Medium",
+  "Peptic Ulcer Disease":"Medium", Diabetes:"Medium",
+  "Fungal Infection":"Low", Allergy:"Low", "Common Cold":"Low", "Drug Reaction":"Low",
+};
 
+const ALL_QUESTIONS = [
+  {id:"high_fever",question:"Do you have a high fever?",category:"General"},
+  {id:"mild_fever",question:"Do you have a mild fever?",category:"General"},
+  {id:"fatigue",question:"Do you feel unusually tired or weak?",category:"General"},
+  {id:"malaise",question:"Do you feel generally unwell?",category:"General"},
+  {id:"chills",question:"Do you have chills or shivering?",category:"General"},
+  {id:"sweating",question:"Do you have episodes of sweating?",category:"General"},
+  {id:"headache",question:"Do you have headaches?",category:"General"},
+  {id:"muscle_pain",question:"Do you have muscle pain or body aches?",category:"General"},
+  {id:"joint_pain",question:"Do you have joint pain?",category:"General"},
+  {id:"back_pain",question:"Do you have back pain?",category:"General"},
+  {id:"cough",question:"Do you have a cough?",category:"Respiratory"},
+  {id:"phlegm",question:"Are you coughing up phlegm or mucus?",category:"Respiratory"},
+  {id:"rusty_sputum",question:"Are you coughing up rusty or brown-coloured sputum?",category:"Respiratory"},
+  {id:"blood_in_sputum",question:"Are you coughing up blood?",category:"Respiratory"},
+  {id:"breathlessness",question:"Do you have difficulty breathing?",category:"Respiratory"},
+  {id:"chest_pain",question:"Do you have chest pain?",category:"Respiratory"},
+  {id:"runny_nose",question:"Do you have a runny nose?",category:"Respiratory"},
+  {id:"continuous_sneezing",question:"Do you sneeze frequently?",category:"Respiratory"},
+  {id:"throat_irritation",question:"Do you have a sore or irritated throat?",category:"Respiratory"},
+  {id:"sinus_pressure",question:"Do you have sinus pressure or nasal congestion?",category:"Respiratory"},
+  {id:"watering_from_eyes",question:"Do you have watery eyes?",category:"Respiratory"},
+  {id:"loss_of_smell",question:"Have you lost your sense of smell?",category:"Respiratory"},
+  {id:"nausea",question:"Do you feel nauseous?",category:"Digestive"},
+  {id:"vomiting",question:"Have you been vomiting?",category:"Digestive"},
+  {id:"diarrhoea",question:"Do you have diarrhoea?",category:"Digestive"},
+  {id:"stomach_pain",question:"Do you have stomach pain?",category:"Digestive"},
+  {id:"abdominal_pain",question:"Do you have abdominal or belly pain?",category:"Digestive"},
+  {id:"indigestion",question:"Do you have indigestion or acidity?",category:"Digestive"},
+  {id:"distension_of_abdomen",question:"Do you feel bloated or have a distended abdomen?",category:"Digestive"},
+  {id:"constipation",question:"Do you have constipation?",category:"Digestive"},
+  {id:"passage_of_gases",question:"Do you have excessive gas?",category:"Digestive"},
+  {id:"bloody_stool",question:"Do you notice blood in your stool?",category:"Digestive"},
+  {id:"loss_of_appetite",question:"Have you lost your appetite?",category:"Digestive"},
+  {id:"stomach_bleeding",question:"Do you have stomach bleeding?",category:"Digestive"},
+  {id:"yellowish_skin",question:"Is your skin yellowish or jaundiced?",category:"Liver"},
+  {id:"yellowing_of_eyes",question:"Are the whites of your eyes turning yellow?",category:"Liver"},
+  {id:"dark_urine",question:"Is your urine dark or tea-coloured?",category:"Liver"},
+  {id:"yellow_urine",question:"Is your urine unusually yellow?",category:"Liver"},
+  {id:"internal_itching",question:"Do you experience internal itching?",category:"Liver"},
+  {id:"acute_liver_failure",question:"Do you have signs of acute liver failure?",category:"Liver"},
+  {id:"fluid_overload",question:"Do you have abnormal body swelling or fluid retention?",category:"Liver"},
+  {id:"itching",question:"Do you have itchy skin?",category:"Skin"},
+  {id:"skin_rash",question:"Do you have a skin rash?",category:"Skin"},
+  {id:"red_spots_over_body",question:"Do you have red spots on your body?",category:"Skin"},
+  {id:"nodal_skin_eruptions",question:"Do you have nodules or skin eruptions?",category:"Skin"},
+  {id:"dischromic_patches",question:"Do you have discoloured patches on your skin?",category:"Skin"},
+  {id:"redness_of_eyes",question:"Do you have red or irritated eyes?",category:"Eyes"},
+  {id:"blurred_vision",question:"Do you have blurred or distorted vision?",category:"Eyes"},
+  {id:"pain_behind_eyes",question:"Do you have pain behind your eyes?",category:"Eyes"},
+  {id:"burning_micturition",question:"Do you feel a burning sensation when urinating?",category:"Urinary"},
+  {id:"urinating_frequently",question:"Do you urinate much more than usual?",category:"Urinary"},
+  {id:"continuous_feel_of_urine",question:"Do you have a persistent urge to urinate?",category:"Urinary"},
+  {id:"bladder_discomfort",question:"Do you have bladder discomfort?",category:"Urinary"},
+  {id:"foul_smell_of_urine",question:"Does your urine have an unusual smell?",category:"Urinary"},
+  {id:"spotting_urination",question:"Do you notice spotting during urination?",category:"Urinary"},
+  {id:"pain_anal_region",question:"Do you have pain in your anal region?",category:"Rectal"},
+  {id:"pain_bowel_movements",question:"Do you have pain during bowel movements?",category:"Rectal"},
+  {id:"irritation_anus",question:"Do you have irritation around the anus?",category:"Rectal"},
+  {id:"restlessness",question:"Do you feel restless or agitated?",category:"Neurological"},
+  {id:"mood_swings",question:"Have you been experiencing mood swings?",category:"Neurological"},
+  {id:"confusion",question:"Do you feel confused or disoriented?",category:"Neurological"},
+  {id:"coma",question:"Have you experienced any loss of consciousness?",category:"Neurological"},
+  {id:"excessive_hunger",question:"Are you excessively hungry?",category:"Metabolic"},
+  {id:"increased_appetite",question:"Has your appetite increased significantly?",category:"Metabolic"},
+  {id:"irregular_sugar_level",question:"Do you have an irregular blood sugar level?",category:"Metabolic"},
+  {id:"polyuria",question:"Do you urinate in unusually large amounts?",category:"Metabolic"},
+  {id:"dehydration",question:"Do you feel severely dehydrated?",category:"Metabolic"},
+  {id:"weight_loss",question:"Have you experienced unexplained weight loss?",category:"Metabolic"},
+  {id:"obesity",question:"Are you significantly overweight?",category:"Metabolic"},
+  {id:"swelled_lymph_nodes",question:"Do you have swollen lymph nodes?",category:"Infection"},
+  {id:"swelling_stomach",question:"Is your stomach area swollen?",category:"Infection"},
+  {id:"fast_heart_rate",question:"Do you have a fast or irregular heartbeat?",category:"Infection"},
+  {id:"toxic_look",question:"Do you look or feel severely ill?",category:"Infection"},
+  {id:"swollen_lymph_neck",question:"Do you have swollen lymph nodes in the neck or armpit?",category:"Infection"},
+  {id:"loss_of_appetite_fever",question:"Have you lost your appetite alongside a fever?",category:"Infection"},
+  {id:"family_history",question:"Do you have a family history of this condition?",category:"History"},
+  {id:"blood_transfusion",question:"Have you received a blood transfusion recently?",category:"History"},
+  {id:"unsterile_injections",question:"Have you been injected with unsterile equipment?",category:"History"},
+  {id:"alcohol_history",question:"Do you have a history of heavy alcohol use?",category:"History"},
+];
 
-class DiagnosisModel(Base):
-    __tablename__ = "diagnoses"
+const Q_INDEX = Object.fromEntries(ALL_QUESTIONS.map((q) => [q.id, q]));
 
-    id              = Column(Integer, primary_key=True, index=True)
-    user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
-    session_id      = Column(String(64), index=True)
-    disease         = Column(String(100))
-    risk            = Column(String(20))
-    confidence      = Column(Float)
-    answers         = Column(Text)
-    active_symptoms = Column(Text)
-    rec_home_care   = Column(Text, nullable=True)
-    rec_test        = Column(Text, nullable=True)
-    rec_doctor      = Column(Text, nullable=True)
-    rec_safety      = Column(Text, nullable=True)
-    ai_explanation  = Column(Text, nullable=True)
-    ml_scores       = Column(Text, nullable=True)
-    created_at      = Column(DateTime, default=datetime.utcnow)
-
-    # Composite indexes for common query patterns
-    __table_args__ = (
-        Index("ix_diagnoses_user_created", "user_id", "created_at"),
-        Index("ix_diagnoses_user_risk",    "user_id", "risk"),
-    )
-
-
-class SessionModel(Base):
-    __tablename__ = "assessment_sessions"
-
-    id              = Column(Integer, primary_key=True, index=True)
-    session_id      = Column(String(64), unique=True, index=True)
-    user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
-    answers         = Column(Text, default="{}")
-    asked_questions = Column(Text, default="[]")
-    completed       = Column(Boolean, default=False)
-    created_at      = Column(DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        Index("ix_sessions_user_completed", "user_id", "completed"),
-    )
-
-
-# ─────────────────────────────────────────────────────────────
-# DB HELPERS
-# ─────────────────────────────────────────────────────────────
-
-def _load_json(value: Optional[str], default: Any) -> Any:
-    if value is None:
-        return default
-    try:
-        return json.loads(value)
-    except (json.JSONDecodeError, TypeError):
-        return default
-
-
-def _dump_json(value: Any) -> str:
-    return json.dumps(value)
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-# Async wrapper — runs sync DB operations in the default thread pool
-# so the event loop is not blocked, without requiring asyncpg/aiosqlite.
-async def run_db(func, *args, **kwargs):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, lambda: func(*args, **kwargs))
-
-
-# ─────────────────────────────────────────────────────────────
-# ML MODELS + HOT-RELOAD
-# ─────────────────────────────────────────────────────────────
-
-LOADED_MODELS: Dict[str, Any]          = {}
-PREVIOUS_MODELS: Dict[str, Any]        = {}   # fallback on bad reload
-ML_STARTUP_COMPLETE: asyncio.Event     = asyncio.Event()
-
-
-def _load_single_model(fname: str) -> None:
-    """Load or reload one .pkl file."""
-    key = fname.replace(".pkl", "")
-    path = os.path.join(MODELS_DIR, fname)
-    try:
-        candidate = joblib.load(path)
-        PREVIOUS_MODELS[key] = LOADED_MODELS.get(key)
-        LOADED_MODELS[key] = candidate
-        logger.info({"event": "model_loaded", "file": fname})
-    except Exception as e:
-        logger.error({"event": "model_load_failed", "file": fname, "error": str(e)})
-        # Roll back to previous if available
-        if key in PREVIOUS_MODELS and PREVIOUS_MODELS[key] is not None:
-            LOADED_MODELS[key] = PREVIOUS_MODELS[key]
-            logger.warning({"event": "model_rollback", "key": key})
-
-
-def load_ml_models() -> None:
-    if not JOBLIB_AVAILABLE:
-        logger.info({"event": "ml_skip", "reason": "joblib not available"})
-        ML_STARTUP_COMPLETE.set()
-        return
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    pkl_files = [f for f in os.listdir(MODELS_DIR) if f.endswith(".pkl")]
-    if not pkl_files:
-        logger.info({"event": "ml_skip", "reason": "no .pkl files found"})
-        ML_STARTUP_COMPLETE.set()
-        return
-    for fname in pkl_files:
-        _load_single_model(fname)
-    ML_STARTUP_COMPLETE.set()
-
-
-class _ModelFileHandler(FileSystemEventHandler):
-    """Watchdog handler — hot-reload changed .pkl files."""
-
-    def on_modified(self, event):
-        if isinstance(event, FileModifiedEvent) and event.src_path.endswith(".pkl"):
-            fname = os.path.basename(event.src_path)
-            logger.info({"event": "model_change_detected", "file": fname})
-            _load_single_model(fname)
-
-
-_watchdog_observer: Optional[Observer] = None
-
-
-def start_model_watcher() -> None:
-    global _watchdog_observer
-    if not JOBLIB_AVAILABLE:
-        return
-    os.makedirs(MODELS_DIR, exist_ok=True)
-    _watchdog_observer = Observer()
-    _watchdog_observer.schedule(_ModelFileHandler(), MODELS_DIR, recursive=False)
-    _watchdog_observer.start()
-    logger.info({"event": "model_watcher_started", "dir": MODELS_DIR})
-
-
-def stop_model_watcher() -> None:
-    if _watchdog_observer:
-        _watchdog_observer.stop()
-        _watchdog_observer.join()
-
-
-# ─────────────────────────────────────────────────────────────
-# DISEASE DATA (unchanged)
-# ─────────────────────────────────────────────────────────────
-
-RISK_MAP: Dict[str, str] = {
-    "Malaria": "High", "Typhoid": "High", "Dengue": "High",
-    "Tuberculosis": "High", "Hepatitis B": "High", "Hepatitis C": "High",
-    "Hepatitis D": "High", "Pneumonia": "High",
-    "Hepatitis A": "Medium", "Hepatitis E": "Medium",
-    "Alcoholic Hepatitis": "Medium", "Jaundice": "Medium",
-    "Chicken Pox": "Medium", "Bronchial Asthma": "Medium",
-    "Urinary Tract Infection": "Medium", "Dimorphic Haemorrhoids": "Medium",
-    "Peptic Ulcer Disease": "Medium", "Diabetes": "Medium",
-    "Fungal Infection": "Low", "Allergy": "Low",
-    "Common Cold": "Low", "Drug Reaction": "Low",
+function scoreDisease(disease, answers) {
+  let score = 0;
+  for (const s of DISEASE_SYMPTOM_MAP[disease] || []) {
+    if (answers[s] === true)  score += 3;
+    if (answers[s] === false) score -= 1;
+  }
+  return score;
 }
 
-DISEASE_SYMPTOM_MAP: Dict[str, List[str]] = {
-    "Malaria":                ["high_fever","chills","sweating","headache","muscle_pain","vomiting","fatigue","joint_pain","nausea","malaise","loss_of_appetite","fast_heart_rate","confusion","coma"],
-    "Typhoid":                ["high_fever","headache","fatigue","loss_of_appetite","vomiting","constipation","toxic_look","abdominal_pain","diarrhoea","loss_of_appetite_fever","fast_heart_rate","red_spots_over_body","confusion"],
-    "Dengue":                 ["high_fever","headache","pain_behind_eyes","muscle_pain","joint_pain","skin_rash","red_spots_over_body","vomiting","fatigue","malaise","fast_heart_rate","swelled_lymph_nodes"],
-    "Tuberculosis":           ["cough","blood_in_sputum","weight_loss","fatigue","sweating","chest_pain","breathlessness","phlegm","loss_of_appetite","high_fever","swollen_lymph_neck","family_history"],
-    "Hepatitis B":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","blood_transfusion","unsterile_injections","abdominal_pain","nausea","loss_of_appetite","internal_itching","acute_liver_failure"],
-    "Hepatitis C":            ["yellowing_of_eyes","yellowish_skin","fatigue","nausea","loss_of_appetite","blood_transfusion","dark_urine","weight_loss","internal_itching","abdominal_pain"],
-    "Hepatitis D":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","acute_liver_failure","fluid_overload","blood_transfusion","unsterile_injections","swelling_stomach"],
-    "Pneumonia":              ["cough","breathlessness","chest_pain","high_fever","rusty_sputum","chills","fatigue","phlegm","loss_of_appetite","malaise"],
-    "Hepatitis A":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","loss_of_appetite","nausea","abdominal_pain","vomiting","mild_fever","malaise","distension_of_abdomen"],
-    "Hepatitis E":            ["yellowing_of_eyes","yellowish_skin","fatigue","loss_of_appetite","nausea","mild_fever","yellow_urine","abdominal_pain","malaise"],
-    "Alcoholic Hepatitis":    ["yellowing_of_eyes","vomiting","abdominal_pain","alcohol_history","swelling_stomach","fluid_overload","yellowish_skin","acute_liver_failure","distension_of_abdomen"],
-    "Jaundice":               ["yellowing_of_eyes","yellowish_skin","dark_urine","yellow_urine","itching","fatigue","abdominal_pain","internal_itching","fluid_overload","distension_of_abdomen"],
-    "Chicken Pox":            ["skin_rash","itching","red_spots_over_body","mild_fever","fatigue","headache","loss_of_appetite","nodal_skin_eruptions"],
-    "Bronchial Asthma":       ["breathlessness","cough","phlegm","chest_pain","fatigue"],
-    "Urinary Tract Infection":["burning_micturition","urinating_frequently","continuous_feel_of_urine","bladder_discomfort","foul_smell_of_urine","spotting_urination","back_pain"],
-    "Dimorphic Haemorrhoids": ["bloody_stool","pain_anal_region","pain_bowel_movements","constipation","passage_of_gases","irritation_anus"],
-    "Peptic Ulcer Disease":   ["stomach_pain","indigestion","vomiting","loss_of_appetite","nausea","stomach_bleeding","abdominal_pain","passage_of_gases"],
-    "Diabetes":               ["polyuria","excessive_hunger","irregular_sugar_level","weight_loss","fatigue","blurred_vision","urinating_frequently","increased_appetite","family_history","obesity"],
-    "Fungal Infection":       ["itching","skin_rash","dischromic_patches","nodal_skin_eruptions","irritation_anus"],
-    "Allergy":                ["continuous_sneezing","runny_nose","itching","watering_from_eyes","skin_rash","redness_of_eyes","throat_irritation","mild_fever","joint_pain"],
-    "Common Cold":            ["runny_nose","continuous_sneezing","throat_irritation","mild_fever","cough","headache","sinus_pressure","watering_from_eyes","loss_of_smell"],
-    "Drug Reaction":          ["itching","skin_rash","red_spots_over_body","fatigue","nausea","diarrhoea"],
+function getNextQuestionOffline(answers, asked) {
+  const ranked = Object.keys(DISEASE_SYMPTOM_MAP)
+    .map((d) => ({ d, sc: scoreDisease(d, answers) }))
+    .sort((a, b) => b.sc - a.sc)
+    .slice(0, 6)
+    .map((x) => x.d);
+
+  for (const disease of ranked) {
+    for (const sym of DISEASE_SYMPTOM_MAP[disease] || []) {
+      if (!asked.includes(sym)) {
+        const q = Q_INDEX[sym];
+        if (q) return q;
+      }
+    }
+  }
+  return ALL_QUESTIONS.find((q) => !asked.includes(q.id)) || null;
 }
 
-ALL_QUESTIONS: List[Dict[str, str]] = [
-    {"id":"high_fever","question":"Do you have a high fever?","category":"General"},
-    {"id":"mild_fever","question":"Do you have a mild fever?","category":"General"},
-    {"id":"fatigue","question":"Do you feel unusually tired or weak?","category":"General"},
-    {"id":"malaise","question":"Do you feel generally unwell or sick?","category":"General"},
-    {"id":"chills","question":"Do you have chills or shivering?","category":"General"},
-    {"id":"sweating","question":"Do you have sweating episodes?","category":"General"},
-    {"id":"headache","question":"Do you have headaches?","category":"General"},
-    {"id":"muscle_pain","question":"Do you have muscle pain or body aches?","category":"General"},
-    {"id":"joint_pain","question":"Do you have joint pain?","category":"General"},
-    {"id":"back_pain","question":"Do you have back pain?","category":"General"},
-    {"id":"cough","question":"Do you have a cough?","category":"Respiratory"},
-    {"id":"phlegm","question":"Are you coughing up phlegm or mucus?","category":"Respiratory"},
-    {"id":"rusty_sputum","question":"Are you coughing up rusty or brown-coloured sputum?","category":"Respiratory"},
-    {"id":"blood_in_sputum","question":"Are you coughing up blood?","category":"Respiratory"},
-    {"id":"breathlessness","question":"Do you have difficulty breathing or shortness of breath?","category":"Respiratory"},
-    {"id":"chest_pain","question":"Do you have chest pain?","category":"Respiratory"},
-    {"id":"runny_nose","question":"Do you have a runny nose?","category":"Respiratory"},
-    {"id":"continuous_sneezing","question":"Do you sneeze frequently?","category":"Respiratory"},
-    {"id":"throat_irritation","question":"Do you have a sore or irritated throat?","category":"Respiratory"},
-    {"id":"sinus_pressure","question":"Do you have sinus pressure or nasal congestion?","category":"Respiratory"},
-    {"id":"watering_from_eyes","question":"Do you have watery eyes?","category":"Respiratory"},
-    {"id":"loss_of_smell","question":"Have you lost your sense of smell?","category":"Respiratory"},
-    {"id":"nausea","question":"Do you have nausea?","category":"Digestive"},
-    {"id":"vomiting","question":"Do you have vomiting?","category":"Digestive"},
-    {"id":"diarrhoea","question":"Do you have diarrhoea?","category":"Digestive"},
-    {"id":"stomach_pain","question":"Do you have stomach pain?","category":"Digestive"},
-    {"id":"abdominal_pain","question":"Do you have abdominal or belly pain?","category":"Digestive"},
-    {"id":"indigestion","question":"Do you have indigestion or acidity?","category":"Digestive"},
-    {"id":"distension_of_abdomen","question":"Do you feel bloated or have a distended abdomen?","category":"Digestive"},
-    {"id":"constipation","question":"Do you have constipation?","category":"Digestive"},
-    {"id":"passage_of_gases","question":"Do you have excessive gas or passage of gas?","category":"Digestive"},
-    {"id":"bloody_stool","question":"Do you have blood in your stool?","category":"Digestive"},
-    {"id":"loss_of_appetite","question":"Do you have a loss of appetite?","category":"Digestive"},
-    {"id":"stomach_bleeding","question":"Do you have stomach bleeding?","category":"Digestive"},
-    {"id":"yellowish_skin","question":"Is your skin yellowish or pale?","category":"Liver"},
-    {"id":"yellowing_of_eyes","question":"Are your eyes yellow?","category":"Liver"},
-    {"id":"dark_urine","question":"Is your urine dark or tea-coloured?","category":"Liver"},
-    {"id":"yellow_urine","question":"Is your urine yellow-coloured?","category":"Liver"},
-    {"id":"internal_itching","question":"Do you have internal itching?","category":"Liver"},
-    {"id":"acute_liver_failure","question":"Do you have signs of acute liver failure?","category":"Liver"},
-    {"id":"fluid_overload","question":"Do you have fluid overload or swelling in the body?","category":"Liver"},
-    {"id":"itching","question":"Do you have itching on your skin?","category":"Skin"},
-    {"id":"skin_rash","question":"Do you have a skin rash?","category":"Skin"},
-    {"id":"red_spots_over_body","question":"Do you have red spots on your body?","category":"Skin"},
-    {"id":"nodal_skin_eruptions","question":"Do you have nodules or skin eruptions?","category":"Skin"},
-    {"id":"dischromic_patches","question":"Do you have discoloured patches on your skin?","category":"Skin"},
-    {"id":"redness_of_eyes","question":"Do you have redness in your eyes?","category":"Eyes"},
-    {"id":"blurred_vision","question":"Do you have blurred or distorted vision?","category":"Eyes"},
-    {"id":"pain_behind_eyes","question":"Do you have pain behind your eyes?","category":"Eyes"},
-    {"id":"burning_micturition","question":"Do you feel a burning sensation when urinating?","category":"Urinary"},
-    {"id":"urinating_frequently","question":"Do you urinate very frequently?","category":"Urinary"},
-    {"id":"continuous_feel_of_urine","question":"Do you have a continuous urge to urinate?","category":"Urinary"},
-    {"id":"bladder_discomfort","question":"Do you have discomfort in your bladder?","category":"Urinary"},
-    {"id":"foul_smell_of_urine","question":"Does your urine have a foul smell?","category":"Urinary"},
-    {"id":"spotting_urination","question":"Do you have spotting during urination?","category":"Urinary"},
-    {"id":"pain_anal_region","question":"Do you have pain in your anal region?","category":"Rectal"},
-    {"id":"pain_bowel_movements","question":"Do you have pain during bowel movements?","category":"Rectal"},
-    {"id":"irritation_anus","question":"Do you have irritation around the anus?","category":"Rectal"},
-    {"id":"restlessness","question":"Do you feel restless or agitated?","category":"Neurological"},
-    {"id":"mood_swings","question":"Do you have mood swings?","category":"Neurological"},
-    {"id":"confusion","question":"Do you feel confused or disoriented?","category":"Neurological"},
-    {"id":"coma","question":"Have you lost consciousness or fallen into a coma?","category":"Neurological"},
-    {"id":"excessive_hunger","question":"Are you excessively hungry?","category":"Metabolic"},
-    {"id":"increased_appetite","question":"Has your appetite increased significantly?","category":"Metabolic"},
-    {"id":"irregular_sugar_level","question":"Do you have an irregular blood sugar level?","category":"Metabolic"},
-    {"id":"polyuria","question":"Do you urinate in very large amounts?","category":"Metabolic"},
-    {"id":"dehydration","question":"Do you feel severely dehydrated?","category":"Metabolic"},
-    {"id":"weight_loss","question":"Do you have unexplained weight loss?","category":"Metabolic"},
-    {"id":"obesity","question":"Are you obese or significantly overweight?","category":"Metabolic"},
-    {"id":"swelled_lymph_nodes","question":"Do you have swollen lymph nodes?","category":"Infection"},
-    {"id":"swelling_stomach","question":"Do you have swelling of your stomach area?","category":"Infection"},
-    {"id":"fast_heart_rate","question":"Do you have a fast or irregular heart rate?","category":"Infection"},
-    {"id":"toxic_look","question":"Do you look severely ill or toxic-looking?","category":"Infection"},
-    {"id":"swollen_lymph_neck","question":"Do you have swollen lymph nodes in the neck or armpit?","category":"Infection"},
-    {"id":"loss_of_appetite_fever","question":"Do you have a loss of appetite alongside fever?","category":"Infection"},
-    {"id":"family_history","question":"Do you have a family history of this condition?","category":"History"},
-    {"id":"blood_transfusion","question":"Have you recently received a blood transfusion?","category":"History"},
-    {"id":"unsterile_injections","question":"Have you received injections with unsterile equipment?","category":"History"},
-    {"id":"alcohol_history","question":"Do you have a history of heavy alcohol consumption?","category":"History"},
-]
-
-Q_INDEX: Dict[str, Dict] = {q["id"]: q for q in ALL_QUESTIONS}
-
-DEFAULT_RECS: Dict[str, Dict[str, str]] = {
-    "Malaria":                {"home_care":"Rest and drink plenty of fluids","test":"Malaria RDT or blood smear","doctor":"Go to clinic immediately for antimalarial treatment","safety":"Do not delay — malaria can become severe quickly"},
-    "Typhoid":                {"home_care":"Rest, eat soft foods, drink clean water only","test":"Widal test or blood culture","doctor":"See a doctor for antibiotic prescription","safety":"Avoid spreading infection — wash hands frequently"},
-    "Dengue":                 {"home_care":"Rest and drink fluids — avoid aspirin or ibuprofen","test":"Dengue NS1 antigen test","doctor":"Seek care immediately if you notice bleeding or severe pain","safety":"Aspirin can worsen bleeding in dengue"},
-    "Tuberculosis":           {"home_care":"Rest, isolate yourself, keep room well-ventilated","test":"Chest X-ray and sputum test","doctor":"Visit a TB clinic immediately","safety":"TB is contagious — wear a mask and avoid crowded places"},
-    "Hepatitis B":            {"home_care":"Rest and avoid alcohol completely","test":"Hepatitis B surface antigen (HBsAg) test","doctor":"See a doctor for antiviral medication evaluation","safety":"Hepatitis B is contagious — avoid sharing needles or razors"},
-    "Hepatitis C":            {"home_care":"Rest and avoid alcohol","test":"Hepatitis C antibody test","doctor":"See a specialist for antiviral treatment","safety":"Avoid sharing sharp objects with others"},
-    "Hepatitis D":            {"home_care":"Rest and stop alcohol completely","test":"Hepatitis D antibody and liver function tests","doctor":"Seek specialist care urgently","safety":"Hepatitis D only occurs with hepatitis B — urgent care needed"},
-    "Pneumonia":              {"home_care":"Rest, keep warm, drink warm fluids","test":"Chest X-ray","doctor":"Visit clinic immediately for antibiotic treatment","safety":"Pneumonia can worsen quickly — do not wait"},
-    "Hepatitis A":            {"home_care":"Rest and drink clean water — eat lightly","test":"Hepatitis A IgM antibody test","doctor":"See a doctor if symptoms worsen","safety":"Avoid sharing food or drinks with others"},
-    "Hepatitis E":            {"home_care":"Rest and drink clean water only","test":"Hepatitis E IgM antibody test","doctor":"See a doctor — especially important if pregnant","safety":"Very dangerous during pregnancy — seek care urgently if pregnant"},
-    "Alcoholic Hepatitis":    {"home_care":"Stop alcohol completely and eat well","test":"Liver function tests (LFTs)","doctor":"Seek medical care urgently","safety":"Continued alcohol use can be fatal with this condition"},
-    "Jaundice":               {"home_care":"Rest and drink clean water","test":"Liver function tests and bilirubin level","doctor":"See a doctor to find the underlying cause","safety":"Jaundice is a sign of another condition — do not ignore it"},
-    "Chicken Pox":            {"home_care":"Rest, avoid scratching, apply calamine lotion","test":"No test usually needed","doctor":"See a doctor if blisters become infected or fever is very high","safety":"Highly contagious — stay home and avoid contact with others"},
-    "Bronchial Asthma":       {"home_care":"Avoid triggers and use your prescribed inhaler","test":"Peak flow measurement or spirometry","doctor":"See a doctor for long-term management plan","safety":"Carry your inhaler at all times"},
-    "Urinary Tract Infection":{"home_care":"Drink plenty of water and avoid spicy food","test":"Urine culture and sensitivity test","doctor":"See a doctor for antibiotic prescription","safety":"Do not hold urine — empty your bladder regularly"},
-    "Dimorphic Haemorrhoids": {"home_care":"Eat high-fibre foods and avoid straining on the toilet","test":"No test usually needed","doctor":"See a doctor if bleeding continues or worsens","safety":"Avoid sitting for long periods"},
-    "Peptic Ulcer Disease":   {"home_care":"Avoid spicy food, alcohol and pain tablets like aspirin","test":"H. pylori breath test or endoscopy if needed","doctor":"See a doctor for antacid or antibiotic treatment","safety":"Avoid aspirin and ibuprofen — they worsen ulcers"},
-    "Diabetes":               {"home_care":"Reduce sugar and refined carbohydrates in your diet","test":"Fasting blood glucose and HbA1c test","doctor":"See a doctor for a diabetes management plan","safety":"Monitor your blood sugar regularly if you have a glucometer"},
-    "Fungal Infection":       {"home_care":"Keep the affected area dry and clean","test":"No test usually needed","doctor":"Visit a pharmacy for antifungal cream","safety":"Avoid sharing personal items like socks or towels"},
-    "Allergy":                {"home_care":"Avoid known triggers and stay indoors during high pollen periods","test":"Allergy skin prick test if symptoms are recurrent","doctor":"See a doctor for antihistamine prescription","safety":"If you have throat swelling or difficulty breathing — go to emergency immediately"},
-    "Common Cold":            {"home_care":"Rest and drink warm fluids","test":"No test needed","doctor":"Visit clinic if symptoms persist beyond 7 days","safety":"Wash hands frequently to avoid spreading"},
-    "Drug Reaction":          {"home_care":"Stop the suspected medication immediately","test":"No test usually needed","doctor":"See a doctor immediately if rash spreads or breathing is affected","safety":"Seek emergency care if you have throat swelling or difficulty breathing"},
-}
-
-# ─────────────────────────────────────────────────────────────
-# CIRCUIT BREAKER — OpenRouter
-# ─────────────────────────────────────────────────────────────
-
-class _CBListener(pybreaker.CircuitBreakerListener):
-    def state_change(self, cb, old_state, new_state):
-        is_open = 1 if str(new_state) == "open" else 0
-        CB_STATE.set(is_open)
-        logger.warning({"event": "circuit_breaker_state_change", "from": str(old_state), "to": str(new_state)})
-
-
-_openrouter_cb = pybreaker.CircuitBreaker(
-    fail_max=3,
-    reset_timeout=60,
-    listeners=[_CBListener()],
-)
-
-# ─────────────────────────────────────────────────────────────
-# ADAPTIVE ENGINE (unchanged logic)
-# ─────────────────────────────────────────────────────────────
-
-def score_disease(disease: str, answers: dict) -> float:
-    score = 0.0
-    for symptom in DISEASE_SYMPTOM_MAP.get(disease, []):
-        if answers.get(symptom) is True:
-            score += 3.0
-        elif answers.get(symptom) is False:
-            score -= 1.0
-    return score
-
-
-def get_next_question(answers: dict, asked: list) -> Optional[dict]:
-    ranked = sorted(DISEASE_SYMPTOM_MAP.keys(), key=lambda d: score_disease(d, answers), reverse=True)
-    for disease in ranked[:6]:
-        for sym in DISEASE_SYMPTOM_MAP[disease]:
-            if sym not in asked:
-                q = Q_INDEX.get(sym)
-                if q:
-                    return q
-    for q in ALL_QUESTIONS:
-        if q["id"] not in asked:
-            return q
-    return None
-
-
-def predict_with_ml(answers: dict) -> dict:
-    ensemble = LOADED_MODELS.get("sctd_ensemble")
-    le       = LOADED_MODELS.get("sctd_label_encoder")
-    cols     = LOADED_MODELS.get("sctd_feature_columns")
-    risk_map = LOADED_MODELS.get("sctd_risk_classification") or RISK_MAP
-
-    if ensemble and le and cols:
-        try:
-            feature_cols = list(cols)
-            vec = np.array(
-                [1.0 if answers.get(c, False) else 0.0 for c in feature_cols]
-            ).reshape(1, -1)
-            proba      = ensemble.predict_proba(vec)[0]
-            idx        = int(np.argmax(proba))
-            disease    = le.inverse_transform([idx])[0]
-            confidence = float(proba[idx])
-            all_probs  = {
-                le.inverse_transform([i])[0]: round(float(p), 4)
-                for i, p in enumerate(proba)
-            }
-            return {
-                "disease":    disease,
-                "confidence": confidence,
-                "risk":       risk_map.get(disease, "Medium"),
-                "all_scores": dict(sorted(all_probs.items(), key=lambda x: x[1], reverse=True)),
-                "method":     "ml",
-            }
-        except Exception as e:
-            logger.warning({"event": "ml_predict_failed", "error": str(e)})
-
-    scores        = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    best_disease, _ = sorted_scores[0]
-
-    syms      = DISEASE_SYMPTOM_MAP.get(best_disease, [])
-    yes_count = sum(1 for s in syms if answers.get(s) is True)
-    confidence = min(0.95, max(0.35, yes_count / max(len(syms), 1)))
-
-    all_scores: Dict[str, float] = {}
-    for d, _ in sorted_scores[:8]:
-        yc = sum(1 for s in DISEASE_SYMPTOM_MAP.get(d, []) if answers.get(s) is True)
-        tc = max(len(DISEASE_SYMPTOM_MAP.get(d, [])), 1)
-        all_scores[d] = round(min(0.95, max(0.01, yc / tc)), 4)
-
-    return {
-        "disease":    best_disease,
-        "confidence": confidence,
-        "risk":       RISK_MAP.get(best_disease, "Medium"),
-        "all_scores": all_scores,
-        "method":     "scoring",
-    }
-
-# ─────────────────────────────────────────────────────────────
-# OPENROUTER AI — with circuit breaker + retry + cache fallback
-# ─────────────────────────────────────────────────────────────
-
-_RETRY_BASE   = 1.0
-_RETRY_MAX    = 10.0
-_RETRY_TIMES  = 2
-
-
-async def _do_openrouter_request(headers: dict, payload: dict) -> Optional[dict]:
-    """Single HTTP attempt — wrapped by circuit breaker."""
-    async with aiohttp.ClientSession() as session:
-        async with session.post(
-            settings.openrouter_url,
-            headers=headers,
-            json=payload,
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as resp:
-            if resp.status >= 500:
-                body = await resp.text()
-                OPENROUTER_ERRORS.labels(reason="5xx").inc()
-                logger.warning({"event": "openrouter_5xx", "status": resp.status, "body": body[:200]})
-                raise aiohttp.ClientResponseError(
-                    resp.request_info, resp.history, status=resp.status
-                )
-            if resp.status != 200:
-                body = await resp.text()
-                logger.warning({"event": "openrouter_non200", "status": resp.status})
-                return None
-            data   = await resp.json()
-            raw    = data["choices"][0]["message"]["content"].strip()
-            raw    = raw.replace("```json", "").replace("```", "").strip()
-            result = json.loads(raw)
-            for key in ("explanation", "home_care", "test", "doctor", "safety"):
-                if key not in result:
-                    result[key] = ""
-            return result
-
-
-async def call_openrouter(
-    disease: str,
-    risk: str,
-    active_syms: List[str],
-    confidence: float,
-) -> Optional[dict]:
-    if not settings.openrouter_api_key:
-        logger.info({"event": "openrouter_skip", "reason": "no api key"})
-        return None
-
-    # Check Redis cache first (24h TTL per disease)
-    cache_key = f"ai_response:{disease}"
-    if settings.enable_ai_cache:
-        cached = await cache_get(cache_key, key_type="ai_response")
-        if cached:
-            try:
-                return json.loads(cached)
-            except Exception:
-                pass
-
-    sym_text = ", ".join(s.replace("_", " ") for s in active_syms[:12]) or "general symptoms"
-    urgency  = {
-        "High":   "URGENT — recommend visiting a hospital or clinic today",
-        "Medium": "advise a clinic visit within 1–2 days if symptoms persist",
-        "Low":    "advise rest at home and a clinic visit only if symptoms worsen",
-    }.get(risk, "advise a clinic visit")
-
-    prompt = f"""You are a health assistant helping patients in Ghana and West Africa.
-
-Patient symptoms: {sym_text}
-Likely condition: {disease} (confidence: {round(confidence * 100)}%)
-Risk level: {risk} — {urgency}
-
-Reply ONLY with a valid JSON object. No markdown. No extra text. Use this exact format:
-{{
-  "explanation": "One short sentence on why these symptoms suggest {disease}.",
-  "home_care": "1–2 simple things the patient can do at home right now.",
-  "test": "One specific lab test or medical test to confirm, or 'No test needed' if not required.",
-  "doctor": "One clear instruction — visit hospital, clinic, or pharmacy.",
-  "safety": "One brief safety warning if High risk, or empty string if Low/Medium."
-}}
-
-Rules:
-- Use plain, simple language. No medical jargon.
-- Keep each field to one sentence or a short phrase.
-- For High risk: always say to visit a hospital or clinic immediately.
-- Never invent drug names or dosages."""
-
-    headers = {
-        "Authorization": f"Bearer {settings.openrouter_api_key}",
-        "Content-Type":  "application/json",
-        "HTTP-Referer":  settings.site_url,
-        "X-Title":       settings.site_name,
-    }
-    payload = {
-        "model": settings.openrouter_model,
-        "messages": [
-            {
-                "role":    "system",
-                "content": (
-                    "You are a responsible clinical AI assistant for a tropical disease app. "
-                    "Always respond with valid JSON only. Never prescribe specific drugs or dosages."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ],
-        "max_tokens":  350,
-        "temperature": 0.2,
-    }
-
-    last_error: Optional[Exception] = None
-    for attempt in range(_RETRY_TIMES + 1):
-        try:
-            t0 = time.monotonic()
-            result = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None,
-                    lambda: asyncio.run(_do_openrouter_request(headers, payload))
-                ),
-                timeout=15,
-            )
-            # Use direct async call instead
-            result = await _do_openrouter_request(headers, payload)
-            OPENROUTER_LATENCY.observe(time.monotonic() - t0)
-            if result and settings.enable_ai_cache:
-                await cache_set(cache_key, json.dumps(result), ttl=86400)
-            return result
-        except pybreaker.CircuitBreakerError:
-            OPENROUTER_ERRORS.labels(reason="circuit_open").inc()
-            logger.warning({"event": "openrouter_circuit_open"})
-            # Return cached fallback if available
-            fallback = await cache_get(cache_key, key_type="ai_fallback")
-            if fallback:
-                try:
-                    return json.loads(fallback)
-                except Exception:
-                    pass
-            return None
-        except asyncio.TimeoutError:
-            OPENROUTER_ERRORS.labels(reason="timeout").inc()
-            last_error = asyncio.TimeoutError()
-            logger.warning({"event": "openrouter_timeout", "attempt": attempt})
-        except json.JSONDecodeError as e:
-            OPENROUTER_ERRORS.labels(reason="json_parse").inc()
-            logger.warning({"event": "openrouter_json_error", "error": str(e)})
-            return None
-        except aiohttp.ClientError as e:
-            OPENROUTER_ERRORS.labels(reason="client_error").inc()
-            last_error = e
-            logger.warning({"event": "openrouter_client_error", "error": str(e)})
-        except Exception as e:
-            OPENROUTER_ERRORS.labels(reason="unexpected").inc()
-            logger.warning({"event": "openrouter_unexpected", "error": str(e)})
-            return None
-
-        if attempt < _RETRY_TIMES:
-            wait = min(_RETRY_BASE * (2 ** attempt), _RETRY_MAX)
-            logger.info({"event": "openrouter_retry", "wait_s": wait, "attempt": attempt + 1})
-            await asyncio.sleep(wait)
-
-    logger.warning({"event": "openrouter_all_retries_failed", "error": str(last_error)})
-    return None
-
-
-def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> dict:
-    default = DEFAULT_RECS.get(disease, {
-        "home_care": "Rest and stay hydrated.",
-        "test":      "Consult a healthcare provider for appropriate tests.",
-        "doctor":    "Visit a clinic if symptoms persist or worsen.",
-        "safety":    "Seek emergency care if symptoms become severe." if risk == "High" else "",
+function predictOffline(answers) {
+  const sorted = Object.keys(DISEASE_SYMPTOM_MAP)
+    .map((d) => {
+      const syms = DISEASE_SYMPTOM_MAP[d] || [];
+      const yes  = syms.filter((s) => answers[s] === true).length;
+      return { d, sc: scoreDisease(d, answers), conf: Math.min(0.95, Math.max(0.35, yes / Math.max(syms.length, 1))) };
     })
-    if ai_result:
-        return {
-            "home_care":   ai_result.get("home_care")   or default["home_care"],
-            "test":        ai_result.get("test")        or default["test"],
-            "doctor":      ai_result.get("doctor")      or default["doctor"],
-            "safety":      ai_result.get("safety")      or default.get("safety", ""),
-            "explanation": ai_result.get("explanation") or f"Your symptoms are consistent with {disease}.",
-        }
-    return {**default, "explanation": f"Your symptoms are consistent with {disease}."}
-
-# ─────────────────────────────────────────────────────────────
-# PYDANTIC SCHEMAS (unchanged)
-# ─────────────────────────────────────────────────────────────
-
-class RegisterRequest(BaseModel):
-    email:    str
-    password: str
-    name:     str
-    age:      Optional[str] = None
-    gender:   Optional[str] = None
-
-
-class LoginRequest(BaseModel):
-    email:    str
-    password: str
-
-
-class AnswerRequest(BaseModel):
-    question_id: str
-    answer:      bool
-
-
-class ProfileUpdate(BaseModel):
-    name:   Optional[str] = None
-    age:    Optional[str] = None
-    gender: Optional[str] = None
-
-
-class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password:     str
-
-# ─────────────────────────────────────────────────────────────
-# AUTH HELPERS (unchanged logic)
-# ─────────────────────────────────────────────────────────────
-
-security = HTTPBearer()
-
-
-def create_token(user_id: int) -> str:
-    exp = datetime.utcnow() + timedelta(days=settings.access_token_expire_days)
-    return jwt.encode({"sub": str(user_id), "exp": exp}, settings.secret_key, algorithm=settings.algorithm)
-
-
-def verify_token(creds: HTTPAuthorizationCredentials = Depends(security)) -> int:
-    try:
-        payload = jwt.decode(creds.credentials, settings.secret_key, algorithms=[settings.algorithm])
-        user_id = payload.get("sub")
-        if user_id is None:
-            raise HTTPException(status_code=401, detail="Invalid token payload")
-        return int(user_id)
-    except JWTError:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-
-def hash_pw(pw: str) -> str:
-    salt   = secrets.token_hex(16)
-    hashed = hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 260_000).hex()
-    return f"{salt}:{hashed}"
-
-
-def verify_pw(pw: str, stored: str) -> bool:
-    try:
-        salt, hashed = stored.split(":", 1)
-        # Support legacy sha256 format
-        if len(hashed) == 64:
-            import hashlib as _hl
-            return _hl.sha256((salt + pw).encode()).hexdigest() == hashed
-        return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 260_000).hex() == hashed
-    except Exception:
-        return False
-
-# ─────────────────────────────────────────────────────────────
-# RATE LIMITER
-# ─────────────────────────────────────────────────────────────
-
-limiter = Limiter(key_func=get_remote_address, enabled=settings.enable_rate_limiting)
-
-# ─────────────────────────────────────────────────────────────
-# BACKGROUND SCHEDULER — session cleanup
-# ─────────────────────────────────────────────────────────────
-
-_scheduler = AsyncIOScheduler()
-
-
-async def _cleanup_stale_sessions() -> None:
-    cutoff = datetime.utcnow() - timedelta(hours=2)
-    db = SessionLocal()
-    try:
-        deleted = (
-            db.query(SessionModel)
-            .filter(
-                SessionModel.completed == False,
-                SessionModel.created_at < cutoff,
-            )
-            .delete(synchronize_session=False)
-        )
-        db.commit()
-        SESSION_CLEANUP_RUNS.inc()
-        logger.info({"event": "session_cleanup", "deleted": deleted})
-    except Exception as e:
-        logger.error({"event": "session_cleanup_error", "error": str(e)})
-        db.rollback()
-    finally:
-        db.close()
-
-# ─────────────────────────────────────────────────────────────
-# LIFESPAN
-# ─────────────────────────────────────────────────────────────
-
-_aiohttp_session: Optional[aiohttp.ClientSession] = None
-_pending_requests: int = 0
-_shutdown_event: asyncio.Event = asyncio.Event()
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    global _aiohttp_session
-
-    # Startup
-    Base.metadata.create_all(bind=engine)
-    load_ml_models()
-    start_model_watcher()
-    _aiohttp_session = aiohttp.ClientSession()
-
-    # Init Redis (best-effort)
-    await get_redis()
-
-    # Scheduler
-    _scheduler.add_job(_cleanup_stale_sessions, "interval", hours=1, id="session_cleanup")
-    _scheduler.start()
-
-    model_keys = list(LOADED_MODELS.keys()) or ["none — using scoring engine"]
-    logger.info({"event": "startup", "ml_models": model_keys, "openrouter": bool(settings.openrouter_api_key)})
-
-    yield
-
-    # Shutdown — wait up to 30 seconds for pending requests
-    logger.info({"event": "shutdown_initiated"})
-    deadline = asyncio.get_event_loop().time() + 30
-    while _pending_requests > 0 and asyncio.get_event_loop().time() < deadline:
-        await asyncio.sleep(0.5)
-
-    # Close resources
-    _scheduler.shutdown(wait=False)
-    if _aiohttp_session:
-        await _aiohttp_session.close()
-    stop_model_watcher()
-    if _redis:
-        await _redis.close()
-    engine.dispose()
-    logger.info({"event": "shutdown_complete"})
-
-# ─────────────────────────────────────────────────────────────
-# APP
-# ─────────────────────────────────────────────────────────────
-
-app = FastAPI(
-    title="TropiCare API",
-    version="1.0.0",
-    description="KNUST Final Year Project — AI Tropical Disease Checker",
-    lifespan=lifespan,
-)
-
-# Rate limit error handler
-app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
-# GZip compression (responses > 1KB)
-app.add_middleware(GZipMiddleware, minimum_size=1024)
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Prometheus instrumentation
-Instrumentator().instrument(app).expose(app, endpoint="/metrics")
-
-# ─────────────────────────────────────────────────────────────
-# MIDDLEWARE — Request ID + Structured Logging + Security Headers
-# ─────────────────────────────────────────────────────────────
-
-_CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-
-def _sanitize(value: str) -> str:
-    """Strip control characters from string input."""
-    return _CONTROL_CHAR_RE.sub("", value)
-
-
-@app.middleware("http")
-async def request_middleware(request: Request, call_next):
-    global _pending_requests
-
-    # Request ID
-    req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
-    request.state.request_id = req_id
-
-    # Body size limit
-    content_length = request.headers.get("content-length")
-    if content_length and int(content_length) > settings.max_body_size:
-        return JSONResponse(
-            status_code=413,
-            content={"detail": "Request body too large"},
-            headers={"X-Request-ID": req_id},
-        )
-
-    # Content-Type enforcement for mutating methods
-    if request.method in ("POST", "PUT", "PATCH"):
-        ct = request.headers.get("content-type", "")
-        if ct and "application/json" not in ct and "multipart" not in ct:
-            return JSONResponse(
-                status_code=415,
-                content={"detail": "Content-Type must be application/json"},
-                headers={"X-Request-ID": req_id},
-            )
-
-    start = time.monotonic()
-    _pending_requests += 1
-
-    # Extract user_id from JWT if present (best-effort, no failure)
-    user_id_log: Optional[int] = None
-    auth_header = request.headers.get("authorization", "")
-    if auth_header.startswith("Bearer "):
-        try:
-            token = auth_header[7:]
-            payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
-            user_id_log = int(payload.get("sub", 0)) or None
-        except Exception:
-            pass
-
-    try:
-        response: Response = await asyncio.wait_for(call_next(request), timeout=30)
-    except asyncio.TimeoutError:
-        _pending_requests -= 1
-        return JSONResponse(
-            status_code=504,
-            content={"detail": "Request timed out"},
-            headers={"X-Request-ID": req_id},
-        )
-    finally:
-        _pending_requests -= 1
-
-    duration_ms = round((time.monotonic() - start) * 1000, 2)
-
-    # Security headers
-    response.headers["X-Request-ID"]             = req_id
-    response.headers["X-Content-Type-Options"]   = "nosniff"
-    response.headers["X-Frame-Options"]           = "DENY"
-    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["Content-Security-Policy"]   = "default-src 'none'"
-
-    # No-store for authenticated endpoints
-    if user_id_log:
-        response.headers["Cache-Control"] = "no-store"
-
-    # API versioning support header (v2 would set this)
-    # response.headers["X-API-Deprecated"] = "true"   # enable when v2 ships
-
-    logger.info({
-        "event":       "request",
-        "request_id":  req_id,
-        "method":      request.method,
-        "path":        request.url.path,
-        "status":      response.status_code,
-        "duration_ms": duration_ms,
-        "user_id":     user_id_log,
-    })
-
-    return response
-
-# ─────────────────────────────────────────────────────────────
-# MIDDLEWARE — Password attempt rate limiting via Redis
-# ─────────────────────────────────────────────────────────────
-
-async def _check_password_rate_limit(email: str) -> None:
-    """Allow max 3 password attempts per email per minute."""
-    r = await get_redis()
-    if r is None:
-        return
-    key = f"pw_attempts:{email}"
-    try:
-        count = await r.incr(key)
-        if count == 1:
-            await r.expire(key, 60)
-        if count > 3:
-            raise HTTPException(
-                status_code=429,
-                detail="Too many login attempts. Try again in a minute.",
-                headers={"Retry-After": "60"},
-            )
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-
-# ─────────────────────────────────────────────────────────────
-# HEALTH ENDPOINTS
-# ─────────────────────────────────────────────────────────────
-
-@app.get("/api/v1/health")
-async def health():
-    """Original health endpoint — preserved for backward compat."""
-    return {
-        "status":             "healthy",
-        "timestamp":          datetime.utcnow().isoformat(),
-        "ml_models":          list(LOADED_MODELS.keys()),
-        "openrouter_enabled": bool(settings.openrouter_api_key),
-        "openrouter_model":   settings.openrouter_model,
+    .sort((a, b) => b.sc - a.sc);
+
+  const top  = sorted[0];
+  const risk = RISK_MAP[top.d] || "Medium";
+
+  return {
+    disease:    top.d,
+    confidence: top.conf,
+    risk,
+    explanation: `The reported symptoms are consistent with ${top.d}.`,
+    recommendation: {
+      home_care: "Rest, stay hydrated, and monitor your symptoms closely.",
+      test:      "Consult a healthcare provider to arrange appropriate diagnostic tests.",
+      doctor:    risk === "High" ? "Visit a hospital or clinic without delay." : "See a doctor if symptoms persist or worsen.",
+      safety:    risk === "High" ? "Do not wait — seek medical attention today." : "",
+    },
+    all_scores: Object.fromEntries(sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])),
+    method: "offline-scoring",
+  };
+}
+
+// ─────────────────────────────────────────────
+// STYLES
+// ─────────────────────────────────────────────
+const injectStyles = () => {
+  if (document.getElementById("tc-styles")) return;
+  const el = document.createElement("style");
+  el.id = "tc-styles";
+  el.textContent = `
+    @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap');
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --teal:     #0d9488; --teal-d:   #0f766e; --teal-l:   #ccfbf1; --teal-xl:  #f0fdfa;
+      --red:      #ef4444; --red-l:    #fef2f2;
+      --amber:    #f59e0b; --amber-l:  #fffbeb;
+      --green:    #22c55e; --green-l:  #f0fdf4;
+      --blue:     #3b82f6; --blue-l:   #eff6ff;
+      --purple:   #8b5cf6; --purple-l: #f5f3ff;
+      --ink:      #0f172a; --ink-2:    #1e293b; --ink-3: #334155;
+      --muted:    #64748b; --muted-l:  #94a3b8;
+      --border:   #e2e8f0; --border-l: #f1f5f9;
+      --surface:  #ffffff; --bg:       #f8fafc;
+      --font:     'Sora', sans-serif;
+      --display:  'Playfair Display', serif;
+      --radius-s: 10px; --radius: 16px; --radius-l: 24px;
+      --shadow-s: 0 1px 4px rgba(0,0,0,0.06);
+      --shadow:   0 4px 20px rgba(0,0,0,0.08);
+      --shadow-l: 0 8px 40px rgba(0,0,0,0.12);
     }
 
+    html, body { height: 100%; font-family: var(--font); background: var(--bg); color: var(--ink); -webkit-font-smoothing: antialiased; }
+    #root { height: 100%; }
 
-@app.get("/health/live")
-async def health_live():
-    """Liveness — process is up, no dependency checks."""
-    return {"status": "alive", "timestamp": datetime.utcnow().isoformat()}
+    .shell   { display: flex; height: 100vh; overflow: hidden; }
+    .sidebar { width: 240px; min-height: 100vh; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; padding: 28px 0; }
+    .main    { flex: 1; overflow-y: auto; scroll-behavior: smooth; }
+    @media (max-width: 767px) { .sidebar { display: none; } .main { padding-bottom: 72px; } }
 
+    .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 0 20px 28px; }
+    .brand-mark    { width: 36px; height: 36px; background: var(--teal); border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .brand-name    { font-family: var(--display); font-size: 18px; font-weight: 700; color: var(--ink); }
+    .brand-sub     { font-size: 10px; color: var(--muted); font-weight: 500; letter-spacing: 0.03em; }
+    .sidebar-nav   { flex: 1; padding: 0 10px; }
+    .nav-item      { display: flex; align-items: center; gap: 10px; width: 100%; padding: 11px 14px; border-radius: var(--radius-s); border: none; background: none; font-family: var(--font); font-size: 14px; font-weight: 500; color: var(--muted); cursor: pointer; transition: all 0.18s; margin-bottom: 2px; text-align: left; }
+    .nav-item:hover  { background: var(--teal-xl); color: var(--teal); }
+    .nav-item.active { background: var(--teal-xl); color: var(--teal); font-weight: 600; }
+    .sidebar-foot  { padding: 16px 10px 0; border-top: 1px solid var(--border); margin: 0 10px; }
 
-@app.get("/health/ready")
-async def health_ready():
-    """Readiness — checks DB, Redis, and OpenRouter reachability."""
-    checks: Dict[str, str] = {}
+    .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--border); display: none; z-index: 100; padding: 8px 0 calc(8px + env(safe-area-inset-bottom)); }
+    @media (max-width: 767px) { .bottom-nav { display: flex; } }
+    .bnav-item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 6px 4px; border: none; background: none; font-family: var(--font); font-size: 10px; font-weight: 600; color: var(--muted-l); cursor: pointer; transition: color 0.15s; }
+    .bnav-item.active { color: var(--teal); }
+    .bnav-item svg { width: 20px; height: 20px; }
 
-    # DB check
-    try:
-        async def _db_ping():
-            db = SessionLocal()
-            try:
-                db.execute(__import__("sqlalchemy").text("SELECT 1"))
-            finally:
-                db.close()
-        await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, lambda: SessionLocal().execute(__import__("sqlalchemy").text("SELECT 1"))), timeout=5)
-        checks["db"] = "ok"
-    except Exception as e:
-        checks["db"] = f"fail: {e}"
+    .page      { animation: pageIn 0.25s ease; }
+    @keyframes pageIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+    .page-head { padding: 24px 24px 0; }
+    .page-body { padding: 20px 24px 40px; }
+    @media (max-width: 767px) { .page-head { padding: 20px 16px 0; } .page-body { padding: 16px 16px 32px; } }
 
-    # Redis check
-    try:
-        r = await asyncio.wait_for(get_redis(), timeout=5)
-        if r:
-            await asyncio.wait_for(r.ping(), timeout=5)
-            checks["redis"] = "ok"
-        else:
-            checks["redis"] = "disabled"
-    except Exception as e:
-        checks["redis"] = f"fail: {e}"
+    .t-display  { font-family: var(--display); font-size: 26px; font-weight: 700; color: var(--ink); line-height: 1.2; }
+    .t-title    { font-size: 18px; font-weight: 700; color: var(--ink); line-height: 1.3; }
+    .t-subtitle { font-size: 14px; color: var(--muted); font-weight: 400; line-height: 1.55; }
+    .t-label    { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); }
+    .t-mono     { font-feature-settings: 'tnum'; }
 
-    # OpenRouter reachability (HEAD-like check)
-    if settings.openrouter_api_key:
-        try:
-            async with aiohttp.ClientSession() as s:
-                async with s.get("https://openrouter.ai", timeout=aiohttp.ClientTimeout(total=5)) as r:
-                    checks["openrouter"] = "ok" if r.status < 500 else f"fail: {r.status}"
-        except Exception as e:
-            checks["openrouter"] = f"fail: {e}"
-    else:
-        checks["openrouter"] = "not_configured"
+    .card   { background: var(--surface); border-radius: var(--radius); box-shadow: var(--shadow-s); border: 1px solid var(--border); }
+    .card-p { padding: 20px; }
 
-    all_ok = all(v in ("ok", "disabled", "not_configured") for v in checks.values())
-    status_code = 200 if all_ok else 503
-    return JSONResponse(
-        status_code=status_code,
-        content={"status": "ready" if all_ok else "not_ready", "checks": checks},
-    )
+    .btn          { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 13px 22px; border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; font-weight: 600; cursor: pointer; border: none; transition: all 0.18s; line-height: 1; }
+    .btn:active   { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.55; cursor: not-allowed; }
+    .btn-primary  { background: var(--teal); color: #fff; box-shadow: 0 4px 14px rgba(13,148,136,0.28); }
+    .btn-primary:hover:not(:disabled)   { background: var(--teal-d); box-shadow: 0 6px 18px rgba(13,148,136,0.36); }
+    .btn-secondary { background: var(--border-l); color: var(--ink-2); }
+    .btn-secondary:hover:not(:disabled) { background: var(--border); }
+    .btn-danger   { background: var(--red); color: #fff; }
+    .btn-danger:hover:not(:disabled)    { background: #dc2626; }
+    .btn-outline  { background: transparent; color: var(--teal); border: 2px solid var(--teal); }
+    .btn-outline:hover:not(:disabled)   { background: var(--teal-xl); }
+    .btn-full { width: 100%; }
+    .btn-lg   { padding: 16px 28px; font-size: 15px; border-radius: var(--radius); }
+    .btn-sm   { padding: 9px 16px; font-size: 12px; }
 
+    .field       { margin-bottom: 14px; }
+    .field-label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 6px; }
+    .field-input { width: 100%; padding: 12px 14px; border: 2px solid var(--border); border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; color: var(--ink); background: var(--surface); outline: none; transition: border-color 0.18s; }
+    .field-input:focus { border-color: var(--teal); }
+    .field-input::placeholder { color: var(--muted-l); }
+    .field-select { appearance: none; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; background-size: 16px; cursor: pointer; }
 
-@app.get("/health/startup")
-async def health_startup():
-    """Startup probe — returns 200 only when ML models are fully loaded."""
-    if ML_STARTUP_COMPLETE.is_set():
-        return {"status": "started", "models": list(LOADED_MODELS.keys())}
-    return JSONResponse(status_code=503, content={"status": "loading"})
+    .badge        { display: inline-flex; align-items: center; padding: 3px 10px; border-radius: 99px; font-size: 11px; font-weight: 700; }
+    .badge-High   { background: var(--red-l);   color: var(--red); }
+    .badge-Medium { background: var(--amber-l); color: #92400e; }
+    .badge-Low    { background: var(--green-l); color: #15803d; }
+    .badge-teal   { background: var(--teal-xl); color: var(--teal); }
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Auth
-# ─────────────────────────────────────────────────────────────
+    .prog-track { height: 5px; background: var(--border-l); border-radius: 99px; overflow: hidden; }
+    .prog-fill  { height: 100%; background: linear-gradient(90deg, #2dd4bf, var(--teal)); border-radius: 99px; transition: width 0.4s cubic-bezier(0.4,0,0.2,1); }
 
-@app.post("/api/v1/auth/register", status_code=201)
-@limiter.limit("100/hour")
-async def register(request: Request, req: RegisterRequest, db: Session = Depends(get_db)):
-    if db.query(UserModel).filter(UserModel.email == req.email).first():
-        raise HTTPException(status_code=400, detail="Email already registered")
-    user = UserModel(
-        email=_sanitize(req.email),
-        name=_sanitize(req.name),
-        pw_hash=hash_pw(req.password),
-        age=req.age,
-        gender=req.gender,
-    )
-    db.add(user)
-    db.commit()
-    db.refresh(user)
-    return {
-        "access_token": create_token(user.id),
-        "token_type":   "bearer",
-        "user":         {"id": user.id, "email": user.email, "name": user.name},
+    .avatar    { width: 38px; height: 38px; border-radius: 99px; background: var(--teal-xl); display: flex; align-items: center; justify-content: center; color: var(--teal); font-weight: 700; font-size: 14px; flex-shrink: 0; }
+    .avatar-lg { width: 64px; height: 64px; font-size: 22px; background: linear-gradient(135deg, var(--teal-l), var(--teal-xl)); }
+    .mx-auto   { margin-left: auto; margin-right: auto; }
+
+    .splash { position: fixed; inset: 0; background: linear-gradient(145deg, var(--teal-d) 0%, #0a4f4a 100%); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 9999; transition: opacity 0.45s ease; }
+    .splash.fading { opacity: 0; pointer-events: none; }
+    .splash-logo  { width: 76px; height: 76px; background: rgba(255,255,255,0.12); border-radius: 22px; display: flex; align-items: center; justify-content: center; margin-bottom: 20px; border: 1px solid rgba(255,255,255,0.18); animation: breathe 2.4s ease-in-out infinite; }
+    @keyframes breathe { 0%,100%{transform:scale(1);} 50%{transform:scale(1.04);} }
+    .splash-title { font-family: var(--display); font-size: 38px; color: #fff; font-weight: 700; letter-spacing: -0.5px; }
+    .splash-sub   { color: rgba(255,255,255,0.6); font-size: 13px; margin-top: 6px; letter-spacing: 0.04em; }
+    .splash-dots  { display: flex; gap: 6px; margin-top: 52px; }
+    .splash-dot   { width: 6px; height: 6px; border-radius: 99px; background: rgba(255,255,255,0.4); animation: dot-bounce 1.3s ease-in-out infinite; }
+    .splash-dot:nth-child(2) { animation-delay: 0.18s; }
+    .splash-dot:nth-child(3) { animation-delay: 0.36s; }
+    @keyframes dot-bounce { 0%,80%,100%{transform:scale(0.7);opacity:0.4;} 40%{transform:scale(1.1);opacity:1;} }
+
+    .auth-wrap  { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; background: linear-gradient(160deg, var(--teal-xl) 0%, var(--bg) 55%); }
+    .auth-box   { width: 100%; max-width: 420px; }
+    .auth-logo  { text-align: center; margin-bottom: 36px; }
+    .auth-icon  { width: 60px; height: 60px; background: var(--teal); border-radius: 18px; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
+    .auth-title { font-family: var(--display); font-size: 28px; color: var(--ink); font-weight: 700; }
+    .auth-hint  { font-size: 13px; color: var(--muted); margin-top: 5px; }
+    .auth-foot  { text-align: center; margin-top: 18px; font-size: 11px; color: var(--muted-l); line-height: 1.7; }
+    .tabs       { display: flex; background: var(--border-l); border-radius: var(--radius-s); padding: 4px; margin-bottom: 22px; }
+    .tab        { flex: 1; padding: 9px; text-align: center; border-radius: 8px; font-family: var(--font); font-size: 13px; font-weight: 600; cursor: pointer; border: none; background: none; color: var(--muted); transition: all 0.18s; }
+    .tab.active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-s); }
+    .grid-2     { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .pw-wrap    { position: relative; }
+    .pw-toggle  { position: absolute; right: 13px; top: 50%; transform: translateY(-50%); border: none; background: none; cursor: pointer; color: var(--muted-l); display: flex; }
+
+    .home-header { display: flex; align-items: center; justify-content: space-between; padding: 24px 24px 16px; }
+    @media (max-width: 767px) { .home-header { padding: 20px 16px 14px; } }
+    .greeting    { font-size: 12px; color: var(--muted); margin-bottom: 3px; }
+    .hero-card   { margin: 0 24px 20px; padding: 28px; border-radius: var(--radius-l); background: linear-gradient(135deg, var(--teal) 0%, var(--teal-d) 100%); position: relative; overflow: hidden; }
+    @media (max-width: 767px) { .hero-card { margin: 0 16px 16px; padding: 22px 20px; } }
+    .hero-bg-icon  { position: absolute; top: -16px; right: -16px; opacity: 0.08; }
+    .hero-eyebrow  { font-size: 11px; color: rgba(255,255,255,0.65); font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+    .hero-headline { font-family: var(--display); font-size: 22px; color: #fff; line-height: 1.3; margin-bottom: 18px; }
+    .hero-btn      { display: inline-flex; align-items: center; gap: 6px; background: #fff; color: var(--teal-d); font-family: var(--font); font-size: 13px; font-weight: 700; padding: 11px 20px; border-radius: 10px; border: none; cursor: pointer; transition: box-shadow 0.18s; }
+    .hero-btn:hover { box-shadow: 0 6px 20px rgba(0,0,0,0.15); }
+
+    .stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 0 24px 20px; }
+    @media (max-width: 767px) { .stats-row { padding: 0 16px 16px; gap: 8px; } }
+    .stat-card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 16px 12px; text-align: center; }
+    .stat-icon { width: 32px; height: 32px; border-radius: 8px; display: flex; align-items: center; justify-content: center; margin: 0 auto 8px; }
+    .stat-val  { font-size: 20px; font-weight: 800; color: var(--ink); line-height: 1; }
+    .stat-lbl  { font-size: 10px; color: var(--muted); font-weight: 600; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.05em; }
+
+    .section     { padding: 0 24px 20px; }
+    @media (max-width: 767px) { .section { padding: 0 16px 16px; } }
+    .section-ttl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 10px; }
+
+    .rec-list   { display: flex; flex-direction: column; gap: 8px; }
+    .rec-card   { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 14px 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: box-shadow 0.18s; }
+    .rec-card:hover { box-shadow: var(--shadow); }
+    .rec-icon-wrap { width: 42px; height: 42px; border-radius: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .rec-info   { flex: 1; min-width: 0; }
+    .rec-name   { font-size: 14px; font-weight: 600; color: var(--ink); }
+    .rec-meta   { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+    .disease-grid { display: flex; flex-wrap: wrap; gap: 6px; }
+
+    .al-hero { background: linear-gradient(135deg, var(--teal-xl) 0%, #e0f2fe 100%); border-radius: var(--radius-l); padding: 28px 24px 24px; margin-bottom: 16px; display: flex; gap: 20px; align-items: center; }
+    @media (max-width: 480px) { .al-hero { flex-direction: column; text-align: center; } }
+    .al-hero-text  { flex: 1; }
+    .al-hero-illus { flex-shrink: 0; width: 120px; height: 140px; }
+
+    .feat-list { display: flex; flex-direction: column; gap: 0; }
+    .feat-row  { display: flex; align-items: flex-start; gap: 14px; padding: 14px 0; }
+    .feat-row + .feat-row { border-top: 1px solid var(--border); }
+    .feat-icon  { width: 36px; height: 36px; background: var(--teal-xl); border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .feat-title { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 2px; }
+    .feat-desc  { font-size: 12px; color: var(--muted); line-height: 1.55; }
+
+    .q-screen  { height: 100vh; display: flex; flex-direction: column; background: var(--bg); }
+    .q-topbar  { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 20px; display: flex; align-items: center; gap: 12px; flex-shrink: 0; }
+    .q-close   { width: 34px; height: 34px; background: var(--border-l); border-radius: 8px; border: none; display: flex; align-items: center; justify-content: center; cursor: pointer; flex-shrink: 0; }
+    .q-counter { font-size: 12px; font-weight: 700; color: var(--muted); width: 38px; text-align: right; flex-shrink: 0; }
+    .q-body    { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 20px; }
+    .q-cat-pill { display: inline-flex; padding: 4px 12px; background: var(--teal-xl); color: var(--teal); border-radius: 99px; font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 20px; }
+    .q-illus   { width: 160px; height: 160px; margin-bottom: 24px; }
+    .q-illus-svg { width: 100%; height: 100%; }
+    .q-text    { font-family: var(--display); font-size: 22px; font-weight: 700; color: var(--ink); text-align: center; line-height: 1.35; margin-bottom: 32px; max-width: 320px; }
+    .q-answers { display: flex; flex-direction: column; gap: 10px; width: 100%; max-width: 340px; }
+    .ans-btn   { display: flex; align-items: center; gap: 12px; padding: 16px 18px; border-radius: var(--radius); border: 2px solid var(--border); background: var(--surface); font-family: var(--font); font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.18s; }
+    .ans-btn:active { transform: scale(0.97); }
+    .ans-btn.yes { border-color: #2dd4bf; background: var(--teal-xl); color: var(--teal-d); }
+    .ans-btn.yes:hover { background: #ccfbf1; }
+    .ans-btn.no  { border-color: var(--border); background: var(--border-l); color: var(--ink-3); }
+    .ans-btn.no:hover  { background: var(--border); }
+    .ans-btn-icon { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .ans-yes-icon { background: #ccfbf1; }
+    .ans-no-icon  { background: var(--border); }
+    .q-anim    { animation: qSlide 0.28s cubic-bezier(0.4,0,0.2,1); }
+    @keyframes qSlide { from{opacity:0;transform:translateY(14px);} to{opacity:1;transform:none;} }
+
+    .analyzing  { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: var(--bg); }
+    .spin-ring  { width: 140px; height: 140px; margin-bottom: 28px; animation: spin-slow 3s linear infinite; }
+    @keyframes spin-slow { to { transform: rotate(360deg); } }
+    .loading-dots { display: flex; gap: 7px; margin-top: 24px; }
+    .ldot       { width: 9px; height: 9px; border-radius: 99px; background: var(--teal); animation: dot-bounce 1.2s ease-in-out infinite; }
+    .ldot:nth-child(2) { animation-delay: 0.18s; }
+    .ldot:nth-child(3) { animation-delay: 0.36s; }
+
+    .result-ring        { width: 110px; height: 110px; border-radius: 99px; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; animation: ring-in 0.45s cubic-bezier(0.34,1.56,0.64,1); }
+    @keyframes ring-in  { from{transform:scale(0.6);opacity:0;} to{transform:scale(1);opacity:1;} }
+    .result-ring-High   { background: linear-gradient(135deg, #fee2e2, #fecaca); box-shadow: 0 0 0 10px rgba(239,68,68,0.08); }
+    .result-ring-Medium { background: linear-gradient(135deg, #fef3c7, #fde68a); box-shadow: 0 0 0 10px rgba(245,158,11,0.08); }
+    .result-ring-Low    { background: linear-gradient(135deg, #dcfce7, #bbf7d0); box-shadow: 0 0 0 10px rgba(34,197,94,0.08); }
+
+    .rec-bubbles    { display: flex; flex-direction: column; gap: 10px; }
+    .rec-bubble     { display: flex; align-items: flex-start; gap: 12px; padding: 14px 16px; border-radius: var(--radius); border-left: 4px solid transparent; background: var(--surface); box-shadow: var(--shadow-s); animation: bubble-in 0.35s ease both; }
+    .rec-bubble:nth-child(1){ animation-delay: 0.05s; }
+    .rec-bubble:nth-child(2){ animation-delay: 0.12s; }
+    .rec-bubble:nth-child(3){ animation-delay: 0.19s; }
+    .rec-bubble:nth-child(4){ animation-delay: 0.26s; }
+    @keyframes bubble-in { from{opacity:0;transform:translateX(-8px);} to{opacity:1;transform:none;} }
+    .rec-bubble-icon  { width: 32px; height: 32px; border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .rec-bubble-label { font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 3px; }
+    .rec-bubble-text  { font-size: 13px; color: var(--ink-2); line-height: 1.5; font-weight: 500; }
+
+    .score-bar-row   { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+    .score-bar-name  { font-size: 12px; color: var(--muted); width: 150px; flex-shrink: 0; }
+    .score-bar-track { flex: 1; height: 4px; background: var(--border-l); border-radius: 99px; overflow: hidden; }
+    .score-bar-fill  { height: 100%; background: var(--border); border-radius: 99px; }
+    .score-bar-pct   { font-size: 12px; color: var(--muted); width: 30px; text-align: right; }
+
+    .disclaimer   { display: flex; gap: 10px; align-items: flex-start; background: var(--amber-l); border: 1px solid #fde68a; border-radius: var(--radius-s); padding: 12px 14px; }
+    .disclaimer p { font-size: 12px; color: #78350f; line-height: 1.55; }
+
+    .search-wrap  { position: relative; margin-bottom: 12px; }
+    .search-icon  { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); color: var(--muted-l); }
+    .search-input { width: 100%; padding: 11px 14px 11px 40px; border: 1.5px solid var(--border); border-radius: var(--radius-s); font-family: var(--font); font-size: 14px; color: var(--ink); background: var(--surface); outline: none; transition: border-color 0.18s; }
+    .search-input:focus { border-color: var(--teal); }
+    .chip-row { display: flex; flex-wrap: wrap; gap: 7px; margin-bottom: 14px; }
+    .chip     { padding: 6px 14px; border-radius: 99px; border: 1.5px solid var(--border); font-family: var(--font); font-size: 12px; font-weight: 600; cursor: pointer; transition: all 0.15s; background: var(--surface); color: var(--muted); }
+    .chip.on  { border-color: var(--teal); background: var(--teal-xl); color: var(--teal); }
+    .empty-state { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 56px 24px; gap: 10px; text-align: center; }
+
+    .menu-list  { display: flex; flex-direction: column; }
+    .menu-item  { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); cursor: pointer; transition: opacity 0.15s; }
+    .menu-item:last-child { border-bottom: none; }
+    .menu-item:hover { opacity: 0.75; }
+    .menu-ico   { width: 34px; height: 34px; background: var(--border-l); border-radius: 9px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+
+    .toggle-row    { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }
+    .toggle        { position: relative; width: 42px; height: 23px; }
+    .toggle input  { opacity: 0; width: 0; height: 0; }
+    .toggle-slider { position: absolute; inset: 0; background: var(--border); border-radius: 99px; cursor: pointer; transition: 0.28s; }
+    .toggle input:checked + .toggle-slider { background: var(--teal); }
+    .toggle-slider::before { content: ''; position: absolute; height: 17px; width: 17px; left: 3px; bottom: 3px; background: #fff; border-radius: 50%; transition: 0.28s; box-shadow: var(--shadow-s); }
+    .toggle input:checked + .toggle-slider::before { transform: translateX(19px); }
+
+    .danger-zone { border: 1.5px solid var(--red); border-radius: var(--radius); padding: 18px; margin-bottom: 20px; }
+
+    .flex      { display: flex; }
+    .items-c   { align-items: center; }
+    .justify-b { justify-content: space-between; }
+    .gap-2     { gap: 8px; }
+    .gap-3     { gap: 12px; }
+    .mt-1 { margin-top: 4px; }  .mt-2 { margin-top: 8px; }   .mt-3 { margin-top: 12px; }  .mt-4 { margin-top: 16px; }
+    .mb-2 { margin-bottom: 8px; } .mb-3 { margin-bottom: 12px; } .mb-4 { margin-bottom: 16px; }
+    .w-full  { width: 100%; }
+    .text-c  { text-align: center; }
+    .italic  { font-style: italic; }
+    .notif   { position: fixed; top: 22px; left: 50%; transform: translateX(-50%); background: var(--ink-2); color: #fff; padding: 10px 22px; border-radius: var(--radius-s); font-size: 13px; font-weight: 500; z-index: 9999; animation: notif-in 0.3s ease; white-space: nowrap; }
+    @keyframes notif-in { from{opacity:0;transform:translateX(-50%) translateY(-12px);} to{opacity:1;transform:translateX(-50%) translateY(0);} }
+
+    /* Profile */
+    .profile-stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+    .ps-card { background: var(--surface); border-radius: var(--radius); border: 1px solid var(--border); padding: 18px 14px; text-align: center; }
+    .ps-val  { font-size: 26px; font-weight: 800; line-height: 1; margin-bottom: 4px; }
+    .ps-lbl  { font-size: 10px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; }
+    .edit-panel       { background: var(--border-l); border-radius: var(--radius); padding: 18px; margin-bottom: 14px; border: 1px solid var(--border); }
+    .edit-panel-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 14px; }
+
+    /* Privacy & Security */
+    .sec-section       { margin-bottom: 20px; }
+    .sec-section-title { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin-bottom: 10px; }
+    .sec-row       { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+    .sec-row:last-child { border-bottom: none; }
+    .sec-row-icon  { width: 36px; height: 36px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .sec-row-body  { flex: 1; min-width: 0; }
+    .sec-row-label { font-size: 14px; font-weight: 600; color: var(--ink); margin-bottom: 2px; }
+    .sec-row-hint  { font-size: 12px; color: var(--muted); }
+    .sec-field-wrap { background: var(--border-l); border-radius: var(--radius); padding: 16px; margin-top: 10px; border: 1px solid var(--border); }
+
+    /* About */
+    .about-hero        { background: linear-gradient(135deg, var(--teal) 0%, var(--teal-d) 100%); border-radius: var(--radius-l); padding: 28px 24px; margin-bottom: 20px; position: relative; overflow: hidden; }
+    .about-hero-bg     { position: absolute; top: -30px; right: -30px; opacity: 0.07; }
+    .about-hero-eyebrow { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: rgba(255,255,255,0.6); margin-bottom: 8px; }
+    .about-hero-title  { font-family: var(--display); font-size: 28px; color: #fff; font-weight: 700; line-height: 1.2; margin-bottom: 10px; }
+    .about-hero-sub    { font-size: 13px; color: rgba(255,255,255,0.72); line-height: 1.6; }
+    .about-mission     { background: var(--teal-xl); border-radius: var(--radius); border: 1px solid var(--teal-l); padding: 20px; margin-bottom: 16px; }
+    .about-mission-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.1em; color: var(--teal); margin-bottom: 8px; }
+    .about-mission-text  { font-size: 14px; color: var(--ink-2); line-height: 1.65; font-weight: 500; }
+    .about-fact-grid   { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
+    .about-fact        { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; text-align: center; }
+    .about-fact-val    { font-family: var(--display); font-size: 26px; font-weight: 700; color: var(--teal); line-height: 1; margin-bottom: 4px; }
+    .about-fact-lbl    { font-size: 11px; color: var(--muted); font-weight: 600; }
+    .about-feature-row { display: flex; align-items: flex-start; gap: 14px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+    .about-feature-row:last-child { border-bottom: none; }
+    .about-feature-icon  { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .about-feature-title { font-size: 13px; font-weight: 700; color: var(--ink); margin-bottom: 3px; }
+    .about-feature-desc  { font-size: 12px; color: var(--muted); line-height: 1.55; }
+    .about-team-card   { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px; margin-bottom: 10px; display: flex; align-items: center; gap: 14px; }
+    .about-team-avatar { width: 46px; height: 46px; border-radius: 99px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; flex-shrink: 0; }
+    .about-team-name   { font-size: 14px; font-weight: 700; color: var(--ink); margin-bottom: 2px; }
+    .about-team-role   { font-size: 12px; color: var(--muted); }
+    .about-version-strip { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; border-bottom: 1px solid var(--border); }
+    .about-version-strip:last-child { border-bottom: none; }
+    .about-version-key { font-size: 13px; color: var(--muted); }
+    .about-version-val { font-size: 13px; font-weight: 600; color: var(--ink); }
+  `;
+  document.head.appendChild(el);
+};
+
+// ─────────────────────────────────────────────
+// SVG COMPONENTS
+// ─────────────────────────────────────────────
+function MedicalHeartMark({ size = 22, color = "#fff" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
+      <path d="M12 21C12 21 3 14.5 3 8.5C3 5.42 5.42 3 8.5 3C10.24 3 11.91 3.81 13 5.08C14.09 3.81 15.76 3 17.5 3C20.58 3 23 5.42 23 8.5C23 14.5 12 21 12 21Z" fill={color} opacity="0.92" />
+      <polyline points="6,12 8.5,12 9.5,9 10.5,15 11.5,10.5 12.5,13 13.2,12 15.5,12 17.5,12" stroke="#0d9488" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
+function MedicalHeartLarge({ size = 32, color = "#fff" }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 32 32" fill="none">
+      <path d="M16 28C16 28 4 19.5 4 11.5C4 7.36 7.36 4 11.5 4C13.72 4 15.78 5.01 17.2 6.66C18.62 5.01 20.68 4 22.9 4C27.04 4 30.4 7.36 30.4 11.5C30.4 19.5 16 28 16 28Z" fill={color} opacity="0.9" />
+      <polyline points="8,16 11,16 12.5,12 14,20 15.5,14 16.5,17 17.5,16 20,16 23,16" stroke="#0d9488" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
+function MedicalHeartSplash() {
+  return (
+    <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
+      <path d="M22 38C22 38 6 27 6 16C6 10.48 10.48 6 16 6C18.9 6 21.56 7.38 23.2 9.6C24.84 7.38 27.5 6 30.4 6C35.92 6 40 10.48 40 16C40 27 22 38 22 38Z" fill="white" opacity="0.9" />
+      <polyline points="10,22 15,22 17,16 19,28 21,19 23,24 25,22 29,22 34,22" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  );
+}
+
+function HealthProfessionalIllus({ width = 120, height = 140 }) {
+  return (
+    <svg width={width} height={height} viewBox="0 0 120 140" fill="none">
+      <circle cx="60" cy="70" r="58" fill="#e0f2f1" />
+      <rect x="30" y="72" width="60" height="60" rx="18" fill="#ffffff" />
+      <path d="M60 72 L45 80 L45 110 L60 104 L75 110 L75 80 Z" fill="#f0fdfa" stroke="#b2dfdb" strokeWidth="1" />
+      <path d="M48 82 Q44 90 44 98 Q44 106 52 106 Q60 106 60 98" stroke="#0d9488" strokeWidth="2.5" fill="none" strokeLinecap="round" />
+      <circle cx="60" cy="99" r="5" fill="#0d9488" />
+      <circle cx="60" cy="99" r="2.5" fill="#ccfbf1" />
+      <line x1="48" y1="82" x2="42" y2="76" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" />
+      <circle cx="42" cy="75" r="2" fill="#0d9488" />
+      <rect x="64" y="84" width="18" height="12" rx="3" fill="#e0f2f1" stroke="#b2dfdb" strokeWidth="1" />
+      <rect x="66" y="86" width="10" height="2" rx="1" fill="#0d9488" opacity="0.6" />
+      <rect x="53" y="58" width="14" height="18" rx="5" fill="#f5cba7" />
+      <ellipse cx="60" cy="46" rx="22" ry="24" fill="#f5cba7" />
+      <path d="M38 42 Q38 22 60 22 Q82 22 82 42 Q82 34 60 32 Q38 34 38 42 Z" fill="#4a3728" />
+      <ellipse cx="52" cy="46" rx="3.5" ry="4" fill="#fff" />
+      <ellipse cx="68" cy="46" rx="3.5" ry="4" fill="#fff" />
+      <circle cx="53" cy="47" r="2" fill="#3d2b1f" />
+      <circle cx="69" cy="47" r="2" fill="#3d2b1f" />
+      <path d="M53 60 Q60 65 67 60" stroke="#c9785c" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+      <ellipse cx="38" cy="48" rx="4" ry="6" fill="#f5cba7" />
+      <ellipse cx="82" cy="48" rx="4" ry="6" fill="#f5cba7" />
+      <rect x="18" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1" />
+      <rect x="88" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1" />
+      <ellipse cx="25" cy="118" rx="7" ry="6" fill="#f5cba7" />
+      <ellipse cx="95" cy="118" rx="7" ry="6" fill="#f5cba7" />
+      <rect x="56" y="88" width="8" height="2.5" rx="1.25" fill="#0d9488" opacity="0.8" />
+      <rect x="58.75" y="85.25" width="2.5" height="8" rx="1.25" fill="#0d9488" opacity="0.8" />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────
+// CATEGORY ILLUSTRATIONS
+// ─────────────────────────────────────────────
+const IllusGeneral = () => (
+  <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
+    <circle cx="100" cy="100" r="90" fill="#fef2f2"/>
+    <rect x="91" y="38" width="18" height="82" rx="9" fill="#cbd5e1"/>
+    <rect x="93" y="78" width="14" height="38" rx="7" fill="#ef4444"/>
+    <circle cx="100" cy="128" r="17" fill="#ef4444"/>
+    <circle cx="141" cy="68" r="20" fill="#fbbf24" opacity="0.25"/>
+    <circle cx="141" cy="68" r="13" fill="#fbbf24" opacity="0.55"/>
+    <circle cx="141" cy="68" r="8" fill="#f59e0b"/>
+  </svg>
+);
+const IllusRespiratory = () => (
+  <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
+    <circle cx="100" cy="100" r="90" fill="#eff6ff"/>
+    <line x1="100" y1="58" x2="100" y2="108" stroke="#94a3b8" strokeWidth="5" strokeLinecap="round"/>
+    <path d="M100 88 Q76 88 66 108 Q56 130 70 146 Q84 160 90 150 Q93 140 100 134" stroke="#3b82f6" strokeWidth="7" fill="none" strokeLinecap="round"/>
+    <path d="M100 88 Q124 88 134 108 Q144 130 130 146 Q116 160 110 150 Q107 140 100 134" stroke="#3b82f6" strokeWidth="7" fill="none" strokeLinecap="round"/>
+    <ellipse cx="72" cy="146" rx="15" ry="13" fill="#60a5fa"/>
+    <ellipse cx="128" cy="146" rx="15" ry="13" fill="#60a5fa"/>
+  </svg>
+);
+const IllusDigestive = () => (
+  <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
+    <circle cx="100" cy="100" r="90" fill="#f0fdf4"/>
+    <path d="M85 58 Q65 70 70 92 Q75 112 92 117 Q96 152 100 162 Q104 152 108 117 Q125 112 130 92 Q135 70 115 58 Q108 53 100 52 Q92 53 85 58Z" fill="#4ade80" opacity="0.55"/>
+    <circle cx="80" cy="100" r="7" fill="#4ade80"/>
+    <circle cx="120" cy="100" r="7" fill="#4ade80"/>
+  </svg>
+);
+const IllusLiver = () => (
+  <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
+    <circle cx="100" cy="100" r="90" fill="#fffbeb"/>
+    <path d="M55 80 Q50 112 65 136 Q80 159 112 156 Q147 151 151 121 Q155 91 136 76 Q116 60 90 65 Q64 68 55 80Z" fill="#fbbf24" opacity="0.35"/>
+    <path d="M55 80 Q50 112 65 136 Q80 159 112 156 Q147 151 151 121 Q155 91 136 76 Q116 60 90 65 Q64 68 55 80Z" stroke="#f59e0b" strokeWidth="2.5" fill="none"/>
+  </svg>
+);
+const IllusSkin = () => (
+  <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
+    <circle cx="100" cy="100" r="90" fill="#fef9f0"/>
+    <ellipse cx="100" cy="112" rx="54" ry="63" fill="#fde8d8"/>
+    <circle cx="79" cy="89" r="6" fill="#f87171" opacity="0.68"/>
+    <circle cx="116" cy="83" r="5" fill="#f87171" opacity="0.68"/>
+    <circle cx="119" cy="117" r="7" fill="#f87171" opacity="0.68"/>
+  </svg>
+);
+const IllusUrinary = () => (
+  <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
+    <circle cx="100" cy="100" r="90" fill="#eff6ff"/>
+    <path d="M80 68 Q60 80 62 106 Q64 132 80 142 L80 162 L120 162 L120 142 Q136 132 138 106 Q140 80 120 68 Z" fill="#93c5fd" opacity="0.7"/>
+    <ellipse cx="100" cy="151" rx="20" ry="10" fill="#60a5fa" opacity="0.4"/>
+  </svg>
+);
+const IllusEyes = () => (
+  <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
+    <circle cx="100" cy="100" r="90" fill="#eff6ff"/>
+    <path d="M30 100 Q100 50 170 100 Q100 150 30 100Z" fill="#bfdbfe" stroke="#3b82f6" strokeWidth="2"/>
+    <circle cx="100" cy="100" r="24" fill="#1d4ed8"/>
+    <circle cx="100" cy="100" r="14" fill="#0f172a"/>
+    <circle cx="108" cy="94" r="5" fill="#fff" opacity="0.8"/>
+  </svg>
+);
+const IllusAnalysis = () => (
+  <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
+    <circle cx="100" cy="100" r="90" fill="#f0fdfa"/>
+    <circle cx="100" cy="100" r="52" stroke="#99f6e4" strokeWidth="2.5" fill="none" strokeDasharray="8 4"/>
+    <circle cx="100" cy="100" r="36" stroke="#2dd4bf" strokeWidth="2.5" fill="none" strokeDasharray="5 3"/>
+    <circle cx="100" cy="100" r="20" fill="#0d9488"/>
+    <path d="M92 100 L98 106 L110 93" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
+    <circle cx="100" cy="48" r="7" fill="#0d9488"/>
+    <circle cx="100" cy="152" r="7" fill="#0d9488"/>
+    <circle cx="48" cy="100" r="7" fill="#0d9488"/>
+    <circle cx="152" cy="100" r="7" fill="#0d9488"/>
+  </svg>
+);
+const IllusDoctor = () => (
+  <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
+    <circle cx="100" cy="100" r="90" fill="#f0fdfa"/>
+    <ellipse cx="100" cy="158" rx="42" ry="28" fill="#0d9488"/>
+    <circle cx="100" cy="72" r="28" fill="#fde8d8"/>
+    <rect x="72" y="96" width="56" height="62" rx="20" fill="#0d9488"/>
+    <circle cx="88" cy="68" r="4" fill="#5b3a29"/>
+    <circle cx="112" cy="68" r="4" fill="#5b3a29"/>
+    <path d="M90 83 Q100 91 110 83" stroke="#5b3a29" strokeWidth="2" fill="none" strokeLinecap="round"/>
+    <rect x="91" y="116" width="18" height="4" rx="2" fill="#fff"/>
+    <rect x="98" y="109" width="4" height="18" rx="2" fill="#fff"/>
+    <ellipse cx="100" cy="44" rx="30" ry="20" fill="#1e293b"/>
+  </svg>
+);
+
+const CATEGORY_ILLUS = {
+  General: IllusGeneral, Respiratory: IllusRespiratory, Digestive: IllusDigestive,
+  Liver: IllusLiver, Skin: IllusSkin, Eyes: IllusEyes, Urinary: IllusUrinary,
+  Rectal: IllusDigestive, Neurological: IllusGeneral, Metabolic: IllusGeneral,
+  Infection: IllusDoctor, History: IllusDoctor,
+};
+
+function QuestionIllus({ question }) {
+  const imgPath = question ? SYMPTOM_IMAGES[question.id] : null;
+  const catPath = question ? getCategoryImage(question.category) : null;
+  const src = imgPath || catPath;
+
+  if (src) {
+    return (
+      <div className="q-illus">
+        <img src={src} alt={question?.category || "symptom"} style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }} />
+      </div>
+    );
+  }
+
+  const Comp = question ? (CATEGORY_ILLUS[question.category] || IllusDoctor) : IllusDoctor;
+  return <div className="q-illus"><Comp /></div>;
+}
+
+// ─────────────────────────────────────────────
+// ICONS
+// ─────────────────────────────────────────────
+function Icon({ name, size = 18, color = "currentColor", className = "" }) {
+  const s = { width: size, height: size, flexShrink: 0 };
+  const p = { viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", style: s, className };
+  switch (name) {
+    case "home":       return <svg {...p}><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>;
+    case "activity":   return <svg {...p}><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
+    case "clipboard":  return <svg {...p}><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/></svg>;
+    case "user":       return <svg {...p}><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>;
+    case "settings":   return <svg {...p}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 010 2.83 2 2 0 01-2.83 0l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 01-2.83-2.83l.06-.06A1.65 1.65 0 004.68 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 012.83-2.83l.06.06A1.65 1.65 0 009 4.68a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 012.83 2.83l-.06.06A1.65 1.65 0 0019.4 9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>;
+    case "heart":      return <svg {...p}><path d="M20.84 4.61a5.5 5.5 0 00-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 00-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 000-7.78z"/></svg>;
+    case "alert":      return <svg {...p}><path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>;
+    case "info":       return <svg {...p}><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>;
+    case "check":      return <svg {...p}><polyline points="20 6 9 17 4 12"/></svg>;
+    case "x":          return <svg {...p}><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
+    case "logout":     return <svg {...p}><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>;
+    case "chevR":      return <svg {...p}><polyline points="9 18 15 12 9 6"/></svg>;
+    case "chevL":      return <svg {...p}><polyline points="15 18 9 12 15 6"/></svg>;
+    case "edit":       return <svg {...p}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+    case "trash":      return <svg {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>;
+    case "search":     return <svg {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
+    case "shield":     return <svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>;
+    case "database":   return <svg {...p}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>;
+    case "eye":        return <svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
+    case "eyeOff":     return <svg {...p}><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>;
+    case "calendar":   return <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
+    default:           return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
+  }
+}
+
+// ─────────────────────────────────────────────
+// TOAST
+// ─────────────────────────────────────────────
+let _notifTimer;
+function Notif({ msg }) {
+  if (!msg) return null;
+  return <div className="notif">{msg}</div>;
+}
+
+// ─────────────────────────────────────────────
+// RECOMMENDATION BUBBLE
+// ─────────────────────────────────────────────
+function RecBubble({ icon, label, text, accent, bg }) {
+  if (!text) return null;
+  return (
+    <div className="rec-bubble" style={{ borderLeftColor: accent, background: bg || "#fff" }}>
+      <div className="rec-bubble-icon" style={{ background: `${accent}18` }}>
+        <Icon name={icon} size={16} color={accent} />
+      </div>
+      <div>
+        <div className="rec-bubble-label" style={{ color: accent }}>{label}</div>
+        <div className="rec-bubble-text">{text}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// MAIN APP
+// ─────────────────────────────────────────────
+export default function App() {
+  useEffect(() => { injectStyles(); }, []);
+
+  const [splash,     setSplash]     = useState(true);
+  const [splashFade, setSplashFade] = useState(false);
+  const [user,       setUser]       = useState(null);
+  const [page,       setPage]       = useState("home");
+  const [notif,      setNotif]      = useState("");
+  const [detailRec,  setDetailRec]  = useState(null);
+  const [assActive,  setAssActive]  = useState(false);
+  const [answers,    setAnswers]    = useState({});
+  const [asked,      setAsked]      = useState([]);
+  const [currentQ,   setCurrentQ]   = useState(null);
+  const [qIdx,       setQIdx]       = useState(0);
+  const [sessionId,  setSessionId]  = useState(null);
+  const [analyzing,  setAnalyzing]  = useState(false);
+  const [result,     setResult]     = useState(null);
+
+  const MAX_Q = 15;
+
+  const toast = useCallback((msg) => {
+    setNotif(msg);
+    clearTimeout(_notifTimer);
+    _notifTimer = setTimeout(() => setNotif(""), 2600);
+  }, []);
+
+  useEffect(() => {
+    const t1 = setTimeout(() => setSplashFade(true), 1900);
+    const t2 = setTimeout(() => {
+      setSplash(false);
+      const saved = Store.get("tc_user");
+      if (saved) { api.setToken(saved.token || null); setUser(saved); }
+    }, 2300);
+    return () => { clearTimeout(t1); clearTimeout(t2); };
+  }, []);
+
+  const login = (u) => {
+    Store.set("tc_user", u);
+    api.setToken(u.token || null);
+    setUser(u);
+    setPage("home");
+  };
+
+  const logout = () => {
+    Store.remove("tc_user");
+    api.setToken(null);
+    setUser(null);
+    setAssActive(false); setResult(null); setAnalyzing(false);
+    setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0); setSessionId(null);
+    setPage("home");
+    toast("Signed out successfully.");
+  };
+
+  const startAssessment = async () => {
+    setAnswers({}); setAsked([]); setQIdx(0);
+    setResult(null); setAnalyzing(false); setSessionId(null);
+    let firstQ = ALL_QUESTIONS[0];
+    let sid    = null;
+    try {
+      const data = await api.post("/symptoms/start", {});
+      sid    = data.session_id;
+      firstQ = data.first_question || ALL_QUESTIONS[0];
+      setSessionId(sid);
+    } catch { /* offline fallback */ }
+    setCurrentQ(firstQ);
+    setAssActive(true);
+    setPage("assessment");
+  };
+
+  const handleAnswer = async (val) => {
+    const newAnswers = { ...answers, [currentQ.id]: val };
+    const newAsked   = [...asked, currentQ.id];
+    setAnswers(newAnswers);
+    setAsked(newAsked);
+    if (newAsked.length >= MAX_Q) { finishAssessment(newAnswers); return; }
+    let next = null;
+    if (sessionId) {
+      try {
+        const res = await api.post(`/symptoms/next?session_id=${sessionId}`, { question_id: currentQ.id, answer: val });
+        if (res.completed) { finishAssessment(newAnswers); return; }
+        next = res.next_question;
+      } catch { next = getNextQuestionOffline(newAnswers, newAsked); }
+    } else {
+      next = getNextQuestionOffline(newAnswers, newAsked);
     }
+    if (!next) { finishAssessment(newAnswers); return; }
+    setCurrentQ(next);
+    setQIdx(qIdx + 1);
+  };
 
-
-@app.post("/api/v1/auth/login")
-@limiter.limit("100/hour")
-async def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
-    await _check_password_rate_limit(req.email)
-    user = db.query(UserModel).filter(UserModel.email == req.email).first()
-    if not user or not user.pw_hash or not verify_pw(req.password, user.pw_hash):
-        raise HTTPException(status_code=401, detail="Invalid email or password")
-    return {
-        "access_token": create_token(user.id),
-        "token_type":   "bearer",
-        "user":         {"id": user.id, "email": user.email, "name": user.name},
+  const finishAssessment = async (finalAnswers) => {
+    setAssActive(false);
+    setAnalyzing(true);
+    await new Promise((r) => setTimeout(r, 2400));
+    let pred = null;
+    if (sessionId) {
+      try { pred = await api.post(`/diagnosis/analyze?session_id=${sessionId}`, {}); } catch {}
     }
+    if (!pred) pred = predictOffline(finalAnswers);
+    setResult(pred);
+    setAnalyzing(false);
+    setPage("result");
+  };
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Assessment
-# ─────────────────────────────────────────────────────────────
+  const resetAssessment = () => {
+    setAssActive(false); setResult(null); setAnalyzing(false);
+    setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0); setSessionId(null);
+    setPage("home");
+  };
 
-@app.post("/api/v1/symptoms/start", status_code=201)
-@limiter.limit("5/second")
-async def start_assessment(
-    request: Request,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    sid     = str(uuid.uuid4())
-    session = SessionModel(
-        session_id=sid,
-        user_id=user_id,
-        answers=_dump_json({}),
-        asked_questions=_dump_json([]),
-    )
-    db.add(session)
-    db.commit()
-    # Cache session state in Redis to reduce DB round-trips
-    await cache_set(f"session:{sid}", _dump_json({"answers": {}, "asked": [], "completed": False}), ttl=3600)
-    return {
-        "session_id":      sid,
-        "first_question":  ALL_QUESTIONS[0],
-        "total_questions": 15,
+  if (splash) {
+    return (
+      <div className={`splash${splashFade ? " fading" : ""}`}>
+        <div className="splash-logo"><MedicalHeartSplash /></div>
+        <div className="splash-title">TropiCare</div>
+        <div className="splash-sub">Guided Clinical Assessment</div>
+        <div className="splash-dots">
+          <div className="splash-dot" /><div className="splash-dot" /><div className="splash-dot" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!user) return <AuthScreen onLogin={login} toast={toast} />;
+  if (analyzing) return <AnalyzingScreen />;
+  if (page === "result" && result) return <ResultScreen result={result} onReset={resetAssessment} onNewCheck={startAssessment} />;
+  if (assActive && currentQ) return <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />;
+
+  const navItems = [
+    { id: "home",       label: "Home",    icon: "home" },
+    { id: "assessment", label: "Check",   icon: "activity" },
+    { id: "records",    label: "Records", icon: "clipboard" },
+    { id: "profile",    label: "Profile", icon: "user" },
+  ];
+
+  const renderPage = () => {
+    switch (page) {
+      case "home":       return <HomeScreen user={user} onStart={startAssessment} onNav={setPage} />;
+      case "assessment": return <AssessmentLanding onStart={startAssessment} />;
+      case "records":    return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
+      case "profile":    return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
+      case "settings":   return <SettingsScreen onBack={() => setPage("profile")} toast={toast} />;
+      case "privacy":    return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} />;
+      case "about":      return <AboutScreen onBack={() => setPage("profile")} />;
+      case "admin":      return <AdminScreen onBack={() => setPage("profile")} toast={toast} />;
+      default:           return <HomeScreen user={user} onStart={startAssessment} onNav={setPage} />;
     }
+  };
 
+  return (
+    <div className="shell">
+      <Notif msg={notif} />
+      <aside className="sidebar">
+        <div className="sidebar-brand">
+          <div className="brand-mark"><MedicalHeartMark size={20} color="#fff" /></div>
+          <div>
+            <div className="brand-name">TropiCare</div>
+            <div className="brand-sub">Symptom Checker</div>
+          </div>
+        </div>
+        <nav className="sidebar-nav">
+          {[...navItems, { id: "settings", label: "Settings", icon: "settings" }].map((n) => (
+            <button key={n.id} className={`nav-item${page === n.id ? " active" : ""}`} onClick={() => setPage(n.id)}>
+              <Icon name={n.icon} size={17} />
+              {n.label}
+            </button>
+          ))}
+        </nav>
+        <div className="sidebar-foot" style={{ marginTop: "auto" }}>
+          <button className="nav-item" style={{ color: "#ef4444", width: "100%" }} onClick={logout}>
+            <Icon name="logout" size={16} color="#ef4444" />
+            Sign Out
+          </button>
+        </div>
+      </aside>
+      <main className="main">
+        <div className="page">{renderPage()}</div>
+      </main>
+      <nav className="bottom-nav">
+        {navItems.map((n) => (
+          <button key={n.id} className={`bnav-item${page === n.id ? " active" : ""}`}
+            onClick={() => { setPage(n.id); if (n.id !== "assessment") setAssActive(false); }}>
+            <Icon name={n.icon} size={20} />
+            <span>{n.label}</span>
+          </button>
+        ))}
+      </nav>
+    </div>
+  );
+}
 
-@app.post("/api/v1/symptoms/next")
-@limiter.limit("5/second")
-async def next_question(
-    request: Request,
-    session_id: str,
-    req: AnswerRequest,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    s = db.query(SessionModel).filter(
-        SessionModel.session_id == session_id,
-        SessionModel.user_id == user_id,
-    ).first()
-    if not s:
-        raise HTTPException(status_code=404, detail="Session not found")
+// ─────────────────────────────────────────────
+// AUTH SCREEN
+// ─────────────────────────────────────────────
+function AuthScreen({ onLogin, toast }) {
+  const [mode,    setMode]    = useState("login");
+  const [name,    setName]    = useState("");
+  const [email,   setEmail]   = useState("");
+  const [pw,      setPw]      = useState("");
+  const [age,     setAge]     = useState("");
+  const [gender,  setGender]  = useState("");
+  const [showPw,  setShowPw]  = useState(false);
+  const [loading, setLoading] = useState(false);
 
-    answers = _load_json(s.answers, {})
-    asked   = _load_json(s.asked_questions, [])
-
-    if req.question_id not in Q_INDEX:
-        raise HTTPException(status_code=400, detail=f"Unknown question_id: {req.question_id}")
-
-    answers[req.question_id] = req.answer
-    if req.question_id not in asked:
-        asked.append(req.question_id)
-
-    s.answers         = _dump_json(answers)
-    s.asked_questions = _dump_json(asked)
-    db.commit()
-
-    # Update cache
-    await cache_set(
-        f"session:{session_id}",
-        _dump_json({"answers": answers, "asked": asked, "completed": s.completed}),
-        ttl=3600,
-    )
-
-    if len(asked) >= 15:
-        s.completed = True
-        db.commit()
-        return {"completed": True}
-
-    next_q = get_next_question(answers, asked)
-    if not next_q:
-        s.completed = True
-        db.commit()
-        return {"completed": True}
-
-    return {"completed": False, "next_question": next_q}
-
-
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Diagnosis (with idempotency key support)
-# ─────────────────────────────────────────────────────────────
-
-@app.post("/api/v1/diagnosis/analyze")
-@limiter.limit("5/second")
-async def analyze(
-    request: Request,
-    session_id: str,
-    background_tasks: BackgroundTasks,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    # Idempotency key
-    idem_key = request.headers.get("Idempotency-Key")
-    if idem_key:
-        cached_resp = await cache_get(f"idem:{idem_key}", key_type="idempotency")
-        if cached_resp:
-            return JSONResponse(content=json.loads(cached_resp))
-
-    s = db.query(SessionModel).filter(
-        SessionModel.session_id == session_id,
-        SessionModel.user_id == user_id,
-    ).first()
-    if not s:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    answers     = _load_json(s.answers, {})
-    pred        = predict_with_ml(answers)
-    active_syms = [k for k, v in answers.items() if v is True]
-
-    ai_result: Optional[dict] = None
-    try:
-        ai_result = await asyncio.wait_for(
-            call_openrouter(pred["disease"], pred["risk"], active_syms, pred["confidence"]),
-            timeout=12.0,
-        )
-    except asyncio.TimeoutError:
-        logger.warning({"event": "openrouter_timeout", "context": "analyze"})
-    except Exception as e:
-        logger.warning({"event": "openrouter_failed", "error": str(e)})
-
-    rec = build_recommendation(pred["disease"], pred["risk"], ai_result)
-
-    diag = DiagnosisModel(
-        user_id         = user_id,
-        session_id      = session_id,
-        disease         = pred["disease"],
-        risk            = pred["risk"],
-        confidence      = pred["confidence"],
-        answers         = _dump_json(answers),
-        active_symptoms = _dump_json(active_syms),
-        rec_home_care   = rec["home_care"],
-        rec_test        = rec["test"],
-        rec_doctor      = rec["doctor"],
-        rec_safety      = rec.get("safety", ""),
-        ai_explanation  = rec.get("explanation", ""),
-        ml_scores       = _dump_json(pred.get("all_scores", {})),
-    )
-    db.add(diag)
-    db.commit()
-    db.refresh(diag)
-
-    # Invalidate user profile cache (diagnosis count changed)
-    await cache_delete(f"profile:{user_id}")
-
-    response_body = {
-        "id":          diag.id,
-        "disease":     pred["disease"],
-        "confidence":  pred["confidence"],
-        "risk":        pred["risk"],
-        "explanation": rec.get("explanation", ""),
-        "all_scores":  pred.get("all_scores", {}),
-        "recommendation": {
-            "home_care": rec["home_care"],
-            "test":      rec["test"],
-            "doctor":    rec["doctor"],
-            "safety":    rec.get("safety", ""),
-        },
-        "method":  pred["method"],
-        "ai_used": ai_result is not None,
+  const submit = async () => {
+    if (!email.trim() || !pw.trim()) { toast("Please fill in all required fields."); return; }
+    if (mode === "register" && !name.trim()) { toast("Please enter your full name."); return; }
+    setLoading(true);
+    try {
+      let data;
+      if (mode === "register") {
+        data = await api.post("/auth/register", { email: email.trim(), password: pw, name: name.trim(), age, gender });
+      } else {
+        data = await api.post("/auth/login", { email: email.trim(), password: pw });
+      }
+      onLogin({ ...data.user, token: data.access_token });
+    } catch (e) {
+      toast(e.message || "Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
     }
+  };
 
-    # Store idempotency response (24h)
-    if idem_key:
-        await cache_set(f"idem:{idem_key}", json.dumps(response_body), ttl=86400)
+  return (
+    <div className="auth-wrap">
+      <div className="auth-box">
+        <div className="auth-logo">
+          <div className="auth-icon"><MedicalHeartLarge size={34} color="#fff" /></div>
+          <div className="auth-title">TropiCare</div>
+          <div className="auth-hint">Guided symptom assessment for tropical diseases</div>
+        </div>
+        <div className="card card-p" style={{ boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
+          <div className="tabs mb-3">
+            {["login","register"].map((m) => (
+              <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => setMode(m)}>
+                {m === "login" ? "Sign In" : "Create Account"}
+              </button>
+            ))}
+          </div>
+          {mode === "register" && (
+            <div className="field">
+              <label className="field-label">Full Name</label>
+              <input className="field-input" placeholder="e.g. Kofi Mensah" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+          )}
+          <div className="field">
+            <label className="field-label">Email Address</label>
+            <input className="field-input" type="email" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+          </div>
+          {mode === "register" && (
+            <div className="grid-2">
+              <div className="field">
+                <label className="field-label">Age</label>
+                <input className="field-input" type="number" placeholder="25" value={age} onChange={(e) => setAge(e.target.value)} />
+              </div>
+              <div className="field">
+                <label className="field-label">Gender</label>
+                <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
+                  <option value="">Select</option>
+                  <option>Male</option><option>Female</option><option>Other</option>
+                </select>
+              </div>
+            </div>
+          )}
+          <div className="field">
+            <label className="field-label">Password</label>
+            <div className="pw-wrap">
+              <input className="field-input" type={showPw ? "text" : "password"} placeholder="Enter password"
+                value={pw} onChange={(e) => setPw(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submit()} style={{ paddingRight: 46 }} />
+              <button className="pw-toggle" type="button" onClick={() => setShowPw(!showPw)}>
+                <Icon name={showPw ? "eyeOff" : "eye"} size={17} />
+              </button>
+            </div>
+          </div>
+          <button className="btn btn-primary btn-full btn-lg mt-2" onClick={submit} disabled={loading}>
+            {loading ? "Please wait..." : mode === "login" ? "Sign In" : "Create Account"}
+          </button>
+        </div>
+        <div className="auth-foot">TropiCare · Symptom Checker for Tropical Diseases</div>
+      </div>
+    </div>
+  );
+}
 
-    return response_body
+// ─────────────────────────────────────────────
+// HOME SCREEN
+// ─────────────────────────────────────────────
+function HomeScreen({ user, onStart, onNav }) {
+  const [records, setRecords] = useState([]);
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Patient History (cursor-based pagination)
-# ─────────────────────────────────────────────────────────────
+  useEffect(() => {
+    api.get("/patient/history").then((d) => setRecords(d.slice(0, 3))).catch(() => {});
+  }, []);
 
-@app.get("/api/v1/patient/history")
-async def get_history(
-    request: Request,
-    cursor: Optional[int] = None,   # cursor = last seen diagnosis id
-    limit: int = 20,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    """
-    Cursor-based pagination. Pass ?cursor=<id>&limit=20.
-    Falls back to returning up to 100 records when no cursor provided
-    (backward compatible — original frontend used no cursor param).
-    """
-    limit = min(limit, 100)
-    query = (
-        db.query(DiagnosisModel)
-        .filter(DiagnosisModel.user_id == user_id)
-    )
-    if cursor is not None:
-        query = query.filter(DiagnosisModel.id < cursor)
+  const stats = [
+    { label: "Assessments", val: records.length,                                        icon: "activity", color: "#0d9488" },
+    { label: "High Risk",   val: records.filter((r) => r.risk === "High").length,       icon: "alert",    color: "#ef4444" },
+    { label: "Last Check",  val: records[0] ? fmtDate(records[0].created_at) : "None", icon: "calendar", color: "#3b82f6" },
+  ];
 
-    rows = query.order_by(DiagnosisModel.id.desc()).limit(limit).all()
+  return (
+    <div>
+      <div className="home-header">
+        <div>
+          <div className="greeting">Good day,</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700 }}>
+            {(user?.name || "Patient").split(" ")[0]}
+          </div>
+        </div>
+        <div className="avatar">{(user?.name || "P")[0].toUpperCase()}</div>
+      </div>
 
-    # Eager load user in one query to avoid N+1
-    user = db.query(UserModel).filter(UserModel.id == user_id).first()
-    patient_name = user.name if user else "Unknown"
+      <div className="hero-card">
+        <div className="hero-bg-icon"><Icon name="heart" size={110} color="#fff" /></div>
+        <div className="hero-eyebrow">Guided Clinical Assessment</div>
+        <div className="hero-headline">Check your symptoms in under 2 minutes</div>
+        <button className="hero-btn" onClick={onStart}>
+          Start Assessment <Icon name="chevR" size={14} color="var(--teal-d)" />
+        </button>
+      </div>
 
-    return [
-        {
-            "id":           d.id,
-            "disease":      d.disease,
-            "risk":         d.risk,
-            "confidence":   d.confidence,
-            "created_at":   d.created_at.isoformat(),
-            "patient_name": patient_name,
-            "recommendation": {
-                "home_care": d.rec_home_care,
-                "test":      d.rec_test,
-                "doctor":    d.rec_doctor,
-                "safety":    d.rec_safety,
-            },
-            "explanation":     d.ai_explanation,
-            "active_symptoms": _load_json(d.active_symptoms, []),
-        }
-        for d in rows
-    ]
+      <div className="stats-row">
+        {stats.map((s) => (
+          <div key={s.label} className="stat-card">
+            <div className="stat-icon" style={{ background: `${s.color}18` }}>
+              <Icon name={s.icon} size={16} color={s.color} />
+            </div>
+            <div className="stat-val t-mono">{s.val}</div>
+            <div className="stat-lbl">{s.label}</div>
+          </div>
+        ))}
+      </div>
 
+      {records.length > 0 && (
+        <div className="section">
+          <div className="section-ttl">Recent Assessments</div>
+          <div className="rec-list">
+            {records.map((r) => (
+              <div key={r.id} className="rec-card">
+                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk]}18` }}>
+                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk]} />
+                </div>
+                <div className="rec-info">
+                  <div className="rec-name">{r.disease}</div>
+                  <div className="rec-meta">{fmtDate(r.created_at)}</div>
+                </div>
+                <span className={`badge badge-${r.risk}`}>{r.risk}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
-@app.get("/api/v1/patient/history/{diag_id}")
-async def get_diagnosis(
-    diag_id: int,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    d = db.query(DiagnosisModel).filter(
-        DiagnosisModel.id == diag_id,
-        DiagnosisModel.user_id == user_id,
-    ).first()
-    if not d:
-        raise HTTPException(status_code=404, detail="Not found")
+      <div className="section">
+        <div className="section-ttl">Disease Coverage</div>
+        <div className="card card-p">
+          <div className="disease-grid">
+            {Object.entries(RISK_MAP).map(([d, r]) => (
+              <span key={d} className={`badge badge-${r}`}>{d}</span>
+            ))}
+          </div>
+          <div className="t-subtitle mt-3" style={{ fontSize: 12 }}>22 diseases · 3 risk levels</div>
+        </div>
+      </div>
+      <div style={{ height: 24 }} />
+    </div>
+  );
+}
 
-    user = db.query(UserModel).filter(UserModel.id == user_id).first()
-    return {
-        "id":           d.id,
-        "disease":      d.disease,
-        "risk":         d.risk,
-        "confidence":   d.confidence,
-        "created_at":   d.created_at.isoformat(),
-        "patient_name": user.name if user else "Unknown",
-        "answers":      _load_json(d.answers, {}),
-        "active_symptoms": _load_json(d.active_symptoms, []),
-        "recommendation": {
-            "home_care": d.rec_home_care,
-            "test":      d.rec_test,
-            "doctor":    d.rec_doctor,
-            "safety":    d.rec_safety,
-        },
-        "explanation": d.ai_explanation,
-        "ml_scores":   _load_json(d.ml_scores, {}),
+// ─────────────────────────────────────────────
+// ASSESSMENT LANDING
+// ─────────────────────────────────────────────
+function AssessmentLanding({ onStart }) {
+  const features = [
+    { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "#0d9488", bg: "#f0fdfa" },
+    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "#3b82f6", bg: "#eff6ff" },
+    { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",           color: "#8b5cf6", bg: "#f5f3ff" },
+  ];
+
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
+      <div className="al-hero">
+        <div className="al-hero-text">
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--teal)", marginBottom: 6 }}>
+            Symptom Assessment
+          </div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, color: "var(--ink)", lineHeight: 1.3, marginBottom: 8 }}>
+            Talk to our AI clinician
+          </div>
+          <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
+            Answer a short set of questions and receive a detailed assessment with personalised recommendations.
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {["Free", "Under 2 min", "22 diseases"].map((t) => (
+              <span key={t} className="badge badge-teal">
+                <Icon name="check" size={10} color="var(--teal)" />&nbsp;{t}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="al-hero-illus"><HealthProfessionalIllus width={120} height={140} /></div>
+      </div>
+
+      <div className="page-body" style={{ flex: 1 }}>
+        <div className="card card-p mb-4">
+          <div className="section-ttl mb-1">How it works</div>
+          <div className="feat-list">
+            {features.map((f) => (
+              <div key={f.title} className="feat-row">
+                <div className="feat-icon" style={{ background: f.bg }}>
+                  <Icon name={f.icon} size={16} color={f.color} />
+                </div>
+                <div>
+                  <div className="feat-title">{f.title}</div>
+                  <div className="feat-desc">{f.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="t-subtitle mt-3 italic" style={{ fontSize: 12 }}>
+            This tool provides informational guidance only and does not replace a clinical diagnosis.
+          </div>
+        </div>
+        <button className="btn btn-primary btn-full btn-lg" onClick={onStart}>
+          <Icon name="activity" size={18} color="#fff" />
+          Begin Assessment
+          <Icon name="chevR" size={16} color="rgba(255,255,255,0.7)" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// QUESTION SCREEN
+// ─────────────────────────────────────────────
+function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
+  const [animKey, setAnimKey] = useState(0);
+  const progress = (qIdx / total) * 100;
+
+  const answer = (val) => { setAnimKey((k) => k + 1); onAnswer(val); };
+
+  return (
+    <div className="q-screen">
+      <div className="q-topbar">
+        <button className="q-close" onClick={onQuit}><Icon name="x" size={16} color="var(--muted)" /></button>
+        <div style={{ flex: 1 }}>
+          <div className="prog-track"><div className="prog-fill" style={{ width: `${progress}%` }} /></div>
+        </div>
+        <div className="q-counter">{qIdx + 1}/{total}</div>
+      </div>
+      <div key={animKey} className="q-body q-anim">
+        <div className="q-cat-pill">{question.category}</div>
+        <QuestionIllus question={question} />
+        <div className="q-text">{question.question}</div>
+        <div className="q-answers">
+          <button className="ans-btn yes" onClick={() => answer(true)}>
+            <div className="ans-btn-icon ans-yes-icon"><Icon name="check" size={14} color="var(--teal-d)" /></div>
+            Yes
+          </button>
+          <button className="ans-btn no" onClick={() => answer(false)}>
+            <div className="ans-btn-icon ans-no-icon"><Icon name="x" size={14} color="var(--muted)" /></div>
+            No
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// ANALYZING SCREEN
+// ─────────────────────────────────────────────
+function AnalyzingScreen() {
+  const [step, setStep] = useState(0);
+  const steps = ["Processing your responses...","Running diagnostic models...","Calculating risk level...","Preparing your recommendations..."];
+
+  useEffect(() => {
+    const t = setInterval(() => setStep((s) => Math.min(s + 1, steps.length - 1)), 680);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div className="analyzing">
+      <div className="spin-ring"><IllusAnalysis /></div>
+      <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, textAlign: "center" }}>Analysing Results</div>
+      <div className="t-subtitle mt-2 text-c" style={{ minHeight: 22 }}>{steps[step]}</div>
+      <div className="loading-dots"><div className="ldot" /><div className="ldot" /><div className="ldot" /></div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// RESULT SCREEN
+// ─────────────────────────────────────────────
+function ResultScreen({ result, onReset, onNewCheck }) {
+  const risk   = result.risk || "Medium";
+  const color  = RISK_COLOR[risk];
+  const bg     = RISK_BG[risk];
+  const rec    = result.recommendation || {};
+  const scores = result.all_scores
+    ? Object.entries(result.all_scores).filter(([d]) => d !== result.disease).slice(0, 4)
+    : [];
+
+  return (
+    <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+      <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Your Result</div>
+        <button onClick={onReset} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="x" size={16} color="var(--muted)" />
+        </button>
+      </div>
+
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "24px 16px 64px" }}>
+        <div className="text-c mb-4">
+          <div className={`result-ring result-ring-${risk}`}>
+            <Icon name={risk === "High" ? "alert" : risk === "Medium" ? "info" : "check"} size={44} color={color} />
+          </div>
+          <span className={`badge badge-${risk}`} style={{ fontSize: 12, padding: "4px 14px" }}>{risk} Risk</span>
+        </div>
+
+        <div className="card card-p mb-3 text-c">
+          <div className="t-label mb-2">Predicted Condition</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12 }}>{result.disease}</div>
+          <div style={{ height: 6, background: "var(--border-l)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
+            <div style={{ height: "100%", width: `${Math.round(result.confidence * 100)}%`, background: `linear-gradient(90deg, ${color}80, ${color})`, borderRadius: 99, transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)" }} />
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color }}>{Math.round(result.confidence * 100)}% match</div>
+          {result.explanation && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)", fontSize: 13, color: "var(--muted)", fontStyle: "italic", lineHeight: 1.6 }}>
+              {result.explanation}
+            </div>
+          )}
+        </div>
+
+        <div className="section-ttl mb-2">What to Do</div>
+        <div className="rec-bubbles mb-4">
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16a34a" bg="#f0fdf4" />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#2563eb" bg="#eff6ff" />
+          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}   bg={bg} />
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />}
+        </div>
+
+        {scores.length > 0 && (
+          <div className="card card-p mb-4">
+            <div className="section-ttl mb-3">Other Possibilities</div>
+            {scores.map(([d, conf]) => (
+              <div key={d} className="score-bar-row">
+                <span className="score-bar-name">{d}</span>
+                <div className="score-bar-track">
+                  <div className="score-bar-fill" style={{ width: `${Math.round(conf * 100)}%` }} />
+                </div>
+                <span className="score-bar-pct">{Math.round(conf * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="disclaimer mb-4">
+          <Icon name="alert" size={14} color="var(--amber)" />
+          <p>This result is for informational purposes only. It does not replace a clinical diagnosis. Consult a qualified healthcare professional before making any medical decisions.</p>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Start New Assessment</button>
+          <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// RECORDS SCREEN
+// ─────────────────────────────────────────────
+function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
+  const [records, setRecords] = useState([]);
+  const [search,  setSearch]  = useState("");
+  const [filter,  setFilter]  = useState("All");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => { load(); }, []);
+
+  const load = async () => {
+    setLoading(true);
+    try { setRecords(await api.get("/patient/history")); }
+    catch { setRecords([]); }
+    finally { setLoading(false); }
+  };
+
+  if (detail) return <RecordDetail record={detail} onBack={onClearDetail} />;
+
+  const filtered = records.filter((r) => {
+    const ms = (r.disease || "").toLowerCase().includes(search.toLowerCase())
+            || (r.patient_name || "").toLowerCase().includes(search.toLowerCase());
+    const mf = filter === "All" || r.risk === filter;
+    return ms && mf;
+  });
+
+  return (
+    <div>
+      <div className="page-head">
+        <div className="t-display">Patient Records</div>
+        <div className="t-subtitle mt-1">{records.length} total assessment{records.length !== 1 ? "s" : ""}</div>
+      </div>
+      <div className="page-body">
+        <div className="search-wrap">
+          <span className="search-icon"><Icon name="search" size={15} /></span>
+          <input className="search-input" placeholder="Search records..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <div className="chip-row">
+          {["All","High","Medium","Low"].map((f) => (
+            <button key={f} className={`chip${filter === f ? " on" : ""}`} onClick={() => setFilter(f)}>{f}</button>
+          ))}
+        </div>
+        {loading ? (
+          <div className="empty-state"><div className="t-subtitle">Loading records...</div></div>
+        ) : filtered.length === 0 ? (
+          <div className="empty-state">
+            <div style={{ width: 80, height: 80 }}><IllusDoctor /></div>
+            <div className="t-title">No records found</div>
+            <div className="t-subtitle">Complete an assessment to see your results here.</div>
+          </div>
+        ) : (
+          <div className="rec-list">
+            {filtered.map((r) => (
+              <div key={r.id} className="rec-card" onClick={() => onDetail(r)}>
+                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk]}18` }}>
+                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk]} />
+                </div>
+                <div className="rec-info">
+                  <div className="rec-name">{r.disease}</div>
+                  <div className="rec-meta">{r.patient_name} · {fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}%</div>
+                </div>
+                <span className={`badge badge-${r.risk}`}>{r.risk}</span>
+                <Icon name="chevR" size={14} color="var(--muted-l)" />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RecordDetail({ record, onBack }) {
+  const color = RISK_COLOR[record.risk] || "#0d9488";
+  const bg    = RISK_BG[record.risk]   || "#f0fdfa";
+  const rec   = record.recommendation  || {};
+  const syms  = (record.active_symptoms || []).map((s) => s.replace(/_/g, " "));
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Assessment Detail</div>
+      </div>
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
+        <div className="card card-p text-c mb-3">
+          <div className={`result-ring result-ring-${record.risk}`} style={{ width: 90, height: 90 }}>
+            <Icon name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"} size={36} color={color} />
+          </div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px" }}>{record.disease}</div>
+          <span className={`badge badge-${record.risk}`}>{record.risk} Risk</span>
+          <div className="t-subtitle mt-2" style={{ fontSize: 12 }}>
+            {record.patient_name} · {new Date(record.created_at).toLocaleString("en-GB")}
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color, marginTop: 6 }}>
+            {Math.round((record.confidence || 0) * 100)}% match
+          </div>
+          {record.explanation && (
+            <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>{record.explanation}</div>
+          )}
+        </div>
+        <div className="section-ttl mb-2">Recommendations</div>
+        <div className="rec-bubbles mb-4">
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16a34a" bg="#f0fdf4" />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#2563eb" bg="#eff6ff" />
+          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}   bg={bg} />
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />}
+        </div>
+        {syms.length > 0 && (
+          <div className="card card-p mb-4">
+            <div className="section-ttl mb-2">Reported Symptoms ({syms.length})</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {syms.map((s) => (
+                <span key={s} style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal)" }}>
+                  {s}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// PROFILE SCREEN
+// ─────────────────────────────────────────────
+function ProfileScreen({ user, onLogout, onNav, toast }) {
+  const [editing, setEditing] = useState(false);
+  const [name,    setName]    = useState(user?.name   || "");
+  const [age,     setAge]     = useState(user?.age    || "");
+  const [gender,  setGender]  = useState(user?.gender || "");
+  const [profile, setProfile] = useState({});
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    api.get("/user/profile").then(setProfile).catch(() => setProfile(user || {}));
+  }, []);
+
+  const saveProfile = async () => {
+    setLoading(true);
+    try {
+      const data = await api.put("/user/profile", { name, age, gender });
+      setProfile((prev) => ({ ...prev, ...data }));
+      Store.set("tc_user", { ...user, name, age, gender });
+      toast("Profile updated.");
+      setEditing(false);
+    } catch {
+      toast("Could not save. Check your connection.");
+    } finally {
+      setLoading(false);
     }
+  };
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — User Profile (with Redis cache)
-# ─────────────────────────────────────────────────────────────
+  const cancelEdit = () => {
+    setName(user?.name || "");
+    setAge(user?.age   || "");
+    setGender(user?.gender || "");
+    setEditing(false);
+  };
 
-@app.get("/api/v1/user/profile")
-async def get_profile(
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    cache_key = f"profile:{user_id}"
-    cached = await cache_get(cache_key, key_type="profile")
-    if cached:
-        return json.loads(cached)
+  const p = { ...user, ...profile };
 
-    u = db.query(UserModel).filter(UserModel.id == user_id).first()
-    if not u:
-        raise HTTPException(status_code=404, detail="User not found")
-    count = db.query(DiagnosisModel).filter(DiagnosisModel.user_id == user_id).count()
-    high  = db.query(DiagnosisModel).filter(
-        DiagnosisModel.user_id == user_id,
-        DiagnosisModel.risk == "High",
-    ).count()
-    result = {
-        "id":               u.id,
-        "email":            u.email,
-        "name":             u.name,
-        "age":              u.age,
-        "gender":           u.gender,
-        "joined_at":        u.created_at.isoformat(),
-        "assessment_count": count,
-        "high_risk_count":  high,
+  const menuItems = [
+    { label: "Settings",           icon: "settings", action: () => onNav("settings") },
+    { label: "Privacy & Security", icon: "shield",   action: () => onNav("privacy")  },
+    { label: "About TropiCare",    icon: "info",     action: () => onNav("about")    },
+    { label: "Database",           icon: "database", action: () => onNav("admin")    },
+  ];
+
+  return (
+    <div>
+      <div className="page-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div className="t-display">Profile</div>
+        {!editing && (
+          <button className="btn btn-secondary btn-sm" onClick={() => setEditing(true)}>
+            <Icon name="edit" size={13} /> Edit
+          </button>
+        )}
+      </div>
+
+      <div className="page-body">
+        {/* Identity card — hidden while editing */}
+        {!editing && (
+          <div className="card card-p text-c mb-3">
+            <div className="avatar avatar-lg mx-auto mb-3">{(p.name || "P")[0].toUpperCase()}</div>
+            <div className="t-title">{p.name}</div>
+            <div className="t-subtitle mt-1">{p.email}</div>
+            {(p.age || p.gender) && (
+              <div className="t-subtitle">{[p.age && `${p.age} yrs`, p.gender].filter(Boolean).join(" · ")}</div>
+            )}
+            <div className="mt-2">
+              <span className="badge badge-teal">
+                Member since {new Date(p.joined_at || Date.now()).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Edit panel — only visible while editing */}
+        {editing && (
+          <div className="edit-panel mb-3">
+            <div className="edit-panel-title">Edit Profile</div>
+            <div className="field">
+              <label className="field-label">Full Name</label>
+              <input className="field-input" value={name} onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="grid-2">
+              <div className="field">
+                <label className="field-label">Age</label>
+                <input className="field-input" type="number" value={age} onChange={(e) => setAge(e.target.value)} />
+              </div>
+              <div className="field">
+                <label className="field-label">Gender</label>
+                <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
+                  <option value="">Select</option>
+                  <option>Male</option><option>Female</option><option>Other</option>
+                </select>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-primary" style={{ flex: 1 }} onClick={saveProfile} disabled={loading}>
+                {loading ? "Saving..." : "Save Changes"}
+              </button>
+              <button className="btn btn-secondary" onClick={cancelEdit}>Cancel</button>
+            </div>
+          </div>
+        )}
+
+        {/* Stats */}
+        <div className="profile-stat-grid">
+          <div className="ps-card">
+            <div className="ps-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
+            <div className="ps-lbl">Assessments</div>
+          </div>
+          <div className="ps-card">
+            <div className="ps-val" style={{ color: "#ef4444" }}>{p.high_risk_count || 0}</div>
+            <div className="ps-lbl">High Risk</div>
+          </div>
+        </div>
+
+        {/* Menu */}
+        <div className="card card-p mb-3">
+          <div className="menu-list">
+            {menuItems.map((item) => (
+              <div key={item.label} className="menu-item" onClick={item.action}>
+                <div className="menu-ico"><Icon name={item.icon} size={16} color="var(--muted)" /></div>
+                <span style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>{item.label}</span>
+                <Icon name="chevR" size={14} color="var(--muted-l)" />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <button className="btn btn-danger btn-full" onClick={onLogout}>
+          <Icon name="logout" size={15} color="#fff" /> Sign Out
+        </button>
+
+        <div className="text-c mt-4" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.7 }}>
+          TropiCare v1.0 · Symptom Checker for Tropical Diseases
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// PRIVACY & SECURITY SCREEN
+// ─────────────────────────────────────────────
+function PrivacySecurityScreen({ onBack, toast, user }) {
+  const [currentPw,     setCurrentPw]     = useState("");
+  const [newPw,         setNewPw]         = useState("");
+  const [confirmPw,     setConfirmPw]     = useState("");
+  const [showCur,       setShowCur]       = useState(false);
+  const [showNew,       setShowNew]       = useState(false);
+  const [showCon,       setShowCon]       = useState(false);
+  const [pwLoading,     setPwLoading]     = useState(false);
+  const [pwExpanded,    setPwExpanded]    = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
+
+  const changePassword = async () => {
+    if (!currentPw || !newPw || !confirmPw) { toast("Please fill in all password fields."); return; }
+    if (newPw.length < 8) { toast("New password must be at least 8 characters."); return; }
+    if (newPw !== confirmPw) { toast("New passwords do not match."); return; }
+    if (currentPw === newPw) { toast("New password must be different from your current one."); return; }
+    setPwLoading(true);
+    try {
+      await api.put("/user/change-password", { current_password: currentPw, new_password: newPw });
+      toast("Password changed successfully.");
+      setCurrentPw(""); setNewPw(""); setConfirmPw(""); setPwExpanded(false);
+    } catch (e) {
+      toast(e.message || "Could not change password. Check your current password.");
+    } finally {
+      setPwLoading(false);
     }
-    await cache_set(cache_key, json.dumps(result), ttl=300)  # 5-min TTL
-    return result
+  };
 
-
-@app.put("/api/v1/user/profile")
-async def update_profile(
-    req: ProfileUpdate,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    u = db.query(UserModel).filter(UserModel.id == user_id).first()
-    if not u:
-        raise HTTPException(status_code=404, detail="User not found")
-    if req.name   is not None: u.name   = _sanitize(req.name)
-    if req.age    is not None: u.age    = req.age
-    if req.gender is not None: u.gender = req.gender
-    db.commit()
-    await cache_delete(f"profile:{user_id}")
-    return {"id": u.id, "name": u.name, "age": u.age, "gender": u.gender}
-
-
-@app.put("/api/v1/user/change-password")
-async def change_password(
-    req: ChangePasswordRequest,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    u = db.query(UserModel).filter(UserModel.id == user_id).first()
-    if not u:
-        raise HTTPException(status_code=404, detail="User not found")
-    if not u.pw_hash or not verify_pw(req.current_password, u.pw_hash):
-        raise HTTPException(status_code=401, detail="Current password is incorrect")
-    if len(req.new_password) < 8:
-        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
-    u.pw_hash = hash_pw(req.new_password)
-    db.commit()
-    return {"message": "Password updated successfully"}
-
-
-@app.delete("/api/v1/user/account")
-async def delete_account(
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    db.query(DiagnosisModel).filter(DiagnosisModel.user_id == user_id).delete()
-    db.query(SessionModel).filter(SessionModel.user_id == user_id).delete()
-    db.query(UserModel).filter(UserModel.id == user_id).delete()
-    db.commit()
-    await cache_delete(f"profile:{user_id}")
-    return {"message": "Account deleted"}
-
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Admin (with Redis cache for stats)
-# ─────────────────────────────────────────────────────────────
-
-@app.get("/api/v1/admin/stats")
-async def admin_stats(db: Session = Depends(get_db)):
-    cache_key = "admin:stats"
-    cached = await cache_get(cache_key, key_type="admin_stats")
-    if cached:
-        return json.loads(cached)
-    result = {
-        "total_users":     db.query(UserModel).count(),
-        "total_diagnoses": db.query(DiagnosisModel).count(),
-        "high_risk":       db.query(DiagnosisModel).filter(DiagnosisModel.risk == "High").count(),
-        "medium_risk":     db.query(DiagnosisModel).filter(DiagnosisModel.risk == "Medium").count(),
-        "low_risk":        db.query(DiagnosisModel).filter(DiagnosisModel.risk == "Low").count(),
+  const deleteAccount = async () => {
+    if (!deleteConfirm) { setDeleteConfirm(true); setTimeout(() => setDeleteConfirm(false), 6000); return; }
+    setDeleteLoading(true);
+    try {
+      await api.delete("/user/account");
+      Store.remove("tc_user");
+      api.setToken(null);
+      window.location.reload();
+    } catch {
+      toast("Could not delete account. Please try again.");
+      setDeleteLoading(false);
     }
-    await cache_set(cache_key, json.dumps(result), ttl=30)  # 30-sec TTL
-    return result
+  };
 
+  const privacyPoints = [
+    { icon: "database", color: "#0d9488", bg: "var(--teal-xl)", label: "Local data only",        desc: "Your assessment history is stored in a secured database tied to your account only." },
+    { icon: "user",     color: "#3b82f6", bg: "#eff6ff",        label: "No third-party sharing", desc: "Your personal health data is never sold or shared with advertisers or third parties." },
+    { icon: "shield",   color: "#8b5cf6", bg: "#f5f3ff",        label: "Encrypted in transit",   desc: "All data between your device and our servers is protected using HTTPS encryption." },
+    { icon: "trash",    color: "#ef4444", bg: "#fef2f2",        label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
+  ];
 
-@app.get("/api/v1/admin/all-records")
-async def all_records(db: Session = Depends(get_db)):
-    rows = (
-        db.query(DiagnosisModel)
-        .order_by(DiagnosisModel.created_at.desc())
-        .limit(500)
-        .all()
-    )
-    user_ids = {d.user_id for d in rows}
-    users    = {
-        u.id: u.name
-        for u in db.query(UserModel).filter(UserModel.id.in_(user_ids)).all()
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div className="t-display">Privacy & Security</div>
+      </div>
+
+      <div className="page-body">
+        {/* Account Security */}
+        <div className="sec-section">
+          <div className="sec-section-title">Account Security</div>
+          <div className="card card-p">
+            <div className="sec-row" style={{ paddingTop: 0 }}>
+              <div className="sec-row-icon" style={{ background: "#eff6ff" }}>
+                <Icon name="edit" size={16} color="#3b82f6" />
+              </div>
+              <div className="sec-row-body">
+                <div className="sec-row-label">Change Password</div>
+                <div className="sec-row-hint">Update your account password</div>
+              </div>
+              <button className={`btn btn-sm ${pwExpanded ? "btn-secondary" : "btn-outline"}`}
+                onClick={() => { setPwExpanded(!pwExpanded); if (pwExpanded) { setCurrentPw(""); setNewPw(""); setConfirmPw(""); } }}>
+                {pwExpanded ? "Cancel" : "Change"}
+              </button>
+            </div>
+
+            {pwExpanded && (
+              <div className="sec-field-wrap">
+                <div className="field">
+                  <label className="field-label">Current Password</label>
+                  <div className="pw-wrap">
+                    <input className="field-input" type={showCur ? "text" : "password"} placeholder="Enter current password"
+                      value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} style={{ paddingRight: 46 }} />
+                    <button className="pw-toggle" type="button" onClick={() => setShowCur(!showCur)}>
+                      <Icon name={showCur ? "eyeOff" : "eye"} size={16} />
+                    </button>
+                  </div>
+                </div>
+                <div className="field">
+                  <label className="field-label">New Password</label>
+                  <div className="pw-wrap">
+                    <input className="field-input" type={showNew ? "text" : "password"} placeholder="Min. 8 characters"
+                      value={newPw} onChange={(e) => setNewPw(e.target.value)} style={{ paddingRight: 46 }} />
+                    <button className="pw-toggle" type="button" onClick={() => setShowNew(!showNew)}>
+                      <Icon name={showNew ? "eyeOff" : "eye"} size={16} />
+                    </button>
+                  </div>
+                </div>
+                <div className="field">
+                  <label className="field-label">Confirm New Password</label>
+                  <div className="pw-wrap">
+                    <input className="field-input" type={showCon ? "text" : "password"} placeholder="Repeat new password"
+                      value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && changePassword()} style={{ paddingRight: 46 }} />
+                    <button className="pw-toggle" type="button" onClick={() => setShowCon(!showCon)}>
+                      <Icon name={showCon ? "eyeOff" : "eye"} size={16} />
+                    </button>
+                  </div>
+                </div>
+
+                {newPw.length > 0 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "8px 12px", borderRadius: 8,
+                    background: newPw.length < 8 ? "#fef2f2" : "#f0fdf4",
+                    border: `1px solid ${newPw.length < 8 ? "#fecaca" : "#bbf7d0"}` }}>
+                    <Icon name={newPw.length < 8 ? "alert" : "check"} size={13} color={newPw.length < 8 ? "#ef4444" : "#22c55e"} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw.length < 8 ? "#ef4444" : "#16a34a" }}>
+                      {newPw.length < 8 ? `${8 - newPw.length} more character${8 - newPw.length !== 1 ? "s" : ""} needed` : "Password length is good"}
+                    </span>
+                  </div>
+                )}
+
+                {confirmPw.length > 0 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", borderRadius: 8,
+                    background: newPw !== confirmPw ? "#fef2f2" : "#f0fdf4",
+                    border: `1px solid ${newPw !== confirmPw ? "#fecaca" : "#bbf7d0"}` }}>
+                    <Icon name={newPw !== confirmPw ? "x" : "check"} size={13} color={newPw !== confirmPw ? "#ef4444" : "#22c55e"} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw !== confirmPw ? "#ef4444" : "#16a34a" }}>
+                      {newPw !== confirmPw ? "Passwords do not match" : "Passwords match"}
+                    </span>
+                  </div>
+                )}
+
+                <button className="btn btn-primary btn-full" onClick={changePassword} disabled={pwLoading}>
+                  {pwLoading ? "Updating..." : "Update Password"}
+                </button>
+              </div>
+            )}
+
+            <div className="sec-row">
+              <div className="sec-row-icon" style={{ background: "var(--teal-xl)" }}>
+                <Icon name="user" size={16} color="var(--teal)" />
+              </div>
+              <div className="sec-row-body">
+                <div className="sec-row-label">Email Address</div>
+                <div className="sec-row-hint">{user?.email || "—"}</div>
+              </div>
+              <span className="badge badge-teal" style={{ fontSize: 10 }}>Verified</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Privacy */}
+        <div className="sec-section">
+          <div className="sec-section-title">Your Privacy</div>
+          <div className="card card-p">
+            {privacyPoints.map((pt, i) => (
+              <div key={pt.label} className="sec-row" style={{ paddingTop: i === 0 ? 0 : 14 }}>
+                <div className="sec-row-icon" style={{ background: pt.bg }}>
+                  <Icon name={pt.icon} size={16} color={pt.color} />
+                </div>
+                <div className="sec-row-body">
+                  <div className="sec-row-label">{pt.label}</div>
+                  <div className="sec-row-hint">{pt.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Danger Zone */}
+        <div className="sec-section">
+          <div className="sec-section-title">Danger Zone</div>
+          <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
+            <div style={{ fontWeight: 700, color: "#ef4444", marginBottom: 4, fontSize: 14 }}>Delete Account</div>
+            <div className="t-subtitle mb-3" style={{ fontSize: 13 }}>
+              Permanently removes your account and all health records. This cannot be undone.
+            </div>
+            {deleteConfirm && (
+              <div className="disclaimer mb-3">
+                <Icon name="alert" size={13} color="var(--amber)" />
+                <p>Tap again to confirm. All your data will be deleted permanently.</p>
+              </div>
+            )}
+            <button className="btn btn-danger btn-full" onClick={deleteAccount} disabled={deleteLoading}>
+              <Icon name="trash" size={14} color="#fff" />
+              {deleteLoading ? "Deleting..." : deleteConfirm ? "Confirm Delete Account" : "Delete My Account"}
+            </button>
+            {deleteConfirm && (
+              <button className="btn btn-secondary btn-full mt-2" onClick={() => setDeleteConfirm(false)}>Cancel</button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// ABOUT SCREEN
+// ─────────────────────────────────────────────
+function AboutScreen({ onBack }) {
+  const features = [
+    { icon: "activity",  color: "#0d9488", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers, no irrelevant questions, no wasted time." },
+    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset 22 tropical and common diseases." },
+    { icon: "shield",    color: "#8b5cf6", bg: "#f5f3ff",        title: "Risk Stratification",         desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
+    { icon: "heart",     color: "#ef4444", bg: "#fef2f2",        title: "AI-Powered Recommendations",  desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
+    { icon: "clipboard", color: "#f59e0b", bg: "#fffbeb",        title: "Assessment History",          desc: "All past results are stored securely so you and your care provider can track changes over time." },
+    { icon: "user",      color: "#22c55e", bg: "#f0fdf4",        title: "Built for West Africa",       desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
+  ];
+
+  const team = [
+    { initials: "OA", name: "Obed Mensah",       role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
+    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping",    color: "#3b82f6", bg: "#eff6ff" },
+    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                color: "#8b5cf6", bg: "#f5f3ff" },
+  ];
+
+  const versionInfo = [
+    { key: "Version",     val: "1.0.0" },
+    { key: "Release",     val: "May 2026" },
+    { key: "Platform",    val: "Web · Mobile" },
+    { key: "Institution", val: "KNUST, Ghana" },
+    { key: "License",     val: "Academic use only" },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div className="t-display">About TropiCare</div>
+      </div>
+
+      <div className="page-body">
+        <div className="about-hero">
+          <div className="about-hero-bg"><Icon name="heart" size={160} color="#fff" /></div>
+          <div className="about-hero-eyebrow">Project · KNUST 2026</div>
+          <div className="about-hero-title">TropiCare</div>
+          <div className="about-hero-sub">
+            An AI-guided symptom checker built to help patients and clinicians identify tropical diseases
+            faster with clear risk levels and personalised recommendations.
+          </div>
+        </div>
+
+        <div className="about-mission mb-4">
+          <div className="about-mission-label">Our Mission</div>
+          <div className="about-mission-text">
+            TropiCare bridges the gap between symptom onset and clinical attention in resource-constrained settings.
+            By combining machine learning with adaptive questioning, it provides structured, risk-stratified guidance
+            to patients and triage staff before a doctor is available.
+          </div>
+        </div>
+
+        <div className="about-fact-grid mb-4">
+          {[{val:"22",lbl:"Diseases covered"},{val:"76",lbl:"Tracked symptoms"},{val:"15",lbl:"Max questions"},{val:"2",lbl:"ML algorithms"}].map((f) => (
+            <div key={f.lbl} className="about-fact">
+              <div className="about-fact-val">{f.val}</div>
+              <div className="about-fact-lbl">{f.lbl}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="section-ttl mb-2">What TropiCare Does</div>
+        <div className="card card-p mb-4">
+          {features.map((f) => (
+            <div key={f.title} className="about-feature-row">
+              <div className="about-feature-icon" style={{ background: f.bg }}>
+                <Icon name={f.icon} size={17} color={f.color} />
+              </div>
+              <div>
+                <div className="about-feature-title">{f.title}</div>
+                <div className="about-feature-desc">{f.desc}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="disclaimer mb-4">
+          <Icon name="alert" size={14} color="var(--amber)" />
+          <p>TropiCare is an informational tool only. It does not replace a clinical examination or a qualified healthcare professional. Always consult a doctor for a definitive diagnosis.</p>
+        </div>
+
+        <div className="section-ttl mb-2">The Team</div>
+        {team.map((t) => (
+          <div key={t.name} className="about-team-card">
+            <div className="about-team-avatar" style={{ background: t.bg, color: t.color }}>{t.initials}</div>
+            <div>
+              <div className="about-team-name">{t.name}</div>
+              <div className="about-team-role">{t.role}</div>
+            </div>
+          </div>
+        ))}
+
+        <div className="section-ttl mt-4 mb-2">Version Info</div>
+        <div className="card card-p mb-4">
+          {versionInfo.map((v) => (
+            <div key={v.key} className="about-version-strip">
+              <span className="about-version-key">{v.key}</span>
+              <span className="about-version-val">{v.val}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="text-c" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.8 }}>
+          TropiCare · Symptom Checker for Tropical Diseases<br />
+          Kwame Nkrumah University of Science and Technology
+        </div>
+        <div style={{ height: 24 }} />
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// SETTINGS SCREEN
+// ─────────────────────────────────────────────
+function SettingsScreen({ onBack, toast }) {
+  const [theme,    setTheme]    = useState("light");
+  const [notifs,   setNotifs]   = useState(true);
+  const [lang,     setLang]     = useState("en");
+  const [fontSize, setFontSize] = useState("medium");
+
+  useEffect(() => {
+    const s = Store.get("tc_settings");
+    if (s) {
+      setTheme(s.theme || "light");
+      setNotifs(s.notifications !== false);
+      setLang(s.language || "en");
+      setFontSize(s.fontSize || "medium");
     }
-    return [
-        {
-            "id":           d.id,
-            "disease":      d.disease,
-            "risk":         d.risk,
-            "confidence":   d.confidence,
-            "patient_name": users.get(d.user_id, "Unknown"),
-            "created_at":   d.created_at.isoformat(),
-        }
-        for d in rows
-    ]
+  }, []);
 
+  const save = () => {
+    Store.set("tc_settings", { theme, notifications: notifs, language: lang, fontSize });
+    toast("Settings saved.");
+  };
 
-@app.delete("/api/v1/admin/clear-database")
-async def clear_database(db: Session = Depends(get_db)):
-    deleted = db.query(DiagnosisModel).delete()
-    db.query(SessionModel).delete()
-    db.commit()
-    await cache_delete("admin:stats")
-    return {"message": f"Cleared {deleted} diagnosis records"}
+  const ChipGroup = ({ options, value, onChange }) => (
+    <div className="chip-row">
+      {options.map((o) => (
+        <button key={o.val} className={`chip${value === o.val ? " on" : ""}`} onClick={() => onChange(o.val)}>{o.label}</button>
+      ))}
+    </div>
+  );
 
+  const Toggle = ({ checked, onChange }) => (
+    <label className="toggle">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span className="toggle-slider" />
+    </label>
+  );
 
-@app.delete("/api/v1/admin/record/{diag_id}")
-async def delete_record(diag_id: int, db: Session = Depends(get_db)):
-    d = db.query(DiagnosisModel).filter(DiagnosisModel.id == diag_id).first()
-    if not d:
-        raise HTTPException(status_code=404, detail="Not found")
-    db.delete(d)
-    db.commit()
-    await cache_delete("admin:stats")
-    return {"message": "Record deleted"}
+  const sections = [
+    {
+      title: "Appearance",
+      content: (
+        <>
+          <div className="t-label mb-2">Theme</div>
+          <ChipGroup options={[{val:"light",label:"Light"},{val:"dark",label:"Dark"},{val:"system",label:"System"}]} value={theme} onChange={setTheme} />
+          <div className="t-label mt-3 mb-2">Text Size</div>
+          <ChipGroup options={[{val:"small",label:"Small"},{val:"medium",label:"Medium"},{val:"large",label:"Large"}]} value={fontSize} onChange={setFontSize} />
+        </>
+      ),
+    },
+    {
+      title: "Notifications",
+      content: (
+        <div className="toggle-row">
+          <div>
+            <div style={{ fontWeight: 600, fontSize: 14 }}>Push Notifications</div>
+            <div className="t-subtitle" style={{ fontSize: 12 }}>Health reminders and updates</div>
+          </div>
+          <Toggle checked={notifs} onChange={setNotifs} />
+        </div>
+      ),
+    },
+    {
+      title: "Language",
+      content: (
+        <ChipGroup
+          options={[{val:"en",label:"English"},{val:"tw",label:"Twi"},{val:"fr",label:"French"},{val:"ha",label:"Hausa"}]}
+          value={lang} onChange={setLang}
+        />
+      ),
+    },
+    {
+      title: "Privacy",
+      content: (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
+            <Icon name="shield" size={16} color="#22c55e" />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>Encrypted Storage</div>
+              <div className="t-subtitle" style={{ fontSize: 12 }}>All data is secured in transit and at rest</div>
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 10 }}>
+            <Icon name="check" size={16} color="#22c55e" />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 13 }}>No Third-Party Sharing</div>
+              <div className="t-subtitle" style={{ fontSize: 12 }}>Your health data is never shared</div>
+            </div>
+          </div>
+        </>
+      ),
+    },
+  ];
 
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div className="t-display">Settings</div>
+      </div>
+      <div className="page-body">
+        {sections.map((s) => (
+          <div key={s.title} style={{ marginBottom: 16 }}>
+            <div className="section-ttl mb-2">{s.title}</div>
+            <div className="card card-p">{s.content}</div>
+          </div>
+        ))}
+        <button className="btn btn-primary btn-full" onClick={save}>Save Settings</button>
+      </div>
+    </div>
+  );
+}
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — Admin: Model Reload
-# ─────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────
+// ADMIN SCREEN
+// ─────────────────────────────────────────────
+function AdminScreen({ onBack, toast }) {
+  const [records, setRecords] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [confirm, setConfirm] = useState(false);
+  const [search,  setSearch]  = useState("");
 
-@app.post("/api/v1/admin/models/reload")
-async def reload_models():
-    """Manual hot-reload of all .pkl models."""
-    if not JOBLIB_AVAILABLE:
-        raise HTTPException(status_code=501, detail="joblib not available")
-    pkl_files = [f for f in os.listdir(MODELS_DIR) if f.endswith(".pkl")]
-    if not pkl_files:
-        return {"reloaded": [], "message": "No .pkl files found"}
-    loop = asyncio.get_event_loop()
-    for fname in pkl_files:
-        await loop.run_in_executor(None, _load_single_model, fname)
-    return {"reloaded": pkl_files, "models": list(LOADED_MODELS.keys())}
+  useEffect(() => { load(); }, []);
 
+  const load = async () => {
+    setLoading(true);
+    try { setRecords(await api.get("/admin/all-records")); }
+    catch { setRecords([]); }
+    finally { setLoading(false); }
+  };
 
-# ─────────────────────────────────────────────────────────────
-# ROUTES — API v1 Router prefix config (future v2 support)
-# ─────────────────────────────────────────────────────────────
-# All existing routes are under /api/v1/.
-# To add /api/v2/ without breaking v1, use APIRouter:
-#
-#   from fastapi import APIRouter
-#   v2_router = APIRouter(prefix="/api/v2")
-#   @v2_router.get("/symptoms/start") ...
-#   app.include_router(v2_router)
-#
-# When v2 goes live, set response header:
-#   X-API-Deprecated: true   on v1 endpoints (see middleware).
+  const clearAll = async () => {
+    if (!confirm) { setConfirm(true); setTimeout(() => setConfirm(false), 5000); return; }
+    try {
+      await api.delete("/admin/clear-database");
+      setRecords([]); setConfirm(false); toast("All records cleared.");
+    } catch { toast("Failed to clear records."); }
+  };
 
-# ─────────────────────────────────────────────────────────────
-# ENTRYPOINT
-# ─────────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=settings.port,
-        reload=False,          # Use watchdog for model reloads; uvicorn reload off in prod
-    )
+  const del = async (id) => {
+    try { await api.delete(`/admin/record/${id}`); } catch {}
+    setRecords((r) => r.filter((x) => x.id !== id));
+    toast("Record deleted.");
+  };
+
+  const counts = { High: 0, Medium: 0, Low: 0 };
+  records.forEach((r) => { if (counts[r.risk] !== undefined) counts[r.risk]++; });
+
+  const shown = records.filter((r) =>
+    (r.disease || "").toLowerCase().includes(search.toLowerCase()) ||
+    (r.patient_name || "").toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div className="t-display">Database</div>
+      </div>
+      <div className="page-body">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
+          {[["High","#ef4444"],["Medium","#f59e0b"],["Low","#22c55e"]].map(([r,c]) => (
+            <div key={r} className="stat-card">
+              <div className="stat-val" style={{ color: c }}>{counts[r]}</div>
+              <div className="stat-lbl">{r}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="danger-zone mb-4">
+          <div style={{ fontWeight: 700, color: "#ef4444", marginBottom: 4 }}>Clear All Records</div>
+          <div className="t-subtitle mb-3">Permanently deletes all assessment data. This cannot be undone.</div>
+          {confirm && (
+            <div className="disclaimer mb-3">
+              <Icon name="alert" size={14} color="var(--amber)" />
+              <p>Click again to confirm deletion of {records.length} record{records.length !== 1 ? "s" : ""}.</p>
+            </div>
+          )}
+          <button className="btn btn-danger btn-full" onClick={clearAll} disabled={records.length === 0}>
+            <Icon name="trash" size={14} color="#fff" />
+            {confirm ? "Confirm Delete All" : "Clear All Records"}
+          </button>
+          {confirm && (
+            <button className="btn btn-secondary btn-full mt-2" onClick={() => setConfirm(false)}>Cancel</button>
+          )}
+        </div>
+
+        <div className="section-ttl mb-2">All Records ({records.length})</div>
+        <div className="search-wrap mb-3">
+          <span className="search-icon"><Icon name="search" size={15} /></span>
+          <input className="search-input" placeholder="Search records..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+
+        {loading ? (
+          <div className="empty-state"><div className="t-subtitle">Loading...</div></div>
+        ) : shown.length === 0 ? (
+          <div className="empty-state">
+            <Icon name="database" size={36} color="var(--muted-l)" />
+            <div className="t-subtitle">No records found</div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {shown.map((r) => (
+              <div key={r.id} className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontWeight: 600, fontSize: 13 }}>{r.disease}</div>
+                  <div className="t-subtitle" style={{ fontSize: 11 }}>{r.patient_name} · {fmtDate(r.created_at)}</div>
+                </div>
+                <span className={`badge badge-${r.risk}`}>{r.risk}</span>
+                <button onClick={() => del(r.id)} style={{ border: "none", background: "#fef2f2", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
+                  <Icon name="trash" size={13} color="#ef4444" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// HELPERS
+// ─────────────────────────────────────────────
+function fmtDate(iso) {
+  if (!iso) return "";
+  return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+}
