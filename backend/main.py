@@ -1048,6 +1048,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # Prometheus instrumentation
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
@@ -1067,7 +1068,10 @@ def _sanitize(value: str) -> str:
 async def request_middleware(request: Request, call_next):
     global _pending_requests
 
-    # Request ID
+    # Pass OPTIONS through immediately — let CORS middleware handle it
+    if request.method == "OPTIONS":
+        return await call_next(request)
+
     req_id = request.headers.get("X-Request-ID") or str(uuid.uuid4())
     request.state.request_id = req_id
 
