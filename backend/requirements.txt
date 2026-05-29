@@ -20,3 +20,4 @@ prometheus-fastapi-instrumentator
 prometheus-client
 aioredis
 scikit-learn
+xgboost
