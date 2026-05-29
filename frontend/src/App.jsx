@@ -1127,8 +1127,12 @@ function HomeScreen({ user, onStart, onNav }) {
   const [records, setRecords] = useState([]);
 
   useEffect(() => {
-    api.get("/patient/history").then((d) => setRecords(d.slice(0, 3))).catch(() => {});
-  }, []);
+  let cancelled = false;
+  api.get("/patient/history")
+    .then((d) => { if (!cancelled) setRecords(d.slice(0, 3)); })
+    .catch(() => { if (!cancelled) setRecords([]); }); // swallow auth errors silently
+  return () => { cancelled = true; }; // cleanup prevents setState after unmount
+}, []);
 
   const stats = [
     { label: "Assessments", val: records.length,                                        icon: "activity", color: "#0d9488" },
