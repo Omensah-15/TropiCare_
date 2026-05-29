@@ -95,7 +95,7 @@ except ImportError:
 
 # Optional: aioredis
 try:
-    import aioredis
+    import redis.asyncio as aioredis
     AIOREDIS_AVAILABLE = True
 except ImportError:
     AIOREDIS_AVAILABLE = False
