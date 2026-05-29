@@ -1,17 +1,6 @@
 /*
  * TropiCare — App.jsx (patched)
- *
- * Fixes applied:
- *  1. Post-logout crash — all async effects now check a `cancelled` ref and
- *     the global `loggedOut` flag before calling setState. HomeScreen receives
- *     `user` as a prop so its effect re-runs / cancels cleanly on auth change.
- *  2. Data isolation — the "Database" admin screen is replaced with a personal
- *     "My Data" screen that only reads/deletes the current user's own records
- *     via /patient/history and /patient/history/:id  (backend already scopes
- *     these by JWT).  The /admin/* routes are removed from the UI entirely.
- *  3. Race conditions — token and user state are cleared atomically before any
- *     React state update; a module-level `currentUserId` guard prevents stale
- *     API responses from a previous session being applied to a new one.
+ * Backend: FastAPI (tropicare.onrender.com)
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
