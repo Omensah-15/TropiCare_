@@ -1,13 +1,6 @@
 /*
  * TropiCare — App.jsx
  * Backend: FastAPI (tropicare.onrender.com)
- *
- * AUTH FIXES APPLIED:
- *  1. api.call() auto-clears stale token on 401 + friendly error messages
- *  2. login() wipes stale session before writing new one
- *  3. logout() kills splash timer race + clears storage before state
- *  4. useEffect splash restore re-reads storage at fire time (not closure)
- *  5. AuthScreen submit() lowercases email + min-length password check
  */
 
 import { useState, useEffect, useCallback } from "react";
