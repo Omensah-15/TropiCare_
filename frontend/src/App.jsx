@@ -858,22 +858,28 @@ export default function App() {
   };
 
   // ── logout: clear everything, reset all state
-  const logout = () => {
-    api.setToken(null);              // removes localStorage["tc_token"]
-    Store.remove(USER_KEY);          // removes localStorage["tc_user"]
-    setUser(null);
-    setAssActive(false);
-    setResult(null);
-    setAnalyzing(false);
-    setAnswers({});
-    setAsked([]);
-    setCurrentQ(null);
-    setQIdx(0);
-    setSessionId(null);
-    setPage("home");
-    setDetailRec(null);
-    toast("Signed out successfully.");
-  };
+ const logout = () => {
+  // Clear storage FIRST before any state changes
+  api.setToken(null);
+  Store.remove(USER_KEY);
+  
+  // Reset ALL state atomically
+  setAssActive(false);
+  setResult(null);
+  setAnalyzing(false);
+  setAnswers({});
+  setAsked([]);
+  setCurrentQ(null);
+  setQIdx(0);
+  setSessionId(null);
+  setDetailRec(null);
+  setPage("home");
+  
+  // Set user null LAST so nothing tries to render an authenticated screen
+  // while the token is already gone
+  setUser(null);
+  toast("Signed out successfully.");
+};
 
   const startAssessment = async () => {
     setAnswers({}); setAsked([]); setQIdx(0);
