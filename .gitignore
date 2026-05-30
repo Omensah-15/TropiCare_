@@ -1,0 +1,88 @@
+# -------------------------------------------------------------
+# ENVIRONMENT & SECRETS
+# -------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+
+# -------------------------------------------------------------
+# PYTHON
+# -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
+
+
+# -------------------------------------------------------------
+# DATABASE
+# -------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+
+
+# -------------------------------------------------------------
+# ML MODELS
+# -------------------------------------------------------------
+models/*.pkl
+models/*.joblib
+models/*.h5
+models/*.pt
+models/*.pth
+
+
+# -------------------------------------------------------------
+# NODE / JAVASCRIPT
+# -------------------------------------------------------------
+node_modules/
+dist/
+.next/
+.nuxt/
+
+# Package manager locks (keep one, ignore the others)
+# Uncomment the one you are NOT using:
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
+
+
+# -------------------------------------------------------------
+# VITE / BUILD OUTPUT
+# -------------------------------------------------------------
+dist/
+dist-ssr/
+*.local
+
+
+# -------------------------------------------------------------
+# EDITORS & OS
+# -------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
