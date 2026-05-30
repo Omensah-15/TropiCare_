@@ -3,8 +3,6 @@ uvicorn[standard]
 python-dotenv
 sqlalchemy
 python-jose[cryptography]
-passlib[bcrypt]
-bcrypt==4.1.2
 aiohttp
 numpy
 joblib
@@ -19,6 +17,7 @@ watchdog
 pybreaker
 prometheus-fastapi-instrumentator
 prometheus-client
+aioredis
 redis[hiredis]
 scikit-learn
 xgboost
