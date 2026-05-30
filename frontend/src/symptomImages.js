@@ -1,10 +1,9 @@
 /*
  * TropiCare — Symptom Image Registry
  */
-
 // ─────────────────────────────────────────────────────────────────────────────
-// PER-SYMPTOM IMAGE PATHS
-// Key   = symptom id (must match ALL_QUESTIONS ids in App.jsx exactly)
+// SYMPTOM IMAGE PATHS
+// Key   = symptom id (matches ALL_QUESTIONS ids in App.jsx)
 // Value = public asset path string  OR  null to use category/SVG fallback
 // ─────────────────────────────────────────────────────────────────────────────
 export const SYMPTOM_IMAGES = {
@@ -129,7 +128,7 @@ const CATEGORY_IMAGES = {
   Urinary:      "/images/categories/urinary.png",
   Rectal:       "/images/categories/digestive.png",   // reuses digestive art
   Neurological: "/images/categories/general.png",     // reuses general art
-  Metabolic:    "/images/categories/general.png",
+  Metabolic:    "/images/categories/metabolic.png",
   Infection:    "/images/categories/infection.png",
   History:      "/images/categories/history.png",
 };
@@ -144,4 +143,3 @@ const CATEGORY_IMAGES = {
 export function getCategoryImage(category) {
   return CATEGORY_IMAGES[category] ?? null;
 }
-
