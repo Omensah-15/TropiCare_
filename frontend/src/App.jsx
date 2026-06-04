@@ -1630,7 +1630,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
 }
 
 // ─────────────────────────────────────────────
-// MY DATA SCREEN  (replaces admin screen)
+// MY DATA SCREEN
 // ─────────────────────────────────────────────
 function MyDataScreen({ onBack, toast }) {
   const [records, setRecords] = useState([]);
