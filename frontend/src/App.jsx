@@ -1699,7 +1699,7 @@ function MyDataScreen({ onBack, toast }) {
         <div style={{ background: "var(--teal-xl)", border: "1px solid var(--teal-l)", borderRadius: "var(--radius)", padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-start" }}>
           <Icon name="shield" size={16} color="var(--teal)" />
           <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, margin: 0 }}>
-            This screen shows only your own assessments. No other user's data is accessible here.
+            This screen shows your assessments.
           </p>
         </div>
 
