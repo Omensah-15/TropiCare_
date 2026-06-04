@@ -1075,8 +1075,6 @@ function AuthScreen({ onLogin, toast }) {
 
 // ─────────────────────────────────────────────
 // HOME SCREEN
-// FIX: receives userId as a separate prop so the effect key changes on login/logout,
-// preventing the stale closure from a previous user's session from calling setState.
 // ─────────────────────────────────────────────
 function HomeScreen({ userId, user, onStart, onNav }) {
   const [records, setRecords] = useState([]);
@@ -1363,7 +1361,6 @@ function ResultScreen({ result, onReset, onNewCheck }) {
 
 // ─────────────────────────────────────────────
 // RECORDS SCREEN
-// Uses /patient/history which is JWT-scoped to the current user.
 // ─────────────────────────────────────────────
 function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
   const [records, setRecords] = useState([]);
@@ -1634,8 +1631,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
 
 // ─────────────────────────────────────────────
 // MY DATA SCREEN  (replaces admin screen)
-// Shows ONLY the current user's own records.
-// Delete calls /patient/history/:id — backend enforces ownership via JWT.
 // ─────────────────────────────────────────────
 function MyDataScreen({ onBack, toast }) {
   const [records, setRecords] = useState([]);
