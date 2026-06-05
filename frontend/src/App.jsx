@@ -1,5 +1,5 @@
 /*
- * TropiCare — App.jsx
+ * TropiCare
  * Backend: FastAPI (tropicare.onrender.com)
  */
 
@@ -221,18 +221,75 @@ function getNextQuestionOffline(answers, asked) {
   return ALL_QUESTIONS.find((q) => !asked.includes(q.id)) || null;
 }
 
+// ─────────────────────────────────────────────
+// FIX: predictOffline
+//
+// Previous behaviour: always picked the least-penalised disease even when
+// every answer was No, and clamped confidence to a minimum of 0.35.
+//
+// Fixed behaviour:
+//   - If fewer than 2 symptoms confirmed → return disease: null.
+//   - If the best scoring disease still has a score <= 0 → return disease: null.
+//   - Confidence floor removed; actual ratio is used (minimum 0.10 when a
+//     real prediction is made, never applied when disease is null).
+// ─────────────────────────────────────────────
 function predictOffline(answers) {
+  const yesCount = Object.values(answers).filter((v) => v === true).length;
+
+  // Not enough confirmed symptoms to make any meaningful prediction.
+  if (yesCount < 2) {
+    return {
+      disease:     null,
+      confidence:  0.0,
+      risk:        "None",
+      explanation: "No significant symptoms were reported.",
+      recommendation: {
+        home_care: "You appear to be in good health based on your responses.",
+        test:      "No tests are indicated at this time.",
+        doctor:    "See a doctor if you develop any symptoms or feel unwell.",
+        safety:    "",
+      },
+      all_scores: {},
+      method:     "insufficient_evidence",
+    };
+  }
+
   const sorted = Object.keys(DISEASE_SYMPTOM_MAP)
     .map((d) => {
       const syms = DISEASE_SYMPTOM_MAP[d] || [];
       const yes  = syms.filter((s) => answers[s] === true).length;
-      return { d, sc: scoreDisease(d, answers), conf: Math.min(0.95, Math.max(0.35, yes / Math.max(syms.length, 1))) };
+      const sc   = scoreDisease(d, answers);
+      // Confidence is the actual yes/symptom ratio — no artificial floor.
+      const conf = Math.min(0.95, Math.max(0.10, yes / Math.max(syms.length, 1)));
+      return { d, sc, conf, yes };
     })
     .sort((a, b) => b.sc - a.sc);
+
+  // If the best score is zero or negative, no disease is positively supported.
+  if (sorted[0].sc <= 0) {
+    return {
+      disease:     null,
+      confidence:  0.0,
+      risk:        "None",
+      explanation: "No significant symptoms were reported.",
+      recommendation: {
+        home_care: "You appear to be in good health based on your responses.",
+        test:      "No tests are indicated at this time.",
+        doctor:    "See a doctor if you develop any symptoms or feel unwell.",
+        safety:    "",
+      },
+      all_scores: {},
+      method:     "insufficient_evidence",
+    };
+  }
+
   const top  = sorted[0];
   const risk = RISK_MAP[top.d] || "Medium";
+
   return {
-    disease: top.d, confidence: top.conf, risk,
+    disease:     top.d,
+    confidence:  top.conf,
+    risk,
     explanation: `The reported symptoms are consistent with ${top.d}.`,
     recommendation: {
       home_care: "Rest, stay hydrated, and monitor your symptoms closely.",
@@ -240,7 +297,9 @@ function predictOffline(answers) {
       doctor:    risk === "High" ? "Visit a hospital or clinic without delay." : "See a doctor if symptoms persist or worsen.",
       safety:    risk === "High" ? "Do not wait — seek medical attention today." : "",
     },
-    all_scores: Object.fromEntries(sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])),
+    all_scores: Object.fromEntries(
+      sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])
+    ),
     method: "offline-scoring",
   };
 }
@@ -426,6 +485,7 @@ const injectStyles = () => {
     .result-ring-High{background:linear-gradient(135deg,#fee2e2,#fecaca);box-shadow:0 0 0 10px rgba(239,68,68,0.08);}
     .result-ring-Medium{background:linear-gradient(135deg,#fef3c7,#fde68a);box-shadow:0 0 0 10px rgba(245,158,11,0.08);}
     .result-ring-Low{background:linear-gradient(135deg,#dcfce7,#bbf7d0);box-shadow:0 0 0 10px rgba(34,197,94,0.08);}
+    .result-ring-None{background:linear-gradient(135deg,#dcfce7,#bbf7d0);box-shadow:0 0 0 10px rgba(34,197,94,0.08);}
     .rec-bubbles{display:flex;flex-direction:column;gap:10px;}
     .rec-bubble{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:var(--radius);border-left:4px solid transparent;background:var(--surface);box-shadow:var(--shadow-s);animation:bubble-in 0.35s ease both;}
     .rec-bubble:nth-child(1){animation-delay:0.05s;}
@@ -511,6 +571,7 @@ const injectStyles = () => {
     .about-version-strip:last-child{border-bottom:none;}
     .about-version-key{font-size:13px;color:var(--muted);}
     .about-version-val{font-size:13px;font-weight:600;color:var(--ink);}
+    .no-symptoms-ring{width:110px;height:110px;border-radius:99px;background:linear-gradient(135deg,#dcfce7,#bbf7d0);box-shadow:0 0 0 10px rgba(34,197,94,0.08);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;animation:ring-in 0.45s cubic-bezier(0.34,1.56,0.64,1);}
   `;
   document.head.appendChild(el);
 };
@@ -802,14 +863,10 @@ export default function App() {
     setPage("home");
   };
 
-  // FIX 1: Set _loggingOut flag FIRST, clear storage SECOND, reset state THIRD.
-  // This prevents any in-flight async .then() from calling setState after logout.
   const logout = useCallback(() => {
-    _loggingOut = true;           // signal all async callbacks to bail out
-    api.setToken(null);           // clear token from localStorage immediately
-    Store.remove(USER_KEY);       // clear user from localStorage
-
-    // Reset all assessment state atomically
+    _loggingOut = true;
+    api.setToken(null);
+    Store.remove(USER_KEY);
     setAssActive(false);
     setResult(null);
     setAnalyzing(false);
@@ -820,7 +877,7 @@ export default function App() {
     setSessionId(null);
     setDetailRec(null);
     setPage("home");
-    setUser(null);                // triggers re-render to AuthScreen
+    setUser(null);
     setNotif("");
     toast("Signed out successfully.");
   }, [toast]);
@@ -871,6 +928,7 @@ export default function App() {
     setAnalyzing(true);
     await new Promise((r) => setTimeout(r, 2400));
     if (_loggingOut) return;
+
     let pred = null;
     if (sessionId) {
       try {
@@ -878,7 +936,12 @@ export default function App() {
         if (_loggingOut) return;
       } catch {}
     }
+
+    // Fall back to offline prediction if backend call failed or no session.
+    // The offline function now returns disease: null when evidence is insufficient,
+    // so we pass it through directly — no special-casing needed here.
     if (!pred) pred = predictOffline(finalAnswers);
+
     if (_loggingOut) return;
     setResult(pred);
     setAnalyzing(false);
@@ -918,7 +981,6 @@ export default function App() {
 
   const renderPage = () => {
     switch (page) {
-      // FIX 2: Pass user.id into HomeScreen so its effect re-mounts on user change
       case "home":       return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
       case "assessment": return <AssessmentLanding onStart={startAssessment} />;
       case "records":    return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
@@ -926,7 +988,6 @@ export default function App() {
       case "settings":   return <SettingsScreen onBack={() => setPage("profile")} toast={toast} />;
       case "privacy":    return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} onLogout={logout} />;
       case "about":      return <AboutScreen onBack={() => setPage("profile")} />;
-      // FIX 3: "database" now shows the user's own data only — no admin routes
       case "mydata":     return <MyDataScreen onBack={() => setPage("profile")} toast={toast} />;
       default:           return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
     }
@@ -1083,7 +1144,6 @@ function HomeScreen({ userId, user, onStart, onNav }) {
     let cancelled = false;
     api.get("/patient/history")
       .then((d) => {
-        // Guard: don't update if component unmounted OR global logout fired
         if (cancelled || _loggingOut) return;
         setRecords(d.slice(0, 3));
       })
@@ -1092,7 +1152,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
         setRecords([]);
       });
     return () => { cancelled = true; };
-  }, [userId]); // re-run when userId changes (new login after logout)
+  }, [userId]);
 
   const stats = [
     { label: "Assessments", val: records.length,                                        icon: "activity", color: "#0d9488" },
@@ -1288,8 +1348,66 @@ function AnalyzingScreen() {
 
 // ─────────────────────────────────────────────
 // RESULT SCREEN
+//
+// FIX: When result.disease is null (no symptoms confirmed, or all-No answers),
+// render the "No Symptoms Detected" screen instead of forcing a disease result.
+// This replaces the old behaviour where Allergy would appear at 35% confidence.
 // ─────────────────────────────────────────────
 function ResultScreen({ result, onReset, onNewCheck }) {
+
+  // ── No-symptom path ──────────────────────────────────────────────
+  if (!result.disease) {
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
+        <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Your Result</div>
+          <button onClick={onReset} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+            <Icon name="x" size={16} color="var(--muted)" />
+          </button>
+        </div>
+        <div style={{ maxWidth: 600, margin: "0 auto", padding: "48px 16px 64px", textAlign: "center" }}>
+          <div className="no-symptoms-ring">
+            <Icon name="check" size={52} color="var(--green)" />
+          </div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 10 }}>
+            No Symptoms Detected
+          </div>
+          <div style={{ fontSize: 15, color: "var(--muted)", lineHeight: 1.65, marginBottom: 32, maxWidth: 380, margin: "0 auto 32px" }}>
+            Based on your responses, you did not report any significant symptoms. There are no indicators of the conditions this system screens for.
+          </div>
+          <div className="rec-bubbles mb-4" style={{ textAlign: "left" }}>
+            <RecBubble
+              icon="heart"
+              label="What this means"
+              text="Your answers did not match the symptom patterns for any of the 22 conditions in our database."
+              accent="#16a34a"
+              bg="#f0fdf4"
+            />
+            <RecBubble
+              icon="user"
+              label="Recommendation"
+              text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic."
+              accent="#3b82f6"
+              bg="#eff6ff"
+            />
+            <RecBubble
+              icon="info"
+              label="Good to know"
+              text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition."
+              accent="#8b5cf6"
+              bg="#f5f3ff"
+            />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Retake Assessment</button>
+            <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Normal disease result path ────────────────────────────────────
   const risk   = result.risk || "Medium";
   const color  = RISK_COLOR[risk];
   const bg     = RISK_BG[risk];
@@ -1297,6 +1415,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
   const scores = result.all_scores
     ? Object.entries(result.all_scores).filter(([d]) => d !== result.disease).slice(0, 4)
     : [];
+
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -1316,7 +1435,13 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           <div className="t-label mb-2">Predicted Condition</div>
           <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12 }}>{result.disease}</div>
           <div style={{ height: 6, background: "var(--border-l)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
-            <div style={{ height: "100%", width: `${Math.round(result.confidence * 100)}%`, background: `linear-gradient(90deg, ${color}80, ${color})`, borderRadius: 99, transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)" }} />
+            <div style={{
+              height: "100%",
+              width: `${Math.round(result.confidence * 100)}%`,
+              background: `linear-gradient(90deg, ${color}80, ${color})`,
+              borderRadius: 99,
+              transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)",
+            }} />
           </div>
           <div style={{ fontSize: 13, fontWeight: 700, color }}>{Math.round(result.confidence * 100)}% match</div>
           {result.explanation && (
@@ -1440,7 +1565,7 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
 
 function RecordDetail({ record, onBack }) {
   const color = RISK_COLOR[record.risk] || "#0d9488";
-  const bg    = RISK_BG[record.risk]   || "#f0fdfa";
+  const bg    = RISK_BG[record.risk]   || "#f0fdf4";
   const rec   = record.recommendation  || {};
   const syms  = (record.active_symptoms || []).map((s) => s.replace(/_/g, " "));
   return (
@@ -1535,7 +1660,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
 
   const p = { ...user, ...profile };
 
-  // FIX: "Database" menu item now routes to "mydata" (personal data only)
   const menuItems = [
     { label: "Settings",           icon: "settings", action: () => onNav("settings") },
     { label: "Privacy & Security", icon: "shield",   action: () => onNav("privacy")  },
@@ -1636,7 +1760,7 @@ function MyDataScreen({ onBack, toast }) {
   const [records, setRecords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search,  setSearch]  = useState("");
-  const [delId,   setDelId]   = useState(null); // id awaiting 2nd-tap confirm
+  const [delId,   setDelId]   = useState(null);
 
   useEffect(() => { load(); }, []);
 
@@ -1652,15 +1776,12 @@ function MyDataScreen({ onBack, toast }) {
     }
   };
 
-  // Delete a single record — backend only allows the owner's JWT to delete
   const deleteRecord = async (id) => {
     if (delId !== id) {
-      // First tap: set confirm target, auto-clear after 5 s
       setDelId(id);
       setTimeout(() => setDelId((cur) => cur === id ? null : cur), 5000);
       return;
     }
-    // Second tap: confirmed
     try {
       await api.delete(`/patient/history/${id}`);
       setRecords((prev) => prev.filter((r) => r.id !== id));
@@ -1699,7 +1820,7 @@ function MyDataScreen({ onBack, toast }) {
         <div style={{ background: "var(--teal-xl)", border: "1px solid var(--teal-l)", borderRadius: "var(--radius)", padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-start" }}>
           <Icon name="shield" size={16} color="var(--teal)" />
           <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, margin: 0 }}>
-            This screen shows your assessments.
+            This screen shows your assessments only.
           </p>
         </div>
 
@@ -1792,7 +1913,6 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
     setDeleteLoading(true);
     try {
       await api.delete("/user/account");
-      // Use onLogout so the parent clears everything cleanly (no window.location.reload)
       onLogout();
     } catch {
       toast("Could not delete account. Please try again.");
@@ -1952,7 +2072,7 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
 // ─────────────────────────────────────────────
 function AboutScreen({ onBack }) {
   const features = [
-    { icon: "activity",  color: "#0d9488", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers, no irrelevant questions, no wasted time." },
+    { icon: "activity",  color: "#0d9488", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers — no irrelevant questions, no wasted time." },
     { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 22 tropical and common diseases." },
     { icon: "shield",    color: "#8b5cf6", bg: "#f5f3ff",        title: "Risk Stratification",         desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
     { icon: "heart",     color: "#ef4444", bg: "#fef2f2",        title: "AI-Powered Recommendations",  desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
