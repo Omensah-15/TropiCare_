@@ -1,5 +1,5 @@
 /*
- * TropiCare — App.jsx (patched)
+ * TropiCare — App.jsx
  * Backend: FastAPI (tropicare.onrender.com)
  */
 
