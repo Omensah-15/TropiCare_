@@ -1,5 +1,5 @@
 """
-TropiCare API
+TropiCare API 
 """
 
 from __future__ import annotations
