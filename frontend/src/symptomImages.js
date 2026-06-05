@@ -1,35 +1,30 @@
 /*
  * TropiCare — Symptom Image Registry
  *
- * HOW FALLBACK WORKS
+ * FALLBACK CHAIN:
  *
- * App.jsx does:
- *   const imgPath = SYMPTOM_IMAGES[question.id];
- *   const catPath = getCategoryImage(question.category);
- *   const src = imgPath || catPath;         ← imgPath wins if truthy
- *   if (src) return <img src={src} ... />
- *   // else renders the inline SVG
+ *  App.jsx renders:
+ *    const imgPath = SYMPTOM_IMAGES[question.id];
+ *    const catPath = getCategoryImage(question.category);
+ *    const src     = imgPath || catPath;
+ *    if (src) return <img src={src} alt={question.category} ... />
+ *    // else renders inline SVG
  *
- * So the fallback chain is:
- *   1. SYMPTOM_IMAGES[id]          → specific symptom PNG  (if it exists on disk)
- *   2. getCategoryImage(category)  → category PNG          (if it exists on disk)
- *   3. inline SVG component        → always available
+ *  So the three-level chain is:
+ *    1. Symptom PNG   — SYMPTOM_IMAGES[id]  (specific image for that symptom)
+ *    2. Category PNG  — getCategoryImage()  (one image per symptom category)
+ *    3. Inline SVG    — always available, rendered when src is null/undefined
  *
- * To make step 1 → 2 work reliably WITHOUT async probes and WITHOUT touching
- * App.jsx, we simply set SYMPTOM_IMAGES values to null for any image that is
- * NOT present in the public folder.  A null value is falsy, so App.jsx
- * naturally falls through to getCategoryImage.
+ *  SYMPTOM_IMAGES is a plain object. All path strings are kept exactly as
+ *  originally written. No async probing, no Proxy.
  *
- * MAINTENANCE RULE:
- *   - Image exists at the listed path  → keep the path string as the value.
- *   - Image does NOT exist             → set the value to null.
- *   - This file is the single source of truth; no runtime async checks needed.
+ *  Runtime protection is handled by installBrokenImageGuard() at the bottom:
+ *  a single capture-phase error listener watches every <img> inside .q-illus
+ *  and cascades through the fallback chain when a file is missing on the server.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SYMPTOM IMAGE PATHS
-// Key   = symptom id (matches ALL_QUESTIONS ids in App.jsx)
-// Value = path string (image exists) | null (missing → use category fallback)
 // ─────────────────────────────────────────────────────────────────────────────
 export const SYMPTOM_IMAGES = {
 
@@ -60,18 +55,18 @@ export const SYMPTOM_IMAGES = {
   loss_of_smell:       "/images/symptoms/loss_of_smell.png",
 
   // ── Digestive ─────────────────────────────────────────────────────────────
-  nausea:                 "/images/symptoms/nausea.png",
-  vomiting:               "/images/symptoms/vomiting.png",
-  diarrhoea:              "/images/symptoms/diarrhoea.png",
-  stomach_pain:           "/images/symptoms/abdominal_pain.png",
-  abdominal_pain:         "/images/symptoms/abdominal_pain.png",
-  indigestion:            "/images/symptoms/indigestion.png",
-  distension_of_abdomen:  "/images/symptoms/distension_of_abdomen.png",
-  constipation:           "/images/symptoms/constipation.png",
-  passage_of_gases:       "/images/symptoms/gas.png",
-  bloody_stool:           "/images/symptoms/bloody_stool.png",
-  loss_of_appetite:       "/images/symptoms/loss_of_appetite.png",
-  stomach_bleeding:       "/images/symptoms/stomach_bleeding.png",
+  nausea:                "/images/symptoms/nausea.png",
+  vomiting:              "/images/symptoms/vomiting.png",
+  diarrhoea:             "/images/symptoms/diarrhoea.png",
+  stomach_pain:          "/images/symptoms/abdominal_pain.png",
+  abdominal_pain:        "/images/symptoms/abdominal_pain.png",
+  indigestion:           "/images/symptoms/indigestion.png",
+  distension_of_abdomen: "/images/symptoms/distension_of_abdomen.png",
+  constipation:          "/images/symptoms/constipation.png",
+  passage_of_gases:      "/images/symptoms/gas.png",
+  bloody_stool:          "/images/symptoms/bloody_stool.png",
+  loss_of_appetite:      "/images/symptoms/loss_of_appetite.png",
+  stomach_bleeding:      "/images/symptoms/stomach_bleeding.png",
 
   // ── Liver ─────────────────────────────────────────────────────────────────
   yellowish_skin:      "/images/symptoms/yellowish_skin.png",
@@ -95,12 +90,12 @@ export const SYMPTOM_IMAGES = {
   pain_behind_eyes: "/images/symptoms/pain_behind_eyes.png",
 
   // ── Urinary ───────────────────────────────────────────────────────────────
-  burning_micturition:       "/images/symptoms/burning_micturition.png",
-  urinating_frequently:      "/images/symptoms/urinating_frequently.png",
-  continuous_feel_of_urine:  "/images/symptoms/urinating_frequently.png",
-  bladder_discomfort:        "/images/symptoms/bladder_discomfort.png",
-  foul_smell_of_urine:       "/images/symptoms/foul_smell_of_urine.png",
-  spotting_urination:        "/images/symptoms/spotting_urination.png",
+  burning_micturition:      "/images/symptoms/burning_micturition.png",
+  urinating_frequently:     "/images/symptoms/urinating_frequently.png",
+  continuous_feel_of_urine: "/images/symptoms/urinating_frequently.png",
+  bladder_discomfort:       "/images/symptoms/bladder_discomfort.png",
+  foul_smell_of_urine:      "/images/symptoms/foul_smell_of_urine.png",
+  spotting_urination:       "/images/symptoms/spotting_urination.png",
 
   // ── Rectal ────────────────────────────────────────────────────────────────
   pain_anal_region:     "/images/symptoms/pain_anal_region.png",
@@ -140,8 +135,6 @@ export const SYMPTOM_IMAGES = {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CATEGORY-LEVEL FALLBACK IMAGES
-// Used when a specific symptom image is null or missing.
-// Set a value to null to use the built-in inline SVG instead.
 // ─────────────────────────────────────────────────────────────────────────────
 const CATEGORY_IMAGES = {
   General:      "/images/categories/general.png",
@@ -161,9 +154,6 @@ const CATEGORY_IMAGES = {
 /**
  * getCategoryImage(category)
  * Returns the category-level fallback image path, or null if none configured.
- *
- * @param {string} category - The symptom category (e.g. "General", "Skin")
- * @returns {string|null}
  */
 export function getCategoryImage(category) {
   return CATEGORY_IMAGES[category] ?? null;
@@ -173,65 +163,57 @@ export function getCategoryImage(category) {
 // ─────────────────────────────────────────────────────────────────────────────
 // RUNTIME BROKEN-IMAGE GUARD
 //
-// Even with correct paths, a file might be missing from the server at runtime.
-// This guard patches the <img> elements rendered by App.jsx's QuestionIllus
-// so that if an image 404s, it is hidden and the next fallback (category image
-// or inline SVG) is shown instead — with zero changes to App.jsx.
+// When a symptom or category PNG is missing from the server, the browser fires
+// an error event on the <img> element.  This guard intercepts that event and
+// cascades through the fallback chain:
 //
-// How it works:
-//   QuestionIllus renders:  <img src={src} style={{...}} />
-//   If that request fails, the browser fires an "error" event on the element.
-//   We intercept it with a document-level capture listener, hide the broken
-//   <img>, and let the React component re-render with null via a custom event.
+//   symptom PNG failed  →  swap src to category PNG
+//   category PNG failed →  hide <img> entirely (inline SVG below it shows)
 //
-// Because App.jsx computes `src = imgPath || catPath` at render time and does
-// not re-check after an error, we instead directly swap the <img> src to the
-// category fallback when the symptom image fails.  If the category image also
-// fails, we hide the element entirely so the inline SVG (rendered separately
-// inside the same .q-illus div) can show.
+// Uses a capture-phase listener so it fires before React's own event handling.
+// Only acts on <img> elements inside a .q-illus container so it never touches
+// anything else in the app.
 //
-// NOTE: This only applies to the symptom/category images inside .q-illus.
-//       It will not interfere with any other images in the app.
+// The "already tried" state is tracked with a data attribute on the element
+// itself — no shared mutable state, no timing issues.
 // ─────────────────────────────────────────────────────────────────────────────
 (function installBrokenImageGuard() {
-  // We can only attach DOM listeners once the document exists.
-  const attach = () => {
-    document.addEventListener(
-      "error",
-      (e) => {
-        const img = e.target;
-        // Only intercept <img> elements inside a .q-illus container.
-        if (img.tagName !== "IMG" || !img.closest(".q-illus")) return;
 
-        const current = img.src;
+  function onImgError(e) {
+    const img = e.target;
 
-        // ── Step 1: symptom image failed → try the category fallback ────────
-        // The category is stored on the closest .q-illus's parent .q-body
-        // via the data-category attribute we inject below, OR we parse it
-        // from the alt attribute that QuestionIllus sets to question.category.
-        const category = img.getAttribute("alt");
-        const catPath  = category ? (CATEGORY_IMAGES[category] ?? null) : null;
+    // Only handle <img> tags inside the symptom illustration container.
+    if (!(img instanceof HTMLImageElement) || !img.closest(".q-illus")) return;
 
-        if (catPath && !img.src.endsWith(catPath.replace(/^\//, ""))) {
-          // Haven't tried the category image yet — swap to it.
-          img.onerror = () => {
-            // ── Step 2: category image also failed → hide the img entirely ──
-            img.style.display = "none";
-          };
-          img.src = catPath;
-          return;
-        }
+    const alreadyTriedCategory = img.dataset.triedCategory === "1";
 
-        // ── Step 3: nothing left — hide the broken img ──────────────────────
-        img.style.display = "none";
-      },
-      true // capture phase so we get the event before React
-    );
-  };
+    if (!alreadyTriedCategory) {
+      // ── Step 1: symptom image failed — try the category fallback ──────────
+      // App.jsx sets alt={question.category} e.g. "General", "Skin".
+      const category = img.getAttribute("alt");
+      const catPath  = category ? (CATEGORY_IMAGES[category] ?? null) : null;
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", attach);
-  } else {
-    attach();
+      if (catPath) {
+        img.dataset.triedCategory = "1";  // mark so we don't loop
+        img.src = catPath;                // triggers another load attempt
+        return;                           // wait for load/error on the new src
+      }
+    }
+
+    // ── Step 2: category image also failed (or no category) — hide the img ──
+    // The inline SVG sibling inside .q-illus will now be visible instead.
+    img.style.display = "none";
+  }
+
+  function attach() {
+    document.addEventListener("error", onImgError, true /* capture */);
+  }
+
+  if (typeof document !== "undefined") {
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", attach);
+    } else {
+      attach();
+    }
   }
 })();
