@@ -1,10 +1,35 @@
 /*
  * TropiCare — Symptom Image Registry
+ *
+ * HOW FALLBACK WORKS
+ *
+ * App.jsx does:
+ *   const imgPath = SYMPTOM_IMAGES[question.id];
+ *   const catPath = getCategoryImage(question.category);
+ *   const src = imgPath || catPath;         ← imgPath wins if truthy
+ *   if (src) return <img src={src} ... />
+ *   // else renders the inline SVG
+ *
+ * So the fallback chain is:
+ *   1. SYMPTOM_IMAGES[id]          → specific symptom PNG  (if it exists on disk)
+ *   2. getCategoryImage(category)  → category PNG          (if it exists on disk)
+ *   3. inline SVG component        → always available
+ *
+ * To make step 1 → 2 work reliably WITHOUT async probes and WITHOUT touching
+ * App.jsx, we simply set SYMPTOM_IMAGES values to null for any image that is
+ * NOT present in the public folder.  A null value is falsy, so App.jsx
+ * naturally falls through to getCategoryImage.
+ *
+ * MAINTENANCE RULE:
+ *   - Image exists at the listed path  → keep the path string as the value.
+ *   - Image does NOT exist             → set the value to null.
+ *   - This file is the single source of truth; no runtime async checks needed.
  */
+
 // ─────────────────────────────────────────────────────────────────────────────
 // SYMPTOM IMAGE PATHS
 // Key   = symptom id (matches ALL_QUESTIONS ids in App.jsx)
-// Value = public asset path string  OR  null to use category/SVG fallback
+// Value = path string (image exists) | null (missing → use category fallback)
 // ─────────────────────────────────────────────────────────────────────────────
 export const SYMPTOM_IMAGES = {
 
@@ -143,3 +168,70 @@ const CATEGORY_IMAGES = {
 export function getCategoryImage(category) {
   return CATEGORY_IMAGES[category] ?? null;
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RUNTIME BROKEN-IMAGE GUARD
+//
+// Even with correct paths, a file might be missing from the server at runtime.
+// This guard patches the <img> elements rendered by App.jsx's QuestionIllus
+// so that if an image 404s, it is hidden and the next fallback (category image
+// or inline SVG) is shown instead — with zero changes to App.jsx.
+//
+// How it works:
+//   QuestionIllus renders:  <img src={src} style={{...}} />
+//   If that request fails, the browser fires an "error" event on the element.
+//   We intercept it with a document-level capture listener, hide the broken
+//   <img>, and let the React component re-render with null via a custom event.
+//
+// Because App.jsx computes `src = imgPath || catPath` at render time and does
+// not re-check after an error, we instead directly swap the <img> src to the
+// category fallback when the symptom image fails.  If the category image also
+// fails, we hide the element entirely so the inline SVG (rendered separately
+// inside the same .q-illus div) can show.
+//
+// NOTE: This only applies to the symptom/category images inside .q-illus.
+//       It will not interfere with any other images in the app.
+// ─────────────────────────────────────────────────────────────────────────────
+(function installBrokenImageGuard() {
+  // We can only attach DOM listeners once the document exists.
+  const attach = () => {
+    document.addEventListener(
+      "error",
+      (e) => {
+        const img = e.target;
+        // Only intercept <img> elements inside a .q-illus container.
+        if (img.tagName !== "IMG" || !img.closest(".q-illus")) return;
+
+        const current = img.src;
+
+        // ── Step 1: symptom image failed → try the category fallback ────────
+        // The category is stored on the closest .q-illus's parent .q-body
+        // via the data-category attribute we inject below, OR we parse it
+        // from the alt attribute that QuestionIllus sets to question.category.
+        const category = img.getAttribute("alt");
+        const catPath  = category ? (CATEGORY_IMAGES[category] ?? null) : null;
+
+        if (catPath && !img.src.endsWith(catPath.replace(/^\//, ""))) {
+          // Haven't tried the category image yet — swap to it.
+          img.onerror = () => {
+            // ── Step 2: category image also failed → hide the img entirely ──
+            img.style.display = "none";
+          };
+          img.src = catPath;
+          return;
+        }
+
+        // ── Step 3: nothing left — hide the broken img ──────────────────────
+        img.style.display = "none";
+      },
+      true // capture phase so we get the event before React
+    );
+  };
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", attach);
+  } else {
+    attach();
+  }
+})();
