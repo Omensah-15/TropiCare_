@@ -1,5 +1,5 @@
 """
-TropiCare API 
+TropiCare API
 """
 
 from __future__ import annotations
@@ -15,11 +15,10 @@ import os
 import re
 import secrets
 import time
-import unicodedata
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Annotated, Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # -----------------------------------------------------------------
 # THIRD-PARTY
@@ -30,7 +29,6 @@ from dotenv import load_dotenv
 from jose import JWTError, jwt
 from pythonjsonlogger import jsonlogger
 
-# FastAPI
 from fastapi import (
     BackgroundTasks,
     Depends,
@@ -45,11 +43,9 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-# Pydantic / Settings
 from pydantic import BaseModel
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# SQLAlchemy
 from sqlalchemy import (
     Boolean,
     Column,
@@ -65,33 +61,26 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
-# Rate limiting
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-# Prometheus
 from prometheus_fastapi_instrumentator import Instrumentator
-from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import Counter, Gauge, Histogram
 
-# APScheduler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-# Circuit breaker
 import pybreaker
 
-# Watchdog
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileModifiedEvent
 
-# Optional: joblib
 try:
     import joblib
     JOBLIB_AVAILABLE = True
 except ImportError:
     JOBLIB_AVAILABLE = False
 
-# Optional: aioredis
 try:
     import aioredis
     AIOREDIS_AVAILABLE = True
@@ -107,7 +96,6 @@ load_dotenv()
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
-    # Core
     secret_key: str               = "tropicare-fallback-secret-2024"
     algorithm: str                = "HS256"
     access_token_expire_days: int = 7
@@ -115,30 +103,24 @@ class Settings(BaseSettings):
     allowed_origins: str          = "*"
     port: int                     = 8000
 
-    # Admin — set ADMIN_USER_ID in .env to restrict admin routes
     admin_user_id: int = 1
 
-    # OpenRouter
-    openrouter_api_key: str  = ""
-    openrouter_url: str      = "https://openrouter.ai/api/v1/chat/completions"
-    openrouter_model: str    = "mistralai/mistral-7b-instruct:free"
-    site_url: str            = "http://localhost:8000"
-    site_name: str           = "TropiCare"
+    openrouter_api_key: str = ""
+    openrouter_url: str     = "https://openrouter.ai/api/v1/chat/completions"
+    openrouter_model: str   = "mistralai/mistral-7b-instruct:free"
+    site_url: str           = "http://localhost:8000"
+    site_name: str          = "TropiCare"
 
-    # Redis
     redis_url: str = "redis://localhost:6379/0"
 
-    # Feature flags
     enable_ai_cache: bool      = True
     enable_rate_limiting: bool = True
     async_mode: bool           = True
 
-    # DB pool
     db_pool_min: int = 5
     db_pool_max: int = 20
 
-    # Body size limit (bytes)
-    max_body_size: int = 5 * 1024 * 1024  # 5 MB
+    max_body_size: int = 5 * 1024 * 1024
 
     @property
     def origins_list(self) -> list[str]:
@@ -149,7 +131,7 @@ settings = Settings()
 MODELS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 
 # -----------------------------------------------------------------
-# STRUCTURED JSON LOGGING
+# LOGGING
 # -----------------------------------------------------------------
 
 def _build_logger(name: str) -> logging.Logger:
@@ -169,7 +151,7 @@ def _build_logger(name: str) -> logging.Logger:
 logger = _build_logger("tropicare")
 
 # -----------------------------------------------------------------
-# PROMETHEUS CUSTOM METRICS
+# PROMETHEUS METRICS
 # -----------------------------------------------------------------
 
 OPENROUTER_LATENCY = Histogram(
@@ -190,7 +172,7 @@ DB_POOL_IDLE   = Gauge("tropicare_db_pool_idle",   "DB pool idle connections")
 SESSION_CLEANUP_RUNS = Counter("tropicare_session_cleanup_runs_total", "Session cleanup scheduler runs")
 
 # -----------------------------------------------------------------
-# REDIS CLIENT
+# REDIS
 # -----------------------------------------------------------------
 
 _redis: Optional[Any] = None
@@ -281,7 +263,7 @@ def _on_checkout(dbapi_conn, conn_record, conn_proxy):
 
 
 # -----------------------------------------------------------------
-# MODELS
+# ORM MODELS
 # -----------------------------------------------------------------
 
 class UserModel(Base):
@@ -630,12 +612,43 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
     return None
 
 
+# -----------------------------------------------------------------
+# FIX: predict_with_ml
+#
+# Previous behaviour: always returned a prediction. When all answers
+# were No, the scoring fallback picked the least-penalised disease
+# (Allergy, with only 9 symptoms) and clamped confidence to 0.35.
+#
+# Fixed behaviour:
+#   1. Count yes_count before doing anything.
+#   2. If yes_count < 2, return disease=None immediately.
+#   3. After ML predict_proba, if confidence < 0.15, return disease=None.
+#   4. After scoring fallback, if best_score <= 0 or yes_count < 2,
+#      return disease=None.
+#   5. Confidence floor of 0.35 replaced with 0.10 and only applied
+#      when a real prediction is being made.
+# -----------------------------------------------------------------
+
 def predict_with_ml(answers: dict) -> dict:
     ensemble = LOADED_MODELS.get("sctd_ensemble")
     le       = LOADED_MODELS.get("sctd_label_encoder")
     cols     = LOADED_MODELS.get("sctd_feature_columns")
     risk_map = LOADED_MODELS.get("sctd_risk_classification") or RISK_MAP
 
+    # Count confirmed symptoms first — this gates every path below.
+    yes_count = sum(1 for v in answers.values() if v is True)
+
+    # Fewer than 2 confirmed symptoms cannot support any meaningful prediction.
+    if yes_count < 2:
+        return {
+            "disease":    None,
+            "confidence": 0.0,
+            "risk":       "None",
+            "all_scores": {},
+            "method":     "insufficient_evidence",
+        }
+
+    # --- ML path ---
     if ensemble and le and cols:
         try:
             feature_cols = list(cols)
@@ -644,9 +657,20 @@ def predict_with_ml(answers: dict) -> dict:
             ).reshape(1, -1)
             proba      = ensemble.predict_proba(vec)[0]
             idx        = int(np.argmax(proba))
-            disease    = le.inverse_transform([idx])[0]
             confidence = float(proba[idx])
-            all_probs  = {
+
+            # If the model is not confident enough, do not force a prediction.
+            if confidence < 0.15:
+                return {
+                    "disease":    None,
+                    "confidence": confidence,
+                    "risk":       "None",
+                    "all_scores": {},
+                    "method":     "insufficient_evidence",
+                }
+
+            disease   = le.inverse_transform([idx])[0]
+            all_probs = {
                 le.inverse_transform([i])[0]: round(float(p), 4)
                 for i, p in enumerate(proba)
             }
@@ -660,13 +684,26 @@ def predict_with_ml(answers: dict) -> dict:
         except Exception as e:
             logger.warning({"event": "ml_predict_failed", "error": str(e)})
 
+    # --- Scoring fallback ---
     scores        = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    best_disease, _ = sorted_scores[0]
+    best_disease, best_score = sorted_scores[0]
 
-    syms      = DISEASE_SYMPTOM_MAP.get(best_disease, [])
-    yes_count = sum(1 for s in syms if answers.get(s) is True)
-    confidence = min(0.95, max(0.35, yes_count / max(len(syms), 1)))
+    # If the best score is still zero or negative, no disease is positively
+    # supported by the answers — do not force a prediction.
+    if best_score <= 0:
+        return {
+            "disease":    None,
+            "confidence": 0.0,
+            "risk":       "None",
+            "all_scores": {},
+            "method":     "insufficient_evidence",
+        }
+
+    syms         = DISEASE_SYMPTOM_MAP.get(best_disease, [])
+    yes_for_best = sum(1 for s in syms if answers.get(s) is True)
+    # Use the actual ratio; floor of 0.10 only applies when a real prediction exists.
+    confidence   = min(0.95, max(0.10, yes_for_best / max(len(syms), 1)))
 
     all_scores: Dict[str, float] = {}
     for d, _ in sorted_scores[:8]:
@@ -682,6 +719,7 @@ def predict_with_ml(answers: dict) -> dict:
         "method":     "scoring",
     }
 
+
 # -----------------------------------------------------------------
 # OPENROUTER AI
 # -----------------------------------------------------------------
@@ -692,6 +730,11 @@ _RETRY_TIMES = 2
 
 
 async def _do_openrouter_request(headers: dict, payload: dict) -> Optional[dict]:
+    """
+    FIX: use a single aiohttp.ClientSession for the POST. The previous
+    implementation created two sessions (one in call_openrouter and one
+    here), which left the outer session open and leaked connections.
+    """
     async with aiohttp.ClientSession() as session:
         async with session.post(
             settings.openrouter_url,
@@ -850,6 +893,7 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
         }
     return {**default, "explanation": f"Your symptoms are consistent with {disease}."}
 
+
 # -----------------------------------------------------------------
 # PYDANTIC SCHEMAS
 # -----------------------------------------------------------------
@@ -882,6 +926,7 @@ class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password:     str
 
+
 # -----------------------------------------------------------------
 # AUTH HELPERS
 # -----------------------------------------------------------------
@@ -906,7 +951,6 @@ def verify_token(creds: HTTPAuthorizationCredentials = Depends(security)) -> int
 
 
 def verify_admin(user_id: int = Depends(verify_token)) -> int:
-    """Dependency that checks the caller is the configured admin user."""
     if user_id != settings.admin_user_id:
         raise HTTPException(status_code=403, detail="Admin access only")
     return user_id
@@ -919,20 +963,50 @@ def hash_pw(pw: str) -> str:
 
 
 def verify_pw(pw: str, stored: str) -> bool:
+    """
+    FIX: The previous implementation detected legacy SHA-256 hashes by checking
+    if len(hashed) == 64, but PBKDF2-SHA-256 also produces a 64-character hex
+    string, so every PBKDF2 hash was being treated as legacy SHA-256 and failing.
+
+    Correct detection: PBKDF2 hex output of sha256 with 260,000 iterations is
+    64 hex chars (32 bytes). Legacy SHA-256 of (salt+password) is also 64 hex
+    chars. The only reliable way to distinguish them is to attempt PBKDF2 first
+    and then fall back to legacy SHA-256, or to store a format tag.
+
+    We use a try-both approach: attempt PBKDF2 first (the current format), and
+    only fall back to legacy if we have evidence the stored hash was created with
+    the old scheme. Since both produce 64-char hex strings, we attempt PBKDF2
+    and also check the legacy formula, accepting whichever matches.
+    """
     try:
-        salt, hashed = stored.split(":", 1)
-        if len(hashed) == 64:
-            import hashlib as _hl
-            return _hl.sha256((salt + pw).encode()).hexdigest() == hashed
-        return hashlib.pbkdf2_hmac("sha256", pw.encode(), salt.encode(), 260_000).hex() == hashed
+        parts = stored.split(":", 1)
+        if len(parts) != 2:
+            return False
+        salt, hashed = parts
+
+        # Attempt PBKDF2 (current format produced by hash_pw).
+        pbkdf2_result = hashlib.pbkdf2_hmac(
+            "sha256", pw.encode(), salt.encode(), 260_000
+        ).hex()
+        if pbkdf2_result == hashed:
+            return True
+
+        # Attempt legacy SHA-256 (salt + password concatenated).
+        legacy_result = hashlib.sha256((salt + pw).encode()).hexdigest()
+        if legacy_result == hashed:
+            return True
+
+        return False
     except Exception:
         return False
+
 
 # -----------------------------------------------------------------
 # RATE LIMITER
 # -----------------------------------------------------------------
 
 limiter = Limiter(key_func=get_remote_address, enabled=settings.enable_rate_limiting)
+
 
 # -----------------------------------------------------------------
 # BACKGROUND SCHEDULER
@@ -962,22 +1036,21 @@ async def _cleanup_stale_sessions() -> None:
     finally:
         db.close()
 
+
 # -----------------------------------------------------------------
 # LIFESPAN
 # -----------------------------------------------------------------
 
-_aiohttp_session: Optional[aiohttp.ClientSession] = None
 _pending_requests: int = 0
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _aiohttp_session
+    global _pending_requests
 
     Base.metadata.create_all(bind=engine)
     load_ml_models()
     start_model_watcher()
-    _aiohttp_session = aiohttp.ClientSession()
 
     await get_redis()
 
@@ -995,13 +1068,13 @@ async def lifespan(app: FastAPI):
         await asyncio.sleep(0.5)
 
     _scheduler.shutdown(wait=False)
-    if _aiohttp_session:
-        await _aiohttp_session.close()
     stop_model_watcher()
-    if _redis:
-        await _redis.close()
+    r = await get_redis()
+    if r:
+        await r.close()
     engine.dispose()
     logger.info({"event": "shutdown_complete"})
+
 
 # -----------------------------------------------------------------
 # APP
@@ -1016,9 +1089,7 @@ app = FastAPI(
 
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-
 app.add_middleware(GZipMiddleware, minimum_size=1024)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.origins_list,
@@ -1115,6 +1186,7 @@ async def request_middleware(request: Request, call_next):
 
     return response
 
+
 # -----------------------------------------------------------------
 # PASSWORD RATE LIMITING
 # -----------------------------------------------------------------
@@ -1139,6 +1211,7 @@ async def _check_password_rate_limit(email: str) -> None:
     except Exception:
         pass
 
+
 # -----------------------------------------------------------------
 # HEALTH ENDPOINTS
 # -----------------------------------------------------------------
@@ -1161,13 +1234,14 @@ async def health_live():
 
 @app.get("/health/ready")
 async def health_ready():
+    import sqlalchemy
     checks: Dict[str, str] = {}
 
     try:
         await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: SessionLocal().execute(__import__("sqlalchemy").text("SELECT 1"))
+                lambda: SessionLocal().execute(sqlalchemy.text("SELECT 1"))
             ),
             timeout=5,
         )
@@ -1188,17 +1262,16 @@ async def health_ready():
     if settings.openrouter_api_key:
         try:
             async with aiohttp.ClientSession() as s:
-                async with s.get("https://openrouter.ai", timeout=aiohttp.ClientTimeout(total=5)) as r:
-                    checks["openrouter"] = "ok" if r.status < 500 else f"fail: {r.status}"
+                async with s.get("https://openrouter.ai", timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    checks["openrouter"] = "ok" if resp.status < 500 else f"fail: {resp.status}"
         except Exception as e:
             checks["openrouter"] = f"fail: {e}"
     else:
         checks["openrouter"] = "not_configured"
 
     all_ok = all(v in ("ok", "disabled", "not_configured") for v in checks.values())
-    status_code = 200 if all_ok else 503
     return JSONResponse(
-        status_code=status_code,
+        status_code=200 if all_ok else 503,
         content={"status": "ready" if all_ok else "not_ready", "checks": checks},
     )
 
@@ -1208,6 +1281,7 @@ async def health_startup():
     if ML_STARTUP_COMPLETE.is_set():
         return {"status": "started", "models": list(LOADED_MODELS.keys())}
     return JSONResponse(status_code=503, content={"status": "loading"})
+
 
 # -----------------------------------------------------------------
 # ROUTES - Auth
@@ -1248,6 +1322,7 @@ async def login(request: Request, req: LoginRequest, db: Session = Depends(get_d
         "user":         {"id": user.id, "email": user.email, "name": user.name},
     }
 
+
 # -----------------------------------------------------------------
 # ROUTES - Assessment
 # -----------------------------------------------------------------
@@ -1268,7 +1343,11 @@ async def start_assessment(
     )
     db.add(session)
     db.commit()
-    await cache_set(f"session:{sid}", _dump_json({"answers": {}, "asked": [], "completed": False}), ttl=3600)
+    await cache_set(
+        f"session:{sid}",
+        _dump_json({"answers": {}, "asked": [], "completed": False}),
+        ttl=3600,
+    )
     return {
         "session_id":      sid,
         "first_question":  ALL_QUESTIONS[0],
@@ -1325,6 +1404,7 @@ async def next_question(
 
     return {"completed": False, "next_question": next_q}
 
+
 # -----------------------------------------------------------------
 # ROUTES - Diagnosis
 # -----------------------------------------------------------------
@@ -1351,8 +1431,37 @@ async def analyze(
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    answers     = _load_json(s.answers, {})
-    pred        = predict_with_ml(answers)
+    answers = _load_json(s.answers, {})
+    pred    = predict_with_ml(answers)
+
+    # FIX: if predict_with_ml determined there is insufficient evidence, return
+    # a clean no-disease response immediately without saving a null record or
+    # calling OpenRouter.
+    if pred["disease"] is None:
+        response_body = {
+            "id":          None,
+            "disease":     None,
+            "confidence":  0.0,
+            "risk":        "None",
+            "explanation": (
+                "No significant symptoms were reported. Based on your answers, "
+                "there are no indicators of the conditions this system screens for."
+            ),
+            "all_scores":  {},
+            "recommendation": {
+                "home_care": "You appear to be in good health based on your responses.",
+                "test":      "No tests are indicated at this time.",
+                "doctor":    "See a doctor if you develop symptoms or feel unwell.",
+                "safety":    "",
+            },
+            "method":  pred["method"],
+            "ai_used": False,
+        }
+        if idem_key:
+            await cache_set(f"idem:{idem_key}", json.dumps(response_body), ttl=86400)
+        return response_body
+
+    # Normal path: a disease was predicted with sufficient confidence.
     active_syms = [k for k, v in answers.items() if v is True]
 
     ai_result: Optional[dict] = None
@@ -1410,6 +1519,7 @@ async def analyze(
         await cache_set(f"idem:{idem_key}", json.dumps(response_body), ttl=86400)
 
     return response_body
+
 
 # -----------------------------------------------------------------
 # ROUTES - Patient History
@@ -1489,6 +1599,25 @@ async def get_diagnosis(
         "explanation": d.ai_explanation,
         "ml_scores":   _load_json(d.ml_scores, {}),
     }
+
+
+@app.delete("/api/v1/patient/history/{diag_id}")
+async def delete_diagnosis(
+    diag_id: int,
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    d = db.query(DiagnosisModel).filter(
+        DiagnosisModel.id == diag_id,
+        DiagnosisModel.user_id == user_id,
+    ).first()
+    if not d:
+        raise HTTPException(status_code=404, detail="Not found")
+    db.delete(d)
+    db.commit()
+    await cache_delete(f"profile:{user_id}")
+    return {"message": "Record deleted"}
+
 
 # -----------------------------------------------------------------
 # ROUTES - User Profile
@@ -1573,12 +1702,9 @@ async def delete_account(
     await cache_delete(f"profile:{user_id}")
     return {"message": "Account deleted"}
 
+
 # -----------------------------------------------------------------
 # ROUTES - Admin
-# All admin routes require verify_admin which enforces:
-#   1. Valid JWT (via verify_token)
-#   2. user_id must match settings.admin_user_id
-# Set ADMIN_USER_ID in your .env file.
 # -----------------------------------------------------------------
 
 @app.get("/api/v1/admin/stats")
@@ -1656,6 +1782,7 @@ async def delete_record(
     await cache_delete("admin:stats")
     return {"message": "Record deleted"}
 
+
 # -----------------------------------------------------------------
 # ROUTES - Admin: Model Reload
 # -----------------------------------------------------------------
@@ -1671,6 +1798,7 @@ async def reload_models(admin_id: int = Depends(verify_admin)):
     for fname in pkl_files:
         await loop.run_in_executor(None, _load_single_model, fname)
     return {"reloaded": pkl_files, "models": list(LOADED_MODELS.keys())}
+
 
 # -----------------------------------------------------------------
 # ENTRYPOINT
