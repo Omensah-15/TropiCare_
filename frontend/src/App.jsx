@@ -1339,10 +1339,6 @@ function AnalyzingScreen() {
 
 // ─────────────────────────────────────────────
 // RESULT SCREEN
-//
-// FIX: When result.disease is null (no symptoms confirmed, or all-No answers),
-// render the "No Symptoms Detected" screen instead of forcing a disease result.
-// This replaces the old behaviour where Allergy would appear at 35% confidence.
 // ─────────────────────────────────────────────
 function ResultScreen({ result, onReset, onNewCheck }) {
 
@@ -1384,7 +1380,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
             <RecBubble
               icon="info"
               label="Good to know"
-              text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition."
+              text="This result does not mean you are definitely healthy, it means your answers did not point to a specific condition."
               accent="#8b5cf6"
               bg="#f5f3ff"
             />
