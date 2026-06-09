@@ -9,7 +9,7 @@
  *    const src     = imgPath || catPath;
  *    if (src) return <img src={src} alt={question.category} ... />
  *    // else renders inline SVG
- *
+ *  
  *  So the three-level chain is:
  *    1. Symptom PNG   — SYMPTOM_IMAGES[id]  (specific image for that symptom)
  *    2. Category PNG  — getCategoryImage()  (one image per symptom category)
