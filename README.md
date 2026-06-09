@@ -7,13 +7,13 @@
 ## Demo 1
 
 <div align="center">
-  <img src="https://github.com/Omensah-15/Cleanr_v3/blob/ac9a0ee0fbaf263a06396a0133c55ecb5d8b83c5/docs/demov3.gif" alt="Demo" width="800">
+  <img src="https://github.com/Omensah-15/TropiCare_/blob/837bf29bdba0109786b18e5ebc5457a16fbe1a76/assets/demov1.gif" alt="Demo" width="800">
 </div>
 
 ## Demo 2
 
 <div align="center">
-  <img src="https://github.com/Omensah-15/Cleanr_v3/blob/ac9a0ee0fbaf263a06396a0133c55ecb5d8b83c5/docs/demov3.gif" alt="Demo" width="800">
+  <img src="https://github.com/Omensah-15/TropiCare_/blob/837bf29bdba0109786b18e5ebc5457a16fbe1a76/assets/demov2.gif" alt="Demo" width="800">
 </div>
 
 ### Author
