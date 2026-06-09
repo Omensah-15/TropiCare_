@@ -1,26 +1,5 @@
 /*
  * TropiCare — Symptom Image Registry
- *
- * FALLBACK CHAIN:
- *
- *  App.jsx renders:
- *    const imgPath = SYMPTOM_IMAGES[question.id];
- *    const catPath = getCategoryImage(question.category);
- *    const src     = imgPath || catPath;
- *    if (src) return <img src={src} alt={question.category} ... />
- *    // else renders inline SVG
- *  
- *  So the three-level chain is:
- *    1. Symptom PNG   — SYMPTOM_IMAGES[id]  (specific image for that symptom)
- *    2. Category PNG  — getCategoryImage()  (one image per symptom category)
- *    3. Inline SVG    — always available, rendered when src is null/undefined
- *
- *  SYMPTOM_IMAGES is a plain object. All path strings are kept exactly as
- *  originally written. No async probing, no Proxy.
- *
- *  Runtime protection is handled by installBrokenImageGuard() at the bottom:
- *  a single capture-phase error listener watches every <img> inside .q-illus
- *  and cascades through the fallback chain when a file is missing on the server.
  */
 
 // ─────────────────────────────────────────────────────────────────────────────
