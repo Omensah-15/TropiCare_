@@ -222,16 +222,7 @@ function getNextQuestionOffline(answers, asked) {
 }
 
 // ─────────────────────────────────────────────
-// FIX: predictOffline
-//
-// Previous behaviour: always picked the least-penalised disease even when
-// every answer was No, and clamped confidence to a minimum of 0.35.
-//
-// Fixed behaviour:
-//   - If fewer than 2 symptoms confirmed → return disease: null.
-//   - If the best scoring disease still has a score <= 0 → return disease: null.
-//   - Confidence floor removed; actual ratio is used (minimum 0.10 when a
-//     real prediction is made, never applied when disease is null).
+// PredictOffline
 // ─────────────────────────────────────────────
 function predictOffline(answers) {
   const yesCount = Object.values(answers).filter((v) => v === true).length;
