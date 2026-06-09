@@ -16,6 +16,8 @@
   <img src="https://github.com/Omensah-15/TropiCare_/blob/837bf29bdba0109786b18e5ebc5457a16fbe1a76/assets/demov2.gif" alt="Demo" width="800">
 </div>
 
+---
+
 ### Author
 
 **Mensah Obed**
