@@ -1,7 +1,6 @@
 """
 ========================================================================
-SCTD - Symptom Checker for Tropical Diseases
-Production ML Pipeline
+Tropical Diseases Production ML Pipeline
 
 Architecture
 ------------
