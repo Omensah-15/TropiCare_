@@ -16,6 +16,12 @@
   <img src="https://github.com/Omensah-15/TropiCare_/blob/837bf29bdba0109786b18e5ebc5457a16fbe1a76/assets/demov2.gif" alt="Demo" width="800">
 </div>
 
+## Demo 3 - Testing
+
+<div align="center">
+  <img src="https://github.com/Omensah-15/TropiCare_/blob/8bfca0330a4367087bbb3039e04fb98ca37f5236/assets/demotesting.gif" alt="Demo" width="800">
+</div>
+
 ---
 
 ### Author
