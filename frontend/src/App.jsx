@@ -39,6 +39,14 @@ const api = {
     };
   },
 
+  // Set once from App on mount. Fires whenever the backend rejects the
+  // stored token (expired, corrupted, or signed with a SECRET_KEY that
+  // no longer matches the server's current one). Without this hook a
+  // stale token causes every protected screen to silently show empty
+  // data forever, which looks like "the database isn't loading" but is
+  // actually an auth failure.
+  onUnauthorized: null,
+
   async call(method, path, body) {
     const res = await fetch(`${API_BASE}${path}`, {
       method,
@@ -46,6 +54,9 @@ const api = {
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });
     if (!res.ok) {
+      if (res.status === 401 && api.onUnauthorized) {
+        api.onUnauthorized();
+      }
       const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || `HTTP ${res.status}`);
     }
@@ -936,6 +947,19 @@ export default function App() {
     setNotif("");
     toast("Signed out successfully.");
   }, [toast]);
+
+  // Whenever any API call comes back 401 (expired token, corrupted token,
+  // or a token signed with a SECRET_KEY the server no longer recognizes),
+  // clear the local session and bounce back to the sign-in screen instead
+  // of leaving every screen silently empty.
+  useEffect(() => {
+    api.onUnauthorized = () => {
+      if (_loggingOut || !user) return;
+      logout();
+      toast("Your session expired. Please sign in again.");
+    };
+    return () => { api.onUnauthorized = null; };
+  }, [logout, toast, user]);
 
   const startAssessment = async () => {
     setAnswers({}); setAsked([]); setQIdx(0);
