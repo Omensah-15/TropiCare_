@@ -11,6 +11,7 @@
 </div>
 
 ![image alt](https://github.com/Omensah-15/TropiCare_/blob/01b3e6ff7c70a4d21081adbaf9d5c59b74c799ef/assets/Mobile_view.png)
+> Mobile View
 ---
 
 ### Author
