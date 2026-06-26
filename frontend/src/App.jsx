@@ -70,8 +70,8 @@ const Store = {
 // ─────────────────────────────────────────────
 // RISK HELPERS
 // ─────────────────────────────────────────────
-const RISK_COLOR = { High: "#e23d3d", Medium: "#e8930f", Low: "#1f9d55" };
-const RISK_BG    = { High: "#fdecec", Medium: "#fef3e0", Low: "#e9f9ee" };
+const RISK_COLOR = { High: "#ef4444", Medium: "#f59e0b", Low: "#22c55e" };
+const RISK_BG    = { High: "#fef2f2", Medium: "#fffbeb", Low: "#f0fdf4" };
 
 // ─────────────────────────────────────────────
 // DISEASE / SYMPTOM DATA
@@ -306,173 +306,137 @@ const injectStyles = () => {
     @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap');
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     :root {
-      --teal:#0c8a7e;--teal-d:#0a6b62;--teal-dd:#074d47;--teal-l:#bdf0ea;--teal-xl:#eefcfa;
-      --teal-rgb:12,138,126;
-      --red:#e23d3d;--red-d:#c22f2f;--red-l:#fdecec;
-      --amber:#e8930f;--amber-d:#b9740a;--amber-l:#fef3e0;
-      --green:#1f9d55;--green-d:#16793f;--green-l:#e9f9ee;
-      --blue:#2f6fed;--blue-d:#1d54c4;--blue-l:#eaf1ff;
-      --purple:#7c5cf0;--purple-d:#5f3fd0;--purple-l:#f1ecfe;
-      --ink:#0b1726;--ink-2:#1a2a3c;--ink-3:#324154;
-      --muted:#5b6b7c;--muted-l:#90a0ae;
-      --border:#dde4ea;--border-l:#eef2f5;
-      --surface:#ffffff;--bg:#f4f7f9;
+      --teal:#0d9488;--teal-d:#0f766e;--teal-l:#ccfbf1;--teal-xl:#f0fdfa;
+      --red:#ef4444;--red-l:#fef2f2;--amber:#f59e0b;--amber-l:#fffbeb;
+      --green:#22c55e;--green-l:#f0fdf4;--blue:#3b82f6;--blue-l:#eff6ff;
+      --purple:#8b5cf6;--purple-l:#f5f3ff;
+      --ink:#0f172a;--ink-2:#1e293b;--ink-3:#334155;
+      --muted:#64748b;--muted-l:#94a3b8;
+      --border:#e2e8f0;--border-l:#f1f5f9;
+      --surface:#ffffff;--bg:#f8fafc;
       --font:'Sora',sans-serif;--display:'Playfair Display',serif;
       --radius-s:10px;--radius:16px;--radius-l:24px;
-      --shadow-xs:0 1px 2px rgba(11,23,38,0.05);
-      --shadow-s:0 1px 4px rgba(11,23,38,0.07),0 1px 2px rgba(11,23,38,0.04);
-      --shadow:0 6px 24px rgba(11,23,38,0.09),0 2px 6px rgba(11,23,38,0.05);
-      --shadow-l:0 14px 48px rgba(11,23,38,0.14),0 4px 12px rgba(11,23,38,0.06);
-      --ease:cubic-bezier(0.4,0,0.2,1);
-      --ease-spring:cubic-bezier(0.34,1.56,0.64,1);
-      --t-fast:150ms var(--ease);
-      --t-med:220ms var(--ease);
-      --t-slow:300ms var(--ease);
-      --focus-ring:0 0 0 3px rgba(12,138,126,0.28);
+      --shadow-s:0 1px 4px rgba(0,0,0,0.06);
+      --shadow:0 4px 20px rgba(0,0,0,0.08);
+      --shadow-l:0 8px 40px rgba(0,0,0,0.12);
     }
-    html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;}
-    body{font-size:15px;}
+    html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;}
     #root{height:100%;}
-    ::selection{background:var(--teal-l);color:var(--teal-dd);}
-    a{color:var(--teal-d);}
-    button,input,select,textarea{font-family:var(--font);}
-    button{cursor:pointer;}
-    button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,[tabindex]:focus-visible{outline:none;box-shadow:var(--focus-ring);}
-    .shell{display:flex;height:100vh;overflow:hidden;background:var(--bg);}
-    .sidebar{width:240px;min-height:100vh;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;padding:28px 0;transition:width var(--t-med);}
-    .main{flex:1;overflow-y:auto;scroll-behavior:smooth;-webkit-overflow-scrolling:touch;}
-    @media(max-width:1024px){.sidebar{width:208px;}}
-    @media(max-width:767px){.sidebar{display:none;}.main{padding-bottom:76px;}}
+    .shell{display:flex;height:100vh;overflow:hidden;}
+    .sidebar{width:240px;min-height:100vh;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;padding:28px 0;}
+    .main{flex:1;overflow-y:auto;scroll-behavior:smooth;}
+    @media(max-width:767px){.sidebar{display:none;}.main{padding-bottom:72px;}}
     .sidebar-brand{display:flex;align-items:center;gap:10px;padding:0 20px 28px;}
-    .brand-mark{width:36px;height:36px;background:linear-gradient(155deg,var(--teal) 0%,var(--teal-dd) 100%);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 3px 10px rgba(var(--teal-rgb),0.32);}
-    .brand-name{font-family:var(--display);font-size:18px;font-weight:700;color:var(--ink);letter-spacing:-0.2px;}
-    .brand-sub{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:0.04em;text-transform:uppercase;}
+    .brand-mark{width:36px;height:36px;background:var(--teal);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .brand-name{font-family:var(--display);font-size:18px;font-weight:700;color:var(--ink);}
+    .brand-sub{font-size:10px;color:var(--muted);font-weight:500;letter-spacing:0.03em;}
     .sidebar-nav{flex:1;padding:0 10px;}
-    .nav-item{display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px;border-radius:var(--radius-s);border:none;background:none;font-family:var(--font);font-size:14px;font-weight:600;color:var(--muted);cursor:pointer;transition:background var(--t-fast),color var(--t-fast),transform var(--t-fast);margin-bottom:2px;text-align:left;position:relative;}
-    .nav-item:hover{background:var(--teal-xl);color:var(--teal-d);}
-    .nav-item:active{transform:scale(0.98);}
-    .nav-item.active{background:var(--teal-xl);color:var(--teal-d);font-weight:700;}
-    .nav-item.active::before{content:'';position:absolute;left:-10px;top:8px;bottom:8px;width:3px;background:var(--teal);border-radius:0 4px 4px 0;}
+    .nav-item{display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px;border-radius:var(--radius-s);border:none;background:none;font-family:var(--font);font-size:14px;font-weight:500;color:var(--muted);cursor:pointer;transition:all 0.18s;margin-bottom:2px;text-align:left;}
+    .nav-item:hover{background:var(--teal-xl);color:var(--teal);}
+    .nav-item.active{background:var(--teal-xl);color:var(--teal);font-weight:600;}
     .sidebar-foot{padding:16px 10px 0;border-top:1px solid var(--border);margin:0 10px;}
-    .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);display:none;z-index:100;padding:6px 0 calc(6px + env(safe-area-inset-bottom));box-shadow:0 -6px 24px rgba(11,23,38,0.06);}
+    .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);display:none;z-index:100;padding:8px 0 calc(8px + env(safe-area-inset-bottom));}
     @media(max-width:767px){.bottom-nav{display:flex;}}
-    .bnav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 4px;border:none;background:none;font-family:var(--font);font-size:10px;font-weight:700;color:var(--muted-l);cursor:pointer;transition:color var(--t-fast),transform var(--t-fast);min-height:48px;justify-content:center;}
-    .bnav-item:active{transform:scale(0.94);}
-    .bnav-item.active{color:var(--teal-d);}
+    .bnav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 4px;border:none;background:none;font-family:var(--font);font-size:10px;font-weight:600;color:var(--muted-l);cursor:pointer;transition:color 0.15s;}
+    .bnav-item.active{color:var(--teal);}
     .bnav-item svg{width:20px;height:20px;}
-    .page{animation:pageIn var(--t-slow) var(--ease);}
-    @keyframes pageIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:none;}}
+    .page{animation:pageIn 0.25s ease;}
+    @keyframes pageIn{from{opacity:0;transform:translateY(12px);}to{opacity:1;transform:none;}}
     .page-head{padding:24px 24px 0;}
     .page-body{padding:20px 24px 40px;}
-    @media(max-width:767px){.page-head{padding:18px 16px 0;}.page-body{padding:16px 16px 32px;}}
-    @media(max-width:380px){.page-head{padding:16px 12px 0;}.page-body{padding:14px 12px 28px;}}
-    .t-display{font-family:var(--display);font-size:26px;font-weight:700;color:var(--ink);line-height:1.2;letter-spacing:-0.3px;}
-    @media(max-width:480px){.t-display{font-size:22px;}}
+    @media(max-width:767px){.page-head{padding:20px 16px 0;}.page-body{padding:16px 16px 32px;}}
+    .t-display{font-family:var(--display);font-size:26px;font-weight:700;color:var(--ink);line-height:1.2;}
     .t-title{font-size:18px;font-weight:700;color:var(--ink);line-height:1.3;}
     .t-subtitle{font-size:14px;color:var(--muted);font-weight:400;line-height:1.55;}
     .t-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);}
     .t-mono{font-feature-settings:'tnum';}
-    .card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-s);border:1px solid var(--border);transition:box-shadow var(--t-med),transform var(--t-med);}
+    .card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-s);border:1px solid var(--border);}
     .card-p{padding:20px;}
-    @media(max-width:480px){.card-p{padding:16px;}}
-    .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:13px 22px;border-radius:var(--radius-s);font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;border:none;transition:background var(--t-fast),box-shadow var(--t-fast),transform var(--t-fast),opacity var(--t-fast);line-height:1;min-height:44px;}
-    .btn:active:not(:disabled){transform:scale(0.97);}
-    .btn:disabled{opacity:0.5;cursor:not-allowed;}
-    .btn-primary{background:linear-gradient(160deg,var(--teal) 0%,var(--teal-d) 100%);color:#fff;box-shadow:0 4px 14px rgba(var(--teal-rgb),0.3);}
-    .btn-primary:hover:not(:disabled){background:linear-gradient(160deg,var(--teal-d) 0%,var(--teal-dd) 100%);box-shadow:0 8px 22px rgba(var(--teal-rgb),0.38);transform:translateY(-1px);}
-    .btn-primary:active:not(:disabled){transform:translateY(0) scale(0.97);}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:13px 22px;border-radius:var(--radius-s);font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;border:none;transition:all 0.18s;line-height:1;}
+    .btn:active{transform:scale(0.97);}
+    .btn:disabled{opacity:0.55;cursor:not-allowed;}
+    .btn-primary{background:var(--teal);color:#fff;box-shadow:0 4px 14px rgba(13,148,136,0.28);}
+    .btn-primary:hover:not(:disabled){background:var(--teal-d);box-shadow:0 6px 18px rgba(13,148,136,0.36);}
     .btn-secondary{background:var(--border-l);color:var(--ink-2);}
     .btn-secondary:hover:not(:disabled){background:var(--border);}
-    .btn-danger{background:linear-gradient(160deg,var(--red) 0%,var(--red-d) 100%);color:#fff;box-shadow:0 4px 14px rgba(226,61,61,0.28);}
-    .btn-danger:hover:not(:disabled){background:linear-gradient(160deg,var(--red-d) 0%,#9e2424 100%);box-shadow:0 8px 22px rgba(226,61,61,0.34);transform:translateY(-1px);}
-    .btn-danger:active:not(:disabled){transform:translateY(0) scale(0.97);}
-    .btn-outline{background:transparent;color:var(--teal-d);border:2px solid var(--teal);}
+    .btn-danger{background:var(--red);color:#fff;}
+    .btn-danger:hover:not(:disabled){background:#dc2626;}
+    .btn-outline{background:transparent;color:var(--teal);border:2px solid var(--teal);}
     .btn-outline:hover:not(:disabled){background:var(--teal-xl);}
     .btn-full{width:100%;}
-    .btn-lg{padding:16px 28px;font-size:15px;border-radius:var(--radius);min-height:52px;}
-    .btn-sm{padding:9px 16px;font-size:12px;min-height:36px;}
+    .btn-lg{padding:16px 28px;font-size:15px;border-radius:var(--radius);}
+    .btn-sm{padding:9px 16px;font-size:12px;}
     .field{margin-bottom:14px;}
     .field-label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:6px;}
-    .field-input{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:15px;color:var(--ink);background:var(--surface);outline:none;transition:border-color var(--t-fast),box-shadow var(--t-fast);min-height:46px;}
-    .field-input:hover{border-color:var(--muted-l);}
-    .field-input:focus{border-color:var(--teal);box-shadow:var(--focus-ring);}
+    .field-input{width:100%;padding:12px 14px;border:2px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:14px;color:var(--ink);background:var(--surface);outline:none;transition:border-color 0.18s;}
+    .field-input:focus{border-color:var(--teal);}
     .field-input::placeholder{color:var(--muted-l);}
-    .field-select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2390a0ae' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px;cursor:pointer;}
-    .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;letter-spacing:0.01em;}
-    .badge-High{background:var(--red-l);color:var(--red-d);}
-    .badge-Medium{background:var(--amber-l);color:var(--amber-d);}
-    .badge-Low{background:var(--green-l);color:var(--green-d);}
-    .badge-teal{background:var(--teal-xl);color:var(--teal-d);}
-    .prog-track{height:6px;background:var(--border-l);border-radius:99px;overflow:hidden;}
-    .prog-fill{height:100%;background:linear-gradient(90deg,var(--teal-l),var(--teal) 60%,var(--teal-d));border-radius:99px;transition:width var(--t-slow);}
-    .avatar{width:38px;height:38px;border-radius:99px;background:var(--teal-xl);display:flex;align-items:center;justify-content:center;color:var(--teal-d);font-weight:700;font-size:14px;flex-shrink:0;border:1px solid var(--teal-l);}
-    .avatar-lg{width:64px;height:64px;font-size:22px;background:linear-gradient(160deg,var(--teal-l),var(--teal-xl));box-shadow:var(--shadow-s);}
+    .field-select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px;cursor:pointer;}
+    .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;}
+    .badge-High{background:var(--red-l);color:var(--red);}
+    .badge-Medium{background:var(--amber-l);color:#92400e;}
+    .badge-Low{background:var(--green-l);color:#15803d;}
+    .badge-teal{background:var(--teal-xl);color:var(--teal);}
+    .prog-track{height:5px;background:var(--border-l);border-radius:99px;overflow:hidden;}
+    .prog-fill{height:100%;background:linear-gradient(90deg,#2dd4bf,var(--teal));border-radius:99px;transition:width 0.4s cubic-bezier(0.4,0,0.2,1);}
+    .avatar{width:38px;height:38px;border-radius:99px;background:var(--teal-xl);display:flex;align-items:center;justify-content:center;color:var(--teal);font-weight:700;font-size:14px;flex-shrink:0;}
+    .avatar-lg{width:64px;height:64px;font-size:22px;background:linear-gradient(135deg,var(--teal-l),var(--teal-xl));}
     .mx-auto{margin-left:auto;margin-right:auto;}
-    .splash{position:fixed;inset:0;background:linear-gradient(155deg,var(--teal-dd) 0%,#052e2a 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.45s ease;}
+    .splash{position:fixed;inset:0;background:linear-gradient(145deg,var(--teal-d) 0%,#0a4f4a 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.45s ease;}
     .splash.fading{opacity:0;pointer-events:none;}
     .splash-logo{width:76px;height:76px;background:rgba(255,255,255,0.12);border-radius:22px;display:flex;align-items:center;justify-content:center;margin-bottom:20px;border:1px solid rgba(255,255,255,0.18);animation:breathe 2.4s ease-in-out infinite;}
     @keyframes breathe{0%,100%{transform:scale(1);}50%{transform:scale(1.04);}}
     .splash-title{font-family:var(--display);font-size:38px;color:#fff;font-weight:700;letter-spacing:-0.5px;}
-    @media(max-width:480px){.splash-title{font-size:30px;}}
-    .splash-sub{color:rgba(255,255,255,0.62);font-size:13px;margin-top:6px;letter-spacing:0.04em;}
+    .splash-sub{color:rgba(255,255,255,0.6);font-size:13px;margin-top:6px;letter-spacing:0.04em;}
     .splash-dots{display:flex;gap:6px;margin-top:52px;}
     .splash-dot{width:6px;height:6px;border-radius:99px;background:rgba(255,255,255,0.4);animation:dot-bounce 1.3s ease-in-out infinite;}
     .splash-dot:nth-child(2){animation-delay:0.18s;}
     .splash-dot:nth-child(3){animation-delay:0.36s;}
     @keyframes dot-bounce{0%,80%,100%{transform:scale(0.7);opacity:0.4;}40%{transform:scale(1.1);opacity:1;}}
-    .auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:linear-gradient(165deg,var(--teal-xl) 0%,var(--bg) 60%);}
-    @media(max-width:480px){.auth-wrap{padding:18px 14px;}}
+    .auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:linear-gradient(160deg,var(--teal-xl) 0%,var(--bg) 55%);}
     .auth-box{width:100%;max-width:420px;}
     .auth-logo{text-align:center;margin-bottom:36px;}
-    .auth-icon{width:60px;height:60px;background:linear-gradient(160deg,var(--teal) 0%,var(--teal-dd) 100%);border-radius:18px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;box-shadow:0 6px 18px rgba(var(--teal-rgb),0.32);}
-    .auth-title{font-family:var(--display);font-size:28px;color:var(--ink);font-weight:700;letter-spacing:-0.3px;}
-    .auth-hint{font-size:13px;color:var(--muted);margin-top:5px;line-height:1.5;}
+    .auth-icon{width:60px;height:60px;background:var(--teal);border-radius:18px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;}
+    .auth-title{font-family:var(--display);font-size:28px;color:var(--ink);font-weight:700;}
+    .auth-hint{font-size:13px;color:var(--muted);margin-top:5px;}
     .auth-foot{text-align:center;margin-top:18px;font-size:11px;color:var(--muted-l);line-height:1.7;}
     .tabs{display:flex;background:var(--border-l);border-radius:var(--radius-s);padding:4px;margin-bottom:22px;}
-    .tab{flex:1;padding:10px;text-align:center;border-radius:8px;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;border:none;background:none;color:var(--muted);transition:background var(--t-fast),color var(--t-fast),box-shadow var(--t-fast);min-height:40px;}
+    .tab{flex:1;padding:9px;text-align:center;border-radius:8px;font-family:var(--font);font-size:13px;font-weight:600;cursor:pointer;border:none;background:none;color:var(--muted);transition:all 0.18s;}
     .tab.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-s);}
     .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
-    @media(max-width:360px){.grid-2{grid-template-columns:1fr;}}
     .pw-wrap{position:relative;}
-    .pw-toggle{position:absolute;right:13px;top:50%;transform:translateY(-50%);border:none;background:none;cursor:pointer;color:var(--muted-l);display:flex;padding:6px;border-radius:6px;transition:color var(--t-fast),background var(--t-fast);}
-    .pw-toggle:hover{color:var(--teal-d);background:var(--teal-xl);}
+    .pw-toggle{position:absolute;right:13px;top:50%;transform:translateY(-50%);border:none;background:none;cursor:pointer;color:var(--muted-l);display:flex;}
     .home-header{display:flex;align-items:center;justify-content:space-between;padding:24px 24px 16px;}
-    @media(max-width:767px){.home-header{padding:18px 16px 14px;}}
-    .greeting{font-size:12px;color:var(--muted);margin-bottom:3px;font-weight:500;}
-    .hero-card{margin:0 24px 20px;padding:28px;border-radius:var(--radius-l);background:linear-gradient(150deg,var(--teal) 0%,var(--teal-dd) 100%);position:relative;overflow:hidden;box-shadow:0 12px 32px rgba(var(--teal-rgb),0.24);}
+    @media(max-width:767px){.home-header{padding:20px 16px 14px;}}
+    .greeting{font-size:12px;color:var(--muted);margin-bottom:3px;}
+    .hero-card{margin:0 24px 20px;padding:28px;border-radius:var(--radius-l);background:linear-gradient(135deg,var(--teal) 0%,var(--teal-d) 100%);position:relative;overflow:hidden;}
     @media(max-width:767px){.hero-card{margin:0 16px 16px;padding:22px 20px;}}
-    .hero-bg-icon{position:absolute;top:-16px;right:-16px;opacity:0.1;}
-    .hero-eyebrow{font-size:11px;color:rgba(255,255,255,0.7);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;}
+    .hero-bg-icon{position:absolute;top:-16px;right:-16px;opacity:0.08;}
+    .hero-eyebrow{font-size:11px;color:rgba(255,255,255,0.65);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;}
     .hero-headline{font-family:var(--display);font-size:22px;color:#fff;line-height:1.3;margin-bottom:18px;}
-    @media(max-width:480px){.hero-headline{font-size:19px;}}
-    .hero-btn{display:inline-flex;align-items:center;gap:6px;background:#fff;color:var(--teal-dd);font-family:var(--font);font-size:13px;font-weight:700;padding:12px 20px;border-radius:10px;border:none;cursor:pointer;transition:box-shadow var(--t-fast),transform var(--t-fast);min-height:44px;}
-    .hero-btn:hover{box-shadow:0 8px 22px rgba(0,0,0,0.18);transform:translateY(-1px);}
-    .hero-btn:active{transform:translateY(0) scale(0.97);}
+    .hero-btn{display:inline-flex;align-items:center;gap:6px;background:#fff;color:var(--teal-d);font-family:var(--font);font-size:13px;font-weight:700;padding:11px 20px;border-radius:10px;border:none;cursor:pointer;transition:box-shadow 0.18s;}
+    .hero-btn:hover{box-shadow:0 6px 20px rgba(0,0,0,0.15);}
     .stats-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;padding:0 24px 20px;}
     @media(max-width:767px){.stats-row{padding:0 16px 16px;gap:8px;}}
-    .stat-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:16px 12px;text-align:center;transition:box-shadow var(--t-med),transform var(--t-med);}
-    .stat-card:hover{box-shadow:var(--shadow);transform:translateY(-2px);}
+    .stat-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:16px 12px;text-align:center;}
     .stat-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;margin:0 auto 8px;}
     .stat-val{font-size:20px;font-weight:800;color:var(--ink);line-height:1;}
-    @media(max-width:360px){.stat-val{font-size:17px;}}
     .stat-lbl{font-size:10px;color:var(--muted);font-weight:600;margin-top:3px;text-transform:uppercase;letter-spacing:0.05em;}
     .section{padding:0 24px 20px;}
     @media(max-width:767px){.section{padding:0 16px 16px;}}
     .section-ttl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin-bottom:10px;}
     .rec-list{display:flex;flex-direction:column;gap:8px;}
-    .rec-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:box-shadow var(--t-med),transform var(--t-med),border-color var(--t-med);}
-    .rec-card:hover{box-shadow:var(--shadow);border-color:var(--teal-l);transform:translateY(-1px);}
-    .rec-card:active{transform:translateY(0) scale(0.99);}
+    .rec-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:box-shadow 0.18s;}
+    .rec-card:hover{box-shadow:var(--shadow);}
     .rec-icon-wrap{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
     .rec-info{flex:1;min-width:0;}
-    .rec-name{font-size:14px;font-weight:700;color:var(--ink);}
+    .rec-name{font-size:14px;font-weight:600;color:var(--ink);}
     .rec-meta{font-size:12px;color:var(--muted);margin-top:2px;}
     .disease-grid{display:flex;flex-wrap:wrap;gap:6px;}
-    .al-hero{background:linear-gradient(150deg,var(--teal-xl) 0%,#e3f1fb 100%);border-radius:var(--radius-l);padding:28px 24px 24px;margin-bottom:16px;display:flex;gap:20px;align-items:center;border:1px solid var(--teal-l);}
-    @media(max-width:480px){.al-hero{flex-direction:column;text-align:center;padding:22px 18px;}}
+    .al-hero{background:linear-gradient(135deg,var(--teal-xl) 0%,#e0f2fe 100%);border-radius:var(--radius-l);padding:28px 24px 24px;margin-bottom:16px;display:flex;gap:20px;align-items:center;}
+    @media(max-width:480px){.al-hero{flex-direction:column;text-align:center;}}
     .al-hero-text{flex:1;}
     .al-hero-illus{flex-shrink:0;width:120px;height:140px;}
-    @media(max-width:480px){.al-hero-illus{width:96px;height:112px;}}
     .feat-list{display:flex;flex-direction:column;gap:0;}
     .feat-row{display:flex;align-items:flex-start;gap:14px;padding:14px 0;}
     .feat-row+.feat-row{border-top:1px solid var(--border);}
@@ -481,48 +445,40 @@ const injectStyles = () => {
     .feat-desc{font-size:12px;color:var(--muted);line-height:1.55;}
     .q-screen{height:100vh;display:flex;flex-direction:column;background:var(--bg);}
     .q-topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;}
-    @media(max-width:480px){.q-topbar{padding:12px 14px;}}
-    .q-close{width:36px;height:36px;background:var(--border-l);border-radius:8px;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:background var(--t-fast),transform var(--t-fast);}
-    .q-close:hover{background:var(--border);}
-    .q-close:active{transform:scale(0.92);}
+    .q-close{width:34px;height:34px;background:var(--border-l);border-radius:8px;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;}
     .q-counter{font-size:12px;font-weight:700;color:var(--muted);width:38px;text-align:right;flex-shrink:0;}
-    .q-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 20px;overflow-y:auto;}
-    @media(max-width:480px){.q-body{padding:18px 16px;}}
-    .q-cat-pill{display:inline-flex;padding:4px 12px;background:var(--teal-xl);color:var(--teal-d);border-radius:99px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:20px;border:1px solid var(--teal-l);}
+    .q-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 20px;}
+    .q-cat-pill{display:inline-flex;padding:4px 12px;background:var(--teal-xl);color:var(--teal);border-radius:99px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:20px;}
     .q-illus{width:160px;height:160px;margin-bottom:24px;}
-    @media(max-width:480px){.q-illus{width:128px;height:128px;margin-bottom:18px;}}
     .q-illus-svg{width:100%;height:100%;}
     .q-text{font-family:var(--display);font-size:22px;font-weight:700;color:var(--ink);text-align:center;line-height:1.35;margin-bottom:32px;max-width:320px;}
-    @media(max-width:480px){.q-text{font-size:19px;margin-bottom:24px;}}
     .q-answers{display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px;}
-    .ans-btn{display:flex;align-items:center;gap:12px;padding:16px 18px;border-radius:var(--radius);border:2px solid var(--border);background:var(--surface);font-family:var(--font);font-size:15px;font-weight:700;cursor:pointer;transition:border-color var(--t-fast),background var(--t-fast),transform var(--t-fast),box-shadow var(--t-fast);min-height:56px;}
-    .ans-btn:hover{box-shadow:var(--shadow-s);}
+    .ans-btn{display:flex;align-items:center;gap:12px;padding:16px 18px;border-radius:var(--radius);border:2px solid var(--border);background:var(--surface);font-family:var(--font);font-size:15px;font-weight:600;cursor:pointer;transition:all 0.18s;}
     .ans-btn:active{transform:scale(0.97);}
-    .ans-btn.yes{border-color:#5fc9bb;background:var(--teal-xl);color:var(--teal-dd);}
-    .ans-btn.yes:hover{background:var(--teal-l);}
+    .ans-btn.yes{border-color:#2dd4bf;background:var(--teal-xl);color:var(--teal-d);}
+    .ans-btn.yes:hover{background:#ccfbf1;}
     .ans-btn.no{border-color:var(--border);background:var(--border-l);color:var(--ink-3);}
     .ans-btn.no:hover{background:var(--border);}
     .ans-btn-icon{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-    .ans-yes-icon{background:var(--teal-l);}
+    .ans-yes-icon{background:#ccfbf1;}
     .ans-no-icon{background:var(--border);}
-    .q-anim{animation:qSlide var(--t-slow) var(--ease);}
+    .q-anim{animation:qSlide 0.28s cubic-bezier(0.4,0,0.2,1);}
     @keyframes qSlide{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}
-    .analyzing{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);padding:24px;}
+    .analyzing{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);}
     .spin-ring{width:140px;height:140px;margin-bottom:28px;animation:spin-slow 3s linear infinite;}
-    @media(max-width:480px){.spin-ring{width:108px;height:108px;}}
     @keyframes spin-slow{to{transform:rotate(360deg);}}
     .loading-dots{display:flex;gap:7px;margin-top:24px;}
     .ldot{width:9px;height:9px;border-radius:99px;background:var(--teal);animation:dot-bounce 1.2s ease-in-out infinite;}
     .ldot:nth-child(2){animation-delay:0.18s;}
     .ldot:nth-child(3){animation-delay:0.36s;}
-    .result-ring{width:110px;height:110px;border-radius:99px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;animation:ring-in 0.45s var(--ease-spring);}
+    .result-ring{width:110px;height:110px;border-radius:99px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;animation:ring-in 0.45s cubic-bezier(0.34,1.56,0.64,1);}
     @keyframes ring-in{from{transform:scale(0.6);opacity:0;}to{transform:scale(1);opacity:1;}}
-    .result-ring-High{background:linear-gradient(155deg,#fde2e2,#fac6c6);box-shadow:0 0 0 10px rgba(226,61,61,0.09);}
-    .result-ring-Medium{background:linear-gradient(155deg,#fde9c4,#fad596);box-shadow:0 0 0 10px rgba(232,147,15,0.09);}
-    .result-ring-Low{background:linear-gradient(155deg,#d6f3e1,#aee8c4);box-shadow:0 0 0 10px rgba(31,157,85,0.09);}
-    .result-ring-None{background:linear-gradient(155deg,#d6f3e1,#aee8c4);box-shadow:0 0 0 10px rgba(31,157,85,0.09);}
+    .result-ring-High{background:linear-gradient(135deg,#fee2e2,#fecaca);box-shadow:0 0 0 10px rgba(239,68,68,0.08);}
+    .result-ring-Medium{background:linear-gradient(135deg,#fef3c7,#fde68a);box-shadow:0 0 0 10px rgba(245,158,11,0.08);}
+    .result-ring-Low{background:linear-gradient(135deg,#dcfce7,#bbf7d0);box-shadow:0 0 0 10px rgba(34,197,94,0.08);}
+    .result-ring-None{background:linear-gradient(135deg,#dcfce7,#bbf7d0);box-shadow:0 0 0 10px rgba(34,197,94,0.08);}
     .rec-bubbles{display:flex;flex-direction:column;gap:10px;}
-    .rec-bubble{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:var(--radius);border-left:4px solid transparent;background:var(--surface);box-shadow:var(--shadow-s);animation:bubble-in var(--t-slow) ease both;}
+    .rec-bubble{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:var(--radius);border-left:4px solid transparent;background:var(--surface);box-shadow:var(--shadow-s);animation:bubble-in 0.35s ease both;}
     .rec-bubble:nth-child(1){animation-delay:0.05s;}
     .rec-bubble:nth-child(2){animation-delay:0.12s;}
     .rec-bubble:nth-child(3){animation-delay:0.19s;}
@@ -533,100 +489,80 @@ const injectStyles = () => {
     .rec-bubble-text{font-size:13px;color:var(--ink-2);line-height:1.5;font-weight:500;}
     .score-bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px;}
     .score-bar-name{font-size:12px;color:var(--muted);width:150px;flex-shrink:0;}
-    @media(max-width:380px){.score-bar-name{width:104px;font-size:11px;}}
-    .score-bar-track{flex:1;height:5px;background:var(--border-l);border-radius:99px;overflow:hidden;}
-    .score-bar-fill{height:100%;background:linear-gradient(90deg,var(--muted-l),var(--muted));border-radius:99px;transition:width var(--t-slow);}
+    .score-bar-track{flex:1;height:4px;background:var(--border-l);border-radius:99px;overflow:hidden;}
+    .score-bar-fill{height:100%;background:var(--border);border-radius:99px;}
     .score-bar-pct{font-size:12px;color:var(--muted);width:30px;text-align:right;}
-    .disclaimer{display:flex;gap:10px;align-items:flex-start;background:var(--amber-l);border:1px solid #f3cf8f;border-radius:var(--radius-s);padding:12px 14px;}
-    .disclaimer p{font-size:12px;color:#7a4a09;line-height:1.55;}
+    .disclaimer{display:flex;gap:10px;align-items:flex-start;background:var(--amber-l);border:1px solid #fde68a;border-radius:var(--radius-s);padding:12px 14px;}
+    .disclaimer p{font-size:12px;color:#78350f;line-height:1.55;}
     .search-wrap{position:relative;margin-bottom:12px;}
-    .search-icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted-l);pointer-events:none;}
-    .search-input{width:100%;padding:12px 14px 12px 40px;border:1.5px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:14px;color:var(--ink);background:var(--surface);outline:none;transition:border-color var(--t-fast),box-shadow var(--t-fast);min-height:46px;}
-    .search-input:focus{border-color:var(--teal);box-shadow:var(--focus-ring);}
+    .search-icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted-l);}
+    .search-input{width:100%;padding:11px 14px 11px 40px;border:1.5px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:14px;color:var(--ink);background:var(--surface);outline:none;transition:border-color 0.18s;}
+    .search-input:focus{border-color:var(--teal);}
     .chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px;}
-    .chip{padding:7px 14px;border-radius:99px;border:1.5px solid var(--border);font-family:var(--font);font-size:12px;font-weight:700;cursor:pointer;transition:all var(--t-fast);background:var(--surface);color:var(--muted);min-height:36px;}
-    .chip:hover{border-color:var(--muted-l);}
-    .chip.on{border-color:var(--teal);background:var(--teal-xl);color:var(--teal-d);}
+    .chip{padding:6px 14px;border-radius:99px;border:1.5px solid var(--border);font-family:var(--font);font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;background:var(--surface);color:var(--muted);}
+    .chip.on{border-color:var(--teal);background:var(--teal-xl);color:var(--teal);}
     .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:56px 24px;gap:10px;text-align:center;}
     .menu-list{display:flex;flex-direction:column;}
-    .menu-item{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--border);cursor:pointer;transition:opacity var(--t-fast),padding-left var(--t-fast);min-height:48px;}
+    .menu-item{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--border);cursor:pointer;transition:opacity 0.15s;}
     .menu-item:last-child{border-bottom:none;}
-    .menu-item:hover{opacity:0.78;padding-left:4px;}
+    .menu-item:hover{opacity:0.75;}
     .menu-ico{width:34px;height:34px;background:var(--border-l);border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-    .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;gap:12px;}
-    .toggle{position:relative;width:44px;height:25px;flex-shrink:0;}
+    .toggle-row{display:flex;align-items:center;justify-content:space-between;padding:12px 0;}
+    .toggle{position:relative;width:42px;height:23px;}
     .toggle input{opacity:0;width:0;height:0;}
-    .toggle-slider{position:absolute;inset:0;background:var(--border);border-radius:99px;cursor:pointer;transition:background var(--t-fast);}
+    .toggle-slider{position:absolute;inset:0;background:var(--border);border-radius:99px;cursor:pointer;transition:0.28s;}
     .toggle input:checked+.toggle-slider{background:var(--teal);}
-    .toggle input:focus-visible+.toggle-slider{box-shadow:var(--focus-ring);}
-    .toggle-slider::before{content:'';position:absolute;height:19px;width:19px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:transform var(--t-fast);box-shadow:var(--shadow-s);}
+    .toggle-slider::before{content:'';position:absolute;height:17px;width:17px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:0.28s;box-shadow:var(--shadow-s);}
     .toggle input:checked+.toggle-slider::before{transform:translateX(19px);}
     .danger-zone{border:1.5px solid var(--red);border-radius:var(--radius);padding:18px;margin-bottom:20px;}
-    .icon-btn{transition:background var(--t-fast),transform var(--t-fast);min-width:36px;min-height:36px;align-items:center;justify-content:center;}
-    .icon-btn:hover{background:var(--border)!important;}
-    .icon-btn:active{transform:scale(0.92);}
     .flex{display:flex;}.items-c{align-items:center;}.justify-b{justify-content:space-between;}
     .gap-2{gap:8px;}.gap-3{gap:12px;}
     .mt-1{margin-top:4px;}.mt-2{margin-top:8px;}.mt-3{margin-top:12px;}.mt-4{margin-top:16px;}
     .mb-2{margin-bottom:8px;}.mb-3{margin-bottom:12px;}.mb-4{margin-bottom:16px;}
     .w-full{width:100%;}.text-c{text-align:center;}.italic{font-style:italic;}
-    .notif{position:fixed;top:22px;left:50%;transform:translateX(-50%);background:var(--ink-2);color:#fff;padding:11px 22px;border-radius:var(--radius-s);font-size:13px;font-weight:600;z-index:9999;animation:notif-in var(--t-slow) ease;white-space:nowrap;box-shadow:var(--shadow-l);max-width:90vw;overflow:hidden;text-overflow:ellipsis;}
+    .notif{position:fixed;top:22px;left:50%;transform:translateX(-50%);background:var(--ink-2);color:#fff;padding:10px 22px;border-radius:var(--radius-s);font-size:13px;font-weight:500;z-index:9999;animation:notif-in 0.3s ease;white-space:nowrap;}
     @keyframes notif-in{from{opacity:0;transform:translateX(-50%) translateY(-12px);}to{opacity:1;transform:translateX(-50%) translateY(0);}}
     .profile-stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
-    .ps-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:18px 14px;text-align:center;transition:box-shadow var(--t-med),transform var(--t-med);}
-    .ps-card:hover{box-shadow:var(--shadow);transform:translateY(-2px);}
+    .ps-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:18px 14px;text-align:center;}
     .ps-val{font-size:26px;font-weight:800;line-height:1;margin-bottom:4px;}
     .ps-lbl{font-size:10px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:0.07em;}
     .edit-panel{background:var(--border-l);border-radius:var(--radius);padding:18px;margin-bottom:14px;border:1px solid var(--border);}
     .edit-panel-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:14px;}
     .sec-section{margin-bottom:20px;}
     .sec-section-title{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:10px;}
-    .sec-row{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--border);flex-wrap:wrap;}
+    .sec-row{display:flex;align-items:center;gap:12px;padding:14px 0;border-bottom:1px solid var(--border);}
     .sec-row:last-child{border-bottom:none;}
     .sec-row-icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-    .sec-row-body{flex:1;min-width:140px;}
-    .sec-row-label{font-size:14px;font-weight:700;color:var(--ink);margin-bottom:2px;}
-    .sec-row-hint{font-size:12px;color:var(--muted);word-break:break-word;}
+    .sec-row-body{flex:1;min-width:0;}
+    .sec-row-label{font-size:14px;font-weight:600;color:var(--ink);margin-bottom:2px;}
+    .sec-row-hint{font-size:12px;color:var(--muted);}
     .sec-field-wrap{background:var(--border-l);border-radius:var(--radius);padding:16px;margin-top:10px;border:1px solid var(--border);}
-    .about-hero{background:linear-gradient(150deg,var(--teal) 0%,var(--teal-dd) 100%);border-radius:var(--radius-l);padding:28px 24px;margin-bottom:20px;position:relative;overflow:hidden;box-shadow:0 12px 32px rgba(var(--teal-rgb),0.22);}
-    @media(max-width:480px){.about-hero{padding:22px 18px;}}
-    .about-hero-bg{position:absolute;top:-30px;right:-30px;opacity:0.08;}
-    .about-hero-eyebrow{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:rgba(255,255,255,0.65);margin-bottom:8px;}
+    .about-hero{background:linear-gradient(135deg,var(--teal) 0%,var(--teal-d) 100%);border-radius:var(--radius-l);padding:28px 24px;margin-bottom:20px;position:relative;overflow:hidden;}
+    .about-hero-bg{position:absolute;top:-30px;right:-30px;opacity:0.07;}
+    .about-hero-eyebrow{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:rgba(255,255,255,0.6);margin-bottom:8px;}
     .about-hero-title{font-family:var(--display);font-size:28px;color:#fff;font-weight:700;line-height:1.2;margin-bottom:10px;}
-    @media(max-width:480px){.about-hero-title{font-size:24px;}}
-    .about-hero-sub{font-size:13px;color:rgba(255,255,255,0.76);line-height:1.6;}
+    .about-hero-sub{font-size:13px;color:rgba(255,255,255,0.72);line-height:1.6;}
     .about-mission{background:var(--teal-xl);border-radius:var(--radius);border:1px solid var(--teal-l);padding:20px;margin-bottom:16px;}
-    .about-mission-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--teal-d);margin-bottom:8px;}
+    .about-mission-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--teal);margin-bottom:8px;}
     .about-mission-text{font-size:14px;color:var(--ink-2);line-height:1.65;font-weight:500;}
     .about-fact-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
-    @media(max-width:380px){.about-fact-grid{grid-template-columns:1fr 1fr;gap:8px;}}
-    .about-fact{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;transition:box-shadow var(--t-med);}
-    .about-fact:hover{box-shadow:var(--shadow-s);}
-    .about-fact-val{font-family:var(--display);font-size:26px;font-weight:700;color:var(--teal-d);line-height:1;margin-bottom:4px;}
+    .about-fact{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;}
+    .about-fact-val{font-family:var(--display);font-size:26px;font-weight:700;color:var(--teal);line-height:1;margin-bottom:4px;}
     .about-fact-lbl{font-size:11px;color:var(--muted);font-weight:600;}
     .about-feature-row{display:flex;align-items:flex-start;gap:14px;padding:14px 0;border-bottom:1px solid var(--border);}
     .about-feature-row:last-child{border-bottom:none;}
     .about-feature-icon{width:38px;height:38px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
     .about-feature-title{font-size:13px;font-weight:700;color:var(--ink);margin-bottom:3px;}
     .about-feature-desc{font-size:12px;color:var(--muted);line-height:1.55;}
-    .about-team-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:10px;display:flex;align-items:center;gap:14px;transition:box-shadow var(--t-med);}
-    .about-team-card:hover{box-shadow:var(--shadow-s);}
+    .about-team-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px;margin-bottom:10px;display:flex;align-items:center;gap:14px;}
     .about-team-avatar{width:46px;height:46px;border-radius:99px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:16px;flex-shrink:0;}
     .about-team-name{font-size:14px;font-weight:700;color:var(--ink);margin-bottom:2px;}
     .about-team-role{font-size:12px;color:var(--muted);}
-    .about-version-strip{display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid var(--border);gap:12px;}
+    .about-version-strip{display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid var(--border);}
     .about-version-strip:last-child{border-bottom:none;}
     .about-version-key{font-size:13px;color:var(--muted);}
-    .about-version-val{font-size:13px;font-weight:700;color:var(--ink);text-align:right;}
-    .no-symptoms-ring{width:110px;height:110px;border-radius:99px;background:linear-gradient(155deg,#d6f3e1,#aee8c4);box-shadow:0 0 0 10px rgba(31,157,85,0.09);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;animation:ring-in 0.45s var(--ease-spring);}
-    @media(max-width:359px){
-      .stats-row{grid-template-columns:1fr 1fr 1fr;}
-      .q-answers{max-width:100%;}
-      .hero-card{padding:20px 16px;}
-    }
-    @media(min-width:1280px){
-      .page-head, .page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}
-    }
+    .about-version-val{font-size:13px;font-weight:600;color:var(--ink);}
+    .no-symptoms-ring{width:110px;height:110px;border-radius:99px;background:linear-gradient(135deg,#dcfce7,#bbf7d0);box-shadow:0 0 0 10px rgba(34,197,94,0.08);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;animation:ring-in 0.45s cubic-bezier(0.34,1.56,0.64,1);}
   `;
   document.head.appendChild(el);
 };
@@ -638,7 +574,7 @@ function MedicalHeartMark({ size = 22, color = "#fff" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none">
       <path d="M12 21C12 21 3 14.5 3 8.5C3 5.42 5.42 3 8.5 3C10.24 3 11.91 3.81 13 5.08C14.09 3.81 15.76 3 17.5 3C20.58 3 23 5.42 23 8.5C23 14.5 12 21 12 21Z" fill={color} opacity="0.92"/>
-      <polyline points="6,12 8.5,12 9.5,9 10.5,15 11.5,10.5 12.5,13 13.2,12 15.5,12 17.5,12" stroke="#0c8a7e" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+      <polyline points="6,12 8.5,12 9.5,9 10.5,15 11.5,10.5 12.5,13 13.2,12 15.5,12 17.5,12" stroke="#0d9488" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
     </svg>
   );
 }
@@ -646,7 +582,7 @@ function MedicalHeartLarge({ size = 32, color = "#fff" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" fill="none">
       <path d="M16 28C16 28 4 19.5 4 11.5C4 7.36 7.36 4 11.5 4C13.72 4 15.78 5.01 17.2 6.66C18.62 5.01 20.68 4 22.9 4C27.04 4 30.4 7.36 30.4 11.5C30.4 19.5 16 28 16 28Z" fill={color} opacity="0.9"/>
-      <polyline points="8,16 11,16 12.5,12 14,20 15.5,14 16.5,17 17.5,16 20,16 23,16" stroke="#0c8a7e" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+      <polyline points="8,16 11,16 12.5,12 14,20 15.5,14 16.5,17 17.5,16 20,16 23,16" stroke="#0d9488" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
     </svg>
   );
 }
@@ -654,7 +590,7 @@ function MedicalHeartSplash() {
   return (
     <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
       <path d="M22 38C22 38 6 27 6 16C6 10.48 10.48 6 16 6C18.9 6 21.56 7.38 23.2 9.6C24.84 7.38 27.5 6 30.4 6C35.92 6 40 10.48 40 16C40 27 22 38 22 38Z" fill="white" opacity="0.9"/>
-      <polyline points="10,22 15,22 17,16 19,28 21,19 23,24 25,22 29,22 34,22" stroke="#0c8a7e" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
+      <polyline points="10,22 15,22 17,16 19,28 21,19 23,24 25,22 29,22 34,22" stroke="#0d9488" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none"/>
     </svg>
   );
 }
@@ -663,14 +599,14 @@ function HealthProfessionalIllus({ width = 120, height = 140 }) {
     <svg width={width} height={height} viewBox="0 0 120 140" fill="none">
       <circle cx="60" cy="70" r="58" fill="#e0f2f1"/>
       <rect x="30" y="72" width="60" height="60" rx="18" fill="#ffffff"/>
-      <path d="M60 72 L45 80 L45 110 L60 104 L75 110 L75 80 Z" fill="#eefcfa" stroke="#b2dfdb" strokeWidth="1"/>
-      <path d="M48 82 Q44 90 44 98 Q44 106 52 106 Q60 106 60 98" stroke="#0c8a7e" strokeWidth="2.5" fill="none" strokeLinecap="round"/>
-      <circle cx="60" cy="99" r="5" fill="#0c8a7e"/>
-      <circle cx="60" cy="99" r="2.5" fill="#bdf0ea"/>
-      <line x1="48" y1="82" x2="42" y2="76" stroke="#0c8a7e" strokeWidth="2" strokeLinecap="round"/>
-      <circle cx="42" cy="75" r="2" fill="#0c8a7e"/>
+      <path d="M60 72 L45 80 L45 110 L60 104 L75 110 L75 80 Z" fill="#f0fdfa" stroke="#b2dfdb" strokeWidth="1"/>
+      <path d="M48 82 Q44 90 44 98 Q44 106 52 106 Q60 106 60 98" stroke="#0d9488" strokeWidth="2.5" fill="none" strokeLinecap="round"/>
+      <circle cx="60" cy="99" r="5" fill="#0d9488"/>
+      <circle cx="60" cy="99" r="2.5" fill="#ccfbf1"/>
+      <line x1="48" y1="82" x2="42" y2="76" stroke="#0d9488" strokeWidth="2" strokeLinecap="round"/>
+      <circle cx="42" cy="75" r="2" fill="#0d9488"/>
       <rect x="64" y="84" width="18" height="12" rx="3" fill="#e0f2f1" stroke="#b2dfdb" strokeWidth="1"/>
-      <rect x="66" y="86" width="10" height="2" rx="1" fill="#0c8a7e" opacity="0.6"/>
+      <rect x="66" y="86" width="10" height="2" rx="1" fill="#0d9488" opacity="0.6"/>
       <rect x="53" y="58" width="14" height="18" rx="5" fill="#f5cba7"/>
       <ellipse cx="60" cy="46" rx="22" ry="24" fill="#f5cba7"/>
       <path d="M38 42 Q38 22 60 22 Q82 22 82 42 Q82 34 60 32 Q38 34 38 42 Z" fill="#4a3728"/>
@@ -681,12 +617,12 @@ function HealthProfessionalIllus({ width = 120, height = 140 }) {
       <path d="M53 60 Q60 65 67 60" stroke="#c9785c" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
       <ellipse cx="38" cy="48" rx="4" ry="6" fill="#f5cba7"/>
       <ellipse cx="82" cy="48" rx="4" ry="6" fill="#f5cba7"/>
-      <rect x="18" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#dde4ea" strokeWidth="1"/>
-      <rect x="88" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#dde4ea" strokeWidth="1"/>
+      <rect x="18" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1"/>
+      <rect x="88" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#e2e8f0" strokeWidth="1"/>
       <ellipse cx="25" cy="118" rx="7" ry="6" fill="#f5cba7"/>
       <ellipse cx="95" cy="118" rx="7" ry="6" fill="#f5cba7"/>
-      <rect x="56" y="88" width="8" height="2.5" rx="1.25" fill="#0c8a7e" opacity="0.8"/>
-      <rect x="58.75" y="85.25" width="2.5" height="8" rx="1.25" fill="#0c8a7e" opacity="0.8"/>
+      <rect x="56" y="88" width="8" height="2.5" rx="1.25" fill="#0d9488" opacity="0.8"/>
+      <rect x="58.75" y="85.25" width="2.5" height="8" rx="1.25" fill="#0d9488" opacity="0.8"/>
     </svg>
   );
 }
@@ -694,28 +630,28 @@ function HealthProfessionalIllus({ width = 120, height = 140 }) {
 // Category illustrations
 const IllusGeneral = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
-    <circle cx="100" cy="100" r="90" fill="#fdecec"/>
+    <circle cx="100" cy="100" r="90" fill="#fef2f2"/>
     <rect x="91" y="38" width="18" height="82" rx="9" fill="#cbd5e1"/>
-    <rect x="93" y="78" width="14" height="38" rx="7" fill="#e23d3d"/>
-    <circle cx="100" cy="128" r="17" fill="#e23d3d"/>
+    <rect x="93" y="78" width="14" height="38" rx="7" fill="#ef4444"/>
+    <circle cx="100" cy="128" r="17" fill="#ef4444"/>
     <circle cx="141" cy="68" r="20" fill="#fbbf24" opacity="0.25"/>
     <circle cx="141" cy="68" r="13" fill="#fbbf24" opacity="0.55"/>
-    <circle cx="141" cy="68" r="8" fill="#e8930f"/>
+    <circle cx="141" cy="68" r="8" fill="#f59e0b"/>
   </svg>
 );
 const IllusRespiratory = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
-    <circle cx="100" cy="100" r="90" fill="#eaf1ff"/>
-    <line x1="100" y1="58" x2="100" y2="108" stroke="#90a0ae" strokeWidth="5" strokeLinecap="round"/>
-    <path d="M100 88 Q76 88 66 108 Q56 130 70 146 Q84 160 90 150 Q93 140 100 134" stroke="#2f6fed" strokeWidth="7" fill="none" strokeLinecap="round"/>
-    <path d="M100 88 Q124 88 134 108 Q144 130 130 146 Q116 160 110 150 Q107 140 100 134" stroke="#2f6fed" strokeWidth="7" fill="none" strokeLinecap="round"/>
+    <circle cx="100" cy="100" r="90" fill="#eff6ff"/>
+    <line x1="100" y1="58" x2="100" y2="108" stroke="#94a3b8" strokeWidth="5" strokeLinecap="round"/>
+    <path d="M100 88 Q76 88 66 108 Q56 130 70 146 Q84 160 90 150 Q93 140 100 134" stroke="#3b82f6" strokeWidth="7" fill="none" strokeLinecap="round"/>
+    <path d="M100 88 Q124 88 134 108 Q144 130 130 146 Q116 160 110 150 Q107 140 100 134" stroke="#3b82f6" strokeWidth="7" fill="none" strokeLinecap="round"/>
     <ellipse cx="72" cy="146" rx="15" ry="13" fill="#60a5fa"/>
     <ellipse cx="128" cy="146" rx="15" ry="13" fill="#60a5fa"/>
   </svg>
 );
 const IllusDigestive = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
-    <circle cx="100" cy="100" r="90" fill="#e9f9ee"/>
+    <circle cx="100" cy="100" r="90" fill="#f0fdf4"/>
     <path d="M85 58 Q65 70 70 92 Q75 112 92 117 Q96 152 100 162 Q104 152 108 117 Q125 112 130 92 Q135 70 115 58 Q108 53 100 52 Q92 53 85 58Z" fill="#4ade80" opacity="0.55"/>
     <circle cx="80" cy="100" r="7" fill="#4ade80"/>
     <circle cx="120" cy="100" r="7" fill="#4ade80"/>
@@ -723,9 +659,9 @@ const IllusDigestive = () => (
 );
 const IllusLiver = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
-    <circle cx="100" cy="100" r="90" fill="#fef3e0"/>
+    <circle cx="100" cy="100" r="90" fill="#fffbeb"/>
     <path d="M55 80 Q50 112 65 136 Q80 159 112 156 Q147 151 151 121 Q155 91 136 76 Q116 60 90 65 Q64 68 55 80Z" fill="#fbbf24" opacity="0.35"/>
-    <path d="M55 80 Q50 112 65 136 Q80 159 112 156 Q147 151 151 121 Q155 91 136 76 Q116 60 90 65 Q64 68 55 80Z" stroke="#e8930f" strokeWidth="2.5" fill="none"/>
+    <path d="M55 80 Q50 112 65 136 Q80 159 112 156 Q147 151 151 121 Q155 91 136 76 Q116 60 90 65 Q64 68 55 80Z" stroke="#f59e0b" strokeWidth="2.5" fill="none"/>
   </svg>
 );
 const IllusSkin = () => (
@@ -739,45 +675,45 @@ const IllusSkin = () => (
 );
 const IllusUrinary = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
-    <circle cx="100" cy="100" r="90" fill="#eaf1ff"/>
+    <circle cx="100" cy="100" r="90" fill="#eff6ff"/>
     <path d="M80 68 Q60 80 62 106 Q64 132 80 142 L80 162 L120 162 L120 142 Q136 132 138 106 Q140 80 120 68 Z" fill="#93c5fd" opacity="0.7"/>
     <ellipse cx="100" cy="151" rx="20" ry="10" fill="#60a5fa" opacity="0.4"/>
   </svg>
 );
 const IllusEyes = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
-    <circle cx="100" cy="100" r="90" fill="#eaf1ff"/>
-    <path d="M30 100 Q100 50 170 100 Q100 150 30 100Z" fill="#bfdbfe" stroke="#2f6fed" strokeWidth="2"/>
+    <circle cx="100" cy="100" r="90" fill="#eff6ff"/>
+    <path d="M30 100 Q100 50 170 100 Q100 150 30 100Z" fill="#bfdbfe" stroke="#3b82f6" strokeWidth="2"/>
     <circle cx="100" cy="100" r="24" fill="#1d4ed8"/>
-    <circle cx="100" cy="100" r="14" fill="#0b1726"/>
+    <circle cx="100" cy="100" r="14" fill="#0f172a"/>
     <circle cx="108" cy="94" r="5" fill="#fff" opacity="0.8"/>
   </svg>
 );
 const IllusAnalysis = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
-    <circle cx="100" cy="100" r="90" fill="#eefcfa"/>
+    <circle cx="100" cy="100" r="90" fill="#f0fdfa"/>
     <circle cx="100" cy="100" r="52" stroke="#99f6e4" strokeWidth="2.5" fill="none" strokeDasharray="8 4"/>
     <circle cx="100" cy="100" r="36" stroke="#2dd4bf" strokeWidth="2.5" fill="none" strokeDasharray="5 3"/>
-    <circle cx="100" cy="100" r="20" fill="#0c8a7e"/>
+    <circle cx="100" cy="100" r="20" fill="#0d9488"/>
     <path d="M92 100 L98 106 L110 93" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"/>
-    <circle cx="100" cy="48" r="7" fill="#0c8a7e"/>
-    <circle cx="100" cy="152" r="7" fill="#0c8a7e"/>
-    <circle cx="48" cy="100" r="7" fill="#0c8a7e"/>
-    <circle cx="152" cy="100" r="7" fill="#0c8a7e"/>
+    <circle cx="100" cy="48" r="7" fill="#0d9488"/>
+    <circle cx="100" cy="152" r="7" fill="#0d9488"/>
+    <circle cx="48" cy="100" r="7" fill="#0d9488"/>
+    <circle cx="152" cy="100" r="7" fill="#0d9488"/>
   </svg>
 );
 const IllusDoctor = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
-    <circle cx="100" cy="100" r="90" fill="#eefcfa"/>
-    <ellipse cx="100" cy="158" rx="42" ry="28" fill="#0c8a7e"/>
+    <circle cx="100" cy="100" r="90" fill="#f0fdfa"/>
+    <ellipse cx="100" cy="158" rx="42" ry="28" fill="#0d9488"/>
     <circle cx="100" cy="72" r="28" fill="#fde8d8"/>
-    <rect x="72" y="96" width="56" height="62" rx="20" fill="#0c8a7e"/>
+    <rect x="72" y="96" width="56" height="62" rx="20" fill="#0d9488"/>
     <circle cx="88" cy="68" r="4" fill="#5b3a29"/>
     <circle cx="112" cy="68" r="4" fill="#5b3a29"/>
     <path d="M90 83 Q100 91 110 83" stroke="#5b3a29" strokeWidth="2" fill="none" strokeLinecap="round"/>
     <rect x="91" y="116" width="18" height="4" rx="2" fill="#fff"/>
     <rect x="98" y="109" width="4" height="18" rx="2" fill="#fff"/>
-    <ellipse cx="100" cy="44" rx="30" ry="20" fill="#1a2a3c"/>
+    <ellipse cx="100" cy="44" rx="30" ry="20" fill="#1e293b"/>
   </svg>
 );
 
@@ -1068,8 +1004,8 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-foot" style={{ marginTop: "auto" }}>
-          <button className="nav-item" style={{ color: "#e23d3d", width: "100%" }} onClick={logout}>
-            <Icon name="logout" size={16} color="#e23d3d" />
+          <button className="nav-item" style={{ color: "#ef4444", width: "100%" }} onClick={logout}>
+            <Icon name="logout" size={16} color="#ef4444" />
             Sign Out
           </button>
         </div>
@@ -1210,9 +1146,9 @@ function HomeScreen({ userId, user, onStart, onNav }) {
   }, [userId]);
 
   const stats = [
-    { label: "Assessments", val: records.length,                                        icon: "activity", color: "#0c8a7e" },
-    { label: "High Risk",   val: records.filter((r) => r.risk === "High").length,       icon: "alert",    color: "#e23d3d" },
-    { label: "Last Check",  val: records[0] ? fmtDate(records[0].created_at) : "None", icon: "calendar", color: "#2f6fed" },
+    { label: "Assessments", val: records.length,                                        icon: "activity", color: "#0d9488" },
+    { label: "High Risk",   val: records.filter((r) => r.risk === "High").length,       icon: "alert",    color: "#ef4444" },
+    { label: "Last Check",  val: records[0] ? fmtDate(records[0].created_at) : "None", icon: "calendar", color: "#3b82f6" },
   ];
 
   return (
@@ -1289,9 +1225,9 @@ function HomeScreen({ userId, user, onStart, onNav }) {
 // ─────────────────────────────────────────────
 function AssessmentLanding({ onStart }) {
   const features = [
-    { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "#0c8a7e", bg: "#eefcfa" },
-    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "#2f6fed", bg: "#eaf1ff" },
-    { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",           color: "#7c5cf0", bg: "#f1ecfe" },
+    { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "#0d9488", bg: "#f0fdfa" },
+    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "#3b82f6", bg: "#eff6ff" },
+    { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",           color: "#8b5cf6", bg: "#f5f3ff" },
   ];
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -1412,7 +1348,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
       <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
         <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Your Result</div>
-          <button onClick={onReset} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <button onClick={onReset} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
             <Icon name="x" size={16} color="var(--muted)" />
           </button>
         </div>
@@ -1431,22 +1367,22 @@ function ResultScreen({ result, onReset, onNewCheck }) {
               icon="heart"
               label="What this means"
               text="Your answers did not match the symptom patterns for any of the 22 conditions in our database."
-              accent="#16793f"
-              bg="#e9f9ee"
+              accent="#16a34a"
+              bg="#f0fdf4"
             />
             <RecBubble
               icon="user"
               label="Recommendation"
               text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic."
-              accent="#2f6fed"
-              bg="#eaf1ff"
+              accent="#3b82f6"
+              bg="#eff6ff"
             />
             <RecBubble
               icon="info"
               label="Good to know"
               text="This result does not mean you are definitely healthy, it means your answers did not point to a specific condition."
-              accent="#7c5cf0"
-              bg="#f1ecfe"
+              accent="#8b5cf6"
+              bg="#f5f3ff"
             />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -1471,7 +1407,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Your Result</div>
-        <button onClick={onReset} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onReset} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="x" size={16} color="var(--muted)" />
         </button>
       </div>
@@ -1503,10 +1439,10 @@ function ResultScreen({ result, onReset, onNewCheck }) {
         </div>
         <div className="section-ttl mb-2">What to Do</div>
         <div className="rec-bubbles mb-4">
-          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16793f" bg="#e9f9ee" />
-          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#1d54c4" bg="#eaf1ff" />
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16a34a" bg="#f0fdf4" />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#2563eb" bg="#eff6ff" />
           <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}   bg={bg} />
-          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#c22f2f" bg="#fdecec" />}
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />}
         </div>
         {scores.length > 0 && (
           <div className="card card-p mb-4">
@@ -1615,14 +1551,14 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
 }
 
 function RecordDetail({ record, onBack }) {
-  const color = RISK_COLOR[record.risk] || "#0c8a7e";
-  const bg    = RISK_BG[record.risk]   || "#e9f9ee";
+  const color = RISK_COLOR[record.risk] || "#0d9488";
+  const bg    = RISK_BG[record.risk]   || "#f0fdf4";
   const rec   = record.recommendation  || {};
   const syms  = (record.active_symptoms || []).map((s) => s.replace(/_/g, " "));
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Assessment Detail</div>
@@ -1646,10 +1582,10 @@ function RecordDetail({ record, onBack }) {
         </div>
         <div className="section-ttl mb-2">Recommendations</div>
         <div className="rec-bubbles mb-4">
-          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16793f" bg="#e9f9ee" />
-          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#1d54c4" bg="#eaf1ff" />
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16a34a" bg="#f0fdf4" />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#2563eb" bg="#eff6ff" />
           <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}   bg={bg} />
-          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#c22f2f" bg="#fdecec" />}
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#dc2626" bg="#fef2f2" />}
         </div>
         {syms.length > 0 && (
           <div className="card card-p mb-4">
@@ -1778,7 +1714,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             <div className="ps-lbl">Assessments</div>
           </div>
           <div className="ps-card">
-            <div className="ps-val" style={{ color: "#e23d3d" }}>{p.high_risk_count || 0}</div>
+            <div className="ps-val" style={{ color: "#ef4444" }}>{p.high_risk_count || 0}</div>
             <div className="ps-lbl">High Risk</div>
           </div>
         </div>
@@ -1853,14 +1789,14 @@ function MyDataScreen({ onBack, toast }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">My Data</div>
       </div>
       <div className="page-body">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
-          {[["High","#e23d3d"],["Medium","#e8930f"],["Low","#1f9d55"]].map(([r,c]) => (
+          {[["High","#ef4444"],["Medium","#f59e0b"],["Low","#22c55e"]].map(([r,c]) => (
             <div key={r} className="stat-card">
               <div className="stat-val" style={{ color: c }}>{counts[r]}</div>
               <div className="stat-lbl">{r}</div>
@@ -1900,7 +1836,7 @@ function MyDataScreen({ onBack, toast }) {
                 {delId === r.id ? (
                   <div style={{ display: "flex", gap: 6 }}>
                     <button onClick={() => deleteRecord(r.id)}
-                      style={{ border: "none", background: "#e23d3d", color: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                      style={{ border: "none", background: "#ef4444", color: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
                       Confirm
                     </button>
                     <button onClick={() => setDelId(null)}
@@ -1910,8 +1846,8 @@ function MyDataScreen({ onBack, toast }) {
                   </div>
                 ) : (
                   <button onClick={() => deleteRecord(r.id)}
-                    style={{ border: "none", background: "#fdecec", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
-                    <Icon name="trash" size={13} color="#e23d3d" />
+                    style={{ border: "none", background: "#fef2f2", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
+                    <Icon name="trash" size={13} color="#ef4444" />
                   </button>
                 )}
               </div>
@@ -1972,16 +1908,16 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
   };
 
   const privacyPoints = [
-    { icon: "database", color: "#0c8a7e", bg: "var(--teal-xl)", label: "Data stays yours",        desc: "Your assessment history is stored in a secured database tied to your account only." },
-    { icon: "user",     color: "#2f6fed", bg: "#eaf1ff",        label: "No third-party sharing", desc: "Your personal health data is never sold or shared with advertisers or third parties." },
-    { icon: "shield",   color: "#7c5cf0", bg: "#f1ecfe",        label: "Encrypted in transit",   desc: "All data between your device and our servers is protected using HTTPS encryption." },
-    { icon: "trash",    color: "#e23d3d", bg: "#fdecec",        label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
+    { icon: "database", color: "#0d9488", bg: "var(--teal-xl)", label: "Data stays yours",        desc: "Your assessment history is stored in a secured database tied to your account only." },
+    { icon: "user",     color: "#3b82f6", bg: "#eff6ff",        label: "No third-party sharing", desc: "Your personal health data is never sold or shared with advertisers or third parties." },
+    { icon: "shield",   color: "#8b5cf6", bg: "#f5f3ff",        label: "Encrypted in transit",   desc: "All data between your device and our servers is protected using HTTPS encryption." },
+    { icon: "trash",    color: "#ef4444", bg: "#fef2f2",        label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
   ];
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Privacy & Security</div>
@@ -1991,8 +1927,8 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
           <div className="sec-section-title">Account Security</div>
           <div className="card card-p">
             <div className="sec-row" style={{ paddingTop: 0 }}>
-              <div className="sec-row-icon" style={{ background: "#eaf1ff" }}>
-                <Icon name="edit" size={16} color="#2f6fed" />
+              <div className="sec-row-icon" style={{ background: "#eff6ff" }}>
+                <Icon name="edit" size={16} color="#3b82f6" />
               </div>
               <div className="sec-row-body">
                 <div className="sec-row-label">Change Password</div>
@@ -2038,20 +1974,20 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
                 </div>
                 {newPw.length > 0 && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "8px 12px", borderRadius: 8,
-                    background: newPw.length < 8 ? "#fdecec" : "#e9f9ee",
-                    border: `1px solid ${newPw.length < 8 ? "#fac6c6" : "#aee8c4"}` }}>
-                    <Icon name={newPw.length < 8 ? "alert" : "check"} size={13} color={newPw.length < 8 ? "#e23d3d" : "#1f9d55"} />
-                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw.length < 8 ? "#e23d3d" : "#16793f" }}>
+                    background: newPw.length < 8 ? "#fef2f2" : "#f0fdf4",
+                    border: `1px solid ${newPw.length < 8 ? "#fecaca" : "#bbf7d0"}` }}>
+                    <Icon name={newPw.length < 8 ? "alert" : "check"} size={13} color={newPw.length < 8 ? "#ef4444" : "#22c55e"} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw.length < 8 ? "#ef4444" : "#16a34a" }}>
                       {newPw.length < 8 ? `${8 - newPw.length} more character${8 - newPw.length !== 1 ? "s" : ""} needed` : "Password length is good"}
                     </span>
                   </div>
                 )}
                 {confirmPw.length > 0 && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", borderRadius: 8,
-                    background: newPw !== confirmPw ? "#fdecec" : "#e9f9ee",
-                    border: `1px solid ${newPw !== confirmPw ? "#fac6c6" : "#aee8c4"}` }}>
-                    <Icon name={newPw !== confirmPw ? "x" : "check"} size={13} color={newPw !== confirmPw ? "#e23d3d" : "#1f9d55"} />
-                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw !== confirmPw ? "#e23d3d" : "#16793f" }}>
+                    background: newPw !== confirmPw ? "#fef2f2" : "#f0fdf4",
+                    border: `1px solid ${newPw !== confirmPw ? "#fecaca" : "#bbf7d0"}` }}>
+                    <Icon name={newPw !== confirmPw ? "x" : "check"} size={13} color={newPw !== confirmPw ? "#ef4444" : "#22c55e"} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw !== confirmPw ? "#ef4444" : "#16a34a" }}>
                       {newPw !== confirmPw ? "Passwords do not match" : "Passwords match"}
                     </span>
                   </div>
@@ -2094,7 +2030,7 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
         <div className="sec-section">
           <div className="sec-section-title">Danger Zone</div>
           <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
-            <div style={{ fontWeight: 700, color: "#e23d3d", marginBottom: 4, fontSize: 14 }}>Delete Account</div>
+            <div style={{ fontWeight: 700, color: "#ef4444", marginBottom: 4, fontSize: 14 }}>Delete Account</div>
             <div className="t-subtitle mb-3" style={{ fontSize: 13 }}>
               Permanently removes your account and all health records. This cannot be undone.
             </div>
@@ -2123,17 +2059,17 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
 // ─────────────────────────────────────────────
 function AboutScreen({ onBack }) {
   const features = [
-    { icon: "activity",  color: "#0c8a7e", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers — no irrelevant questions, no wasted time." },
-    { icon: "database",  color: "#2f6fed", bg: "#eaf1ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 22 tropical and common diseases." },
-    { icon: "shield",    color: "#7c5cf0", bg: "#f1ecfe",        title: "Risk Stratification",         desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
-    { icon: "heart",     color: "#e23d3d", bg: "#fdecec",        title: "AI-Powered Recommendations",  desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
-    { icon: "clipboard", color: "#e8930f", bg: "#fef3e0",        title: "Assessment History",          desc: "All past results are stored securely so you and your care provider can track changes over time." },
-    { icon: "user",      color: "#1f9d55", bg: "#e9f9ee",        title: "Built for West Africa",       desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
+    { icon: "activity",  color: "#0d9488", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers — no irrelevant questions, no wasted time." },
+    { icon: "database",  color: "#3b82f6", bg: "#eff6ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 22 tropical and common diseases." },
+    { icon: "shield",    color: "#8b5cf6", bg: "#f5f3ff",        title: "Risk Stratification",         desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
+    { icon: "heart",     color: "#ef4444", bg: "#fef2f2",        title: "AI-Powered Recommendations",  desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
+    { icon: "clipboard", color: "#f59e0b", bg: "#fffbeb",        title: "Assessment History",          desc: "All past results are stored securely so you and your care provider can track changes over time." },
+    { icon: "user",      color: "#22c55e", bg: "#f0fdf4",        title: "Built for West Africa",       desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
   ];
   const team = [
-    { initials: "OA", name: "Obed Mensah",          role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0c8a7e", bg: "var(--teal-xl)" },
-    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping", color: "#2f6fed", bg: "#eaf1ff" },
-    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                    color: "#7c5cf0", bg: "#f1ecfe" },
+    { initials: "OA", name: "Obed Mensah",          role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0d9488", bg: "var(--teal-xl)" },
+    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping", color: "#3b82f6", bg: "#eff6ff" },
+    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                    color: "#8b5cf6", bg: "#f5f3ff" },
   ];
   const versionInfo = [
     { key: "Version",     val: "1.0.0" },
@@ -2145,7 +2081,7 @@ function AboutScreen({ onBack }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">About TropiCare</div>
@@ -2295,14 +2231,14 @@ function SettingsScreen({ onBack, toast }) {
       content: (
         <>
           <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
-            <Icon name="shield" size={16} color="#1f9d55" />
+            <Icon name="shield" size={16} color="#22c55e" />
             <div>
               <div style={{ fontWeight: 600, fontSize: 13 }}>Encrypted Storage</div>
               <div className="t-subtitle" style={{ fontSize: 12 }}>All data is secured in transit and at rest</div>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 10 }}>
-            <Icon name="check" size={16} color="#1f9d55" />
+            <Icon name="check" size={16} color="#22c55e" />
             <div>
               <div style={{ fontWeight: 600, fontSize: 13 }}>No Third-Party Sharing</div>
               <div className="t-subtitle" style={{ fontSize: 12 }}>Your health data is never shared</div>
@@ -2316,7 +2252,7 @@ function SettingsScreen({ onBack, toast }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onBack} style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Settings</div>
