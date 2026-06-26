@@ -7,7 +7,7 @@
 ## Demo
 
 <div align="center">
-  <img src="https://github.com/Omensah-15/TropiCare_/blob/837bf29bdba0109786b18e5ebc5457a16fbe1a76/assets/demov1.gif" alt="Demo" width="800">
+  <img src="https://github.com/Omensah-15/TropiCare_/blob/0da92a1ffa95ba40db5893c59436add42eb2ba05/assets/demo_.gif" alt="Demo" width="800">
 </div>
 
 ---
