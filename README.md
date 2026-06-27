@@ -10,8 +10,7 @@ Adaptive symptom checker with ML based disease risk prediction, built for tropic
 
 <div align="center">
   <img src="https://github.com/Omensah-15/TropiCare_/blob/0da92a1ffa95ba40db5893c59436add42eb2ba05/assets/demo_.gif" alt="Demo" width="800">
-</div>
----
+</div>  
 
 ![image alt](https://github.com/Omensah-15/TropiCare_/blob/56523bc5213ed47d35315f4aa111a40b6a2908e8/assets/mobileview.png)
 > Mobile View
