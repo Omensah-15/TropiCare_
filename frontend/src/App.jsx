@@ -333,56 +333,75 @@ const injectStyles = () => {
       --focus-ring:0 0 0 3px rgba(12,138,126,0.28);
     }
 
-    /* ── Dark theme ────────────────────────────────────────────────── */
+    /* ── Dark theme — clean, professional clinical palette ───────────── */
     :root[data-theme="dark"] {
-      --ink:      #d4e4f0;
-      --ink-2:    #b8cfdf;
-      --ink-3:    #96afc2;
-      --muted:    #6a8299;
-      --muted-l:  #4a6278;
-      --border:   #1e3148;
-      --border-l: #162840;
-      --surface:  #132031;
-      --bg:       #0e1b2a;
-      --teal-xl:  #04201c;
-      --teal-l:   #07342e;
-      --teal-d:   #0ea898;
-      --teal-dd:  #0c8a7e;
-      --red-l:    #3a1212;
-      --amber-l:  #2e1f06;
-      --green-l:  #0e2a18;
-      --blue-l:   #0c1e38;
-      --purple-l: #1a1040;
-      --shadow-xs:0 1px 2px rgba(0,0,0,0.25);
-      --shadow-s: 0 1px 4px rgba(0,0,0,0.32),0 1px 2px rgba(0,0,0,0.22);
-      --shadow:   0 6px 24px rgba(0,0,0,0.38),0 2px 6px rgba(0,0,0,0.24);
-      --shadow-l: 0 14px 48px rgba(0,0,0,0.48),0 4px 12px rgba(0,0,0,0.28);
+      --ink:      #e8eef3;
+      --ink-2:    #c3ced9;
+      --ink-3:    #94a3b3;
+      --muted:    #7c8a99;
+      --muted-l:  #4f5d6c;
+      --border:   #263241;
+      --border-l: #1c2733;
+      --surface:  #161f29;
+      --bg:       #0f161e;
+      --teal:     #14b8a6;
+      --teal-d:   #2dd4bf;
+      --teal-dd:  #0e8f80;
+      --teal-l:   #1b3d35;
+      --teal-xl:  #102621;
+      --teal-rgb: 20,184,166;
+      --red:      #f25656;
+      --red-d:    #f87171;
+      --red-l:    #2c1618;
+      --amber:    #e8a838;
+      --amber-d:  #fbbf24;
+      --amber-l:  #2a2013;
+      --green:    #34c77f;
+      --green-d:  #4ade80;
+      --green-l:  #102420;
+      --blue:     #5b8def;
+      --blue-d:   #7ea8f5;
+      --blue-l:   #142233;
+      --purple:   #9b86f3;
+      --purple-d: #b3a2f7;
+      --purple-l: #1d1a33;
+      --shadow-xs:0 1px 2px rgba(0,0,0,0.30);
+      --shadow-s: 0 1px 4px rgba(0,0,0,0.35),0 1px 2px rgba(0,0,0,0.24);
+      --shadow:   0 6px 24px rgba(0,0,0,0.42),0 2px 6px rgba(0,0,0,0.26);
+      --shadow-l: 0 14px 48px rgba(0,0,0,0.52),0 4px 12px rgba(0,0,0,0.30);
+      --focus-ring: 0 0 0 3px rgba(20,184,166,0.30);
     }
 
     /* Risk badges — dark mode */
-    :root[data-theme="dark"] .badge-High   { background:#3a1212; color:#f4a0a0; }
-    :root[data-theme="dark"] .badge-Medium { background:#2e1f06; color:#f0b860; }
-    :root[data-theme="dark"] .badge-Low    { background:#0e2a18; color:#6ddc96; }
-    :root[data-theme="dark"] .badge-teal   { background:#04201c; color:#0ea898; }
+    :root[data-theme="dark"] .badge-High   { background:var(--red-l); color:var(--red-d); }
+    :root[data-theme="dark"] .badge-Medium { background:var(--amber-l); color:var(--amber-d); }
+    :root[data-theme="dark"] .badge-Low    { background:var(--green-l); color:var(--green-d); }
+    :root[data-theme="dark"] .badge-teal   { background:var(--teal-xl); color:var(--teal-d); }
 
     /* Structural surfaces — dark mode */
     :root[data-theme="dark"] .shell         { background:var(--bg); }
     :root[data-theme="dark"] .sidebar       { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .bottom-nav    { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .bottom-nav    { background:var(--surface); border-color:var(--border); box-shadow:0 -6px 24px rgba(0,0,0,0.3); }
     :root[data-theme="dark"] .nav-item:hover,
     :root[data-theme="dark"] .nav-item.active { background:var(--teal-xl); color:var(--teal-d); }
+    :root[data-theme="dark"] .card { box-shadow:var(--shadow-s); }
 
     /* Auth */
     :root[data-theme="dark"] .auth-wrap {
-      background:linear-gradient(165deg,#04201c 0%,#0e1b2a 60%);
+      background:linear-gradient(165deg,#102621 0%,#0f161e 60%);
     }
+    :root[data-theme="dark"] .auth-box .card { box-shadow:0 12px 40px rgba(0,0,0,0.45); }
 
     /* Inputs */
     :root[data-theme="dark"] .field-input {
-      background:#0e1b2a; color:var(--ink); border-color:var(--border);
+      background:#0c1218; color:var(--ink); border-color:var(--border);
     }
+    :root[data-theme="dark"] .field-input:hover { border-color:var(--muted-l); }
     :root[data-theme="dark"] .field-input:focus { border-color:var(--teal-d); }
     :root[data-theme="dark"] .field-input::placeholder { color:var(--muted-l); }
+    :root[data-theme="dark"] .field-select {
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c8a99' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    }
 
     /* Search */
     :root[data-theme="dark"] .search-input {
@@ -391,40 +410,47 @@ const injectStyles = () => {
     :root[data-theme="dark"] .search-input:focus { border-color:var(--teal-d); }
 
     /* Chips */
+    :root[data-theme="dark"] .chip { background:var(--surface); border-color:var(--border); color:var(--muted); }
+    :root[data-theme="dark"] .chip:hover { border-color:var(--muted-l); }
     :root[data-theme="dark"] .chip.on {
       background:var(--teal-xl); border-color:var(--teal-d); color:var(--teal-d);
     }
 
     /* Tabs */
     :root[data-theme="dark"] .tabs      { background:var(--border-l); }
-    :root[data-theme="dark"] .tab.active{ background:var(--surface); }
+    :root[data-theme="dark"] .tab       { color:var(--muted); }
+    :root[data-theme="dark"] .tab.active{ background:var(--surface); color:var(--ink); }
 
     /* Disclaimer */
-    :root[data-theme="dark"] .disclaimer            { background:#2e1f06; border-color:#5c3e0a; }
-    :root[data-theme="dark"] .disclaimer p          { color:#e8c07a; }
+    :root[data-theme="dark"] .disclaimer            { background:var(--amber-l); border-color:#4a3a1a; }
+    :root[data-theme="dark"] .disclaimer p          { color:var(--amber-d); }
 
     /* Rec bubbles */
     :root[data-theme="dark"] .rec-bubble            { background:var(--surface); }
+    :root[data-theme="dark"] .rec-bubble-text       { color:var(--ink-2); }
 
     /* Score bars */
     :root[data-theme="dark"] .score-bar-fill {
       background:linear-gradient(90deg,var(--muted-l),var(--muted));
     }
+    :root[data-theme="dark"] .score-bar-track { background:var(--border-l); }
 
     /* Result rings */
-    :root[data-theme="dark"] .result-ring-High   { background:linear-gradient(155deg,#3a1212,#561a1a); box-shadow:0 0 0 10px rgba(226,61,61,0.06); }
-    :root[data-theme="dark"] .result-ring-Medium { background:linear-gradient(155deg,#2e1f06,#4a3008); box-shadow:0 0 0 10px rgba(232,147,15,0.06); }
-    :root[data-theme="dark"] .result-ring-Low    { background:linear-gradient(155deg,#0e2a18,#143d22); box-shadow:0 0 0 10px rgba(31,157,85,0.06); }
-    :root[data-theme="dark"] .result-ring-None   { background:linear-gradient(155deg,#0e2a18,#143d22); box-shadow:0 0 0 10px rgba(31,157,85,0.06); }
-    :root[data-theme="dark"] .no-symptoms-ring   { background:linear-gradient(155deg,#0e2a18,#143d22); box-shadow:0 0 0 10px rgba(31,157,85,0.06); }
+    :root[data-theme="dark"] .result-ring-High   { background:linear-gradient(155deg,#241417,#33181c); box-shadow:0 0 0 10px rgba(242,86,86,0.08); }
+    :root[data-theme="dark"] .result-ring-Medium { background:linear-gradient(155deg,#241c10,#332514); box-shadow:0 0 0 10px rgba(232,168,56,0.08); }
+    :root[data-theme="dark"] .result-ring-Low    { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
+    :root[data-theme="dark"] .result-ring-None   { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
+    :root[data-theme="dark"] .no-symptoms-ring   { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
 
     /* Assessment landing hero */
-    :root[data-theme="dark"] .al-hero { background:linear-gradient(150deg,#04201c 0%,#0e1b2a 100%); border-color:var(--teal-l); }
+    :root[data-theme="dark"] .al-hero { background:linear-gradient(150deg,var(--teal-xl) 0%,var(--blue-l) 100%); border-color:var(--teal-l); }
 
     /* About mission */
     :root[data-theme="dark"] .about-mission       { background:var(--teal-xl); border-color:var(--teal-l); }
     :root[data-theme="dark"] .about-mission-label { color:var(--teal-d); }
     :root[data-theme="dark"] .about-mission-text  { color:var(--ink-2); }
+    :root[data-theme="dark"] .about-fact          { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .about-team-card     { background:var(--surface); border-color:var(--border); }
 
     /* Edit / security panels */
     :root[data-theme="dark"] .edit-panel    { background:var(--border-l); border-color:var(--border); }
@@ -435,6 +461,8 @@ const injectStyles = () => {
     :root[data-theme="dark"] .q-topbar       { background:var(--surface); border-color:var(--border); }
     :root[data-theme="dark"] .q-close        { background:var(--border-l); }
     :root[data-theme="dark"] .q-close:hover  { background:var(--border); }
+    :root[data-theme="dark"] .q-cat-pill     { background:var(--teal-xl); color:var(--teal-d); border-color:var(--teal-l); }
+    :root[data-theme="dark"] .prog-track     { background:var(--border-l); }
 
     /* Answer buttons */
     :root[data-theme="dark"] .ans-btn           { background:var(--surface); border-color:var(--border); color:var(--ink); }
@@ -454,6 +482,7 @@ const injectStyles = () => {
     :root[data-theme="dark"] .feat-icon  { background:var(--border-l); }
 
     /* Icon button hover */
+    :root[data-theme="dark"] .icon-btn { background:var(--border-l) !important; }
     :root[data-theme="dark"] .icon-btn:hover { background:var(--border) !important; }
 
     /* Password toggle */
@@ -461,10 +490,18 @@ const injectStyles = () => {
     :root[data-theme="dark"] .pw-toggle:hover  { color:var(--teal-d); background:var(--teal-xl); }
 
     /* Toast */
-    :root[data-theme="dark"] .notif { background:#d4e4f0; color:#0b1726; }
+    :root[data-theme="dark"] .notif { background:#e8eef3; color:#0f161e; box-shadow:var(--shadow-l); }
 
     /* Bottom nav active */
     :root[data-theme="dark"] .bnav-item.active { color:var(--teal-d); }
+
+    /* Hero / about hero gradients stay legible on dark */
+    :root[data-theme="dark"] .hero-card  { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
+    :root[data-theme="dark"] .about-hero { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
+
+    /* Settings theme preview swatches */
+    :root[data-theme="dark"] .theme-preview-swatch { border-color:var(--border); }
+    :root[data-theme="dark"] .theme-preview-swatch.selected { border-color:var(--teal-d); box-shadow:0 0 0 2px rgba(20,184,166,0.2); }
 
     /* ── Base styles ───────────────────────────────────────────────── */
     html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;}
@@ -765,14 +802,22 @@ const injectStyles = () => {
       .page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}
     }
 
-    /* Settings theme preview strip */
-    .theme-preview-strip{display:flex;gap:8px;margin-top:12px;}
-    .theme-preview-swatch{flex:1;height:48px;border-radius:10px;border:2px solid transparent;cursor:pointer;transition:border-color var(--t-fast),transform var(--t-fast);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;letter-spacing:0.04em;}
-    .theme-preview-swatch:hover{transform:translateY(-1px);}
-    .theme-preview-swatch.selected{border-color:var(--teal);}
+    /* Settings theme preview strip — compact, clean, fully rounded pills */
+    .theme-preview-strip{display:flex;gap:6px;margin-top:10px;}
+    .theme-preview-swatch{flex:1;height:40px;border-radius:999px;border:1.5px solid var(--border);cursor:pointer;transition:border-color var(--t-fast),transform var(--t-fast),box-shadow var(--t-fast);display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:0.03em;background:var(--surface);padding:0 10px;}
+    .theme-preview-swatch:hover{transform:translateY(-1px);box-shadow:var(--shadow-s);}
+    .theme-preview-swatch.selected{border-color:var(--teal);box-shadow:0 0 0 2px rgba(var(--teal-rgb),0.15);}
     .theme-preview-swatch.light-sw{background:#f4f7f9;color:#0b1726;}
-    .theme-preview-swatch.dark-sw{background:#0e1b2a;color:#d4e4f0;}
-    .theme-preview-swatch.system-sw{background:linear-gradient(135deg,#f4f7f9 50%,#0e1b2a 50%);color:transparent;}
+    .theme-preview-swatch.dark-sw{background:#0f161e;color:#e8eef3;}
+    .theme-preview-swatch.system-sw{background:linear-gradient(135deg,#f4f7f9 50%,#0f161e 50%);color:var(--ink);}
+    @media(max-width:480px){
+      .theme-preview-strip{gap:5px;}
+      .theme-preview-swatch{height:38px;font-size:10px;padding:0 6px;gap:4px;}
+    }
+    @media(max-width:360px){
+      .theme-preview-swatch{height:36px;font-size:0;gap:0;}
+      .theme-preview-swatch svg{margin:0;}
+    }
   `;
   document.head.appendChild(el);
 };
@@ -1403,7 +1448,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
     <div>
       <div className="home-header">
         <div>
-          <div className="greeting">Good day,</div>
+          <div className="greeting">{getGreeting()}</div>
           <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, color: "var(--ink)" }}>
             {(user?.name || "Patient").split(" ")[0]}
           </div>
@@ -2469,7 +2514,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
           <div className="card card-p">
 
             <div className="t-label mb-2">Theme</div>
-            {/* Visual preview swatches for immediate context */}
+            {/* Compact, fully rounded theme switcher — works cleanly on all screen sizes */}
             <div className="theme-preview-strip">
               {THEME_OPTIONS.map((o) => (
                 <button
@@ -2478,30 +2523,19 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
                   onClick={() => applyTheme(o.val)}
                   aria-pressed={theme === o.val}
                   aria-label={`${o.label} theme`}
+                  title={`${o.label} theme`}
                 >
-                  <span style={{
-                    display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
-                    color: o.val === "dark" ? "#d4e4f0" : o.val === "system" ? "transparent" : "#0b1726",
-                  }}>
-                    <Icon name={o.icon} size={16} color={o.val === "dark" ? "#d4e4f0" : o.val === "system" ? "var(--teal)" : "#0b1726"} />
-                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.05em",
-                      color: o.val === "dark" ? "#d4e4f0" : o.val === "system" ? "var(--ink)" : "#0b1726" }}>
-                      {o.label}
-                    </span>
-                  </span>
+                  <Icon
+                    name={o.icon}
+                    size={14}
+                    color={o.val === "dark" ? "#e8eef3" : o.val === "system" ? "var(--teal)" : "#0b1726"}
+                  />
+                  <span>{o.label}</span>
                 </button>
               ))}
             </div>
-            {/* Chip row for keyboard / assistive tech accessibility */}
-            <div style={{ marginTop: 10 }}>
-              <ChipGroup
-                options={THEME_OPTIONS}
-                value={theme}
-                onChange={applyTheme}
-              />
-            </div>
             {theme === "system" && (
-              <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
                 <Icon name="monitor" size={13} color="var(--muted)" />
                 Follows your device display settings and updates live.
               </div>
@@ -2574,6 +2608,14 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
 // ─────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────
+function getGreeting() {
+  const hour = new Date().getHours();
+  if (hour >= 5 && hour < 12)  return "Good morning,";
+  if (hour >= 12 && hour < 17) return "Good afternoon,";
+  if (hour >= 17 && hour < 21) return "Good evening,";
+  return "Good night,";
+}
+
 function fmtDate(iso) {
   if (!iso) return "";
   return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
