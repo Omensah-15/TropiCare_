@@ -39,12 +39,6 @@ const api = {
     };
   },
 
-  // Set once from App on mount. Fires whenever the backend rejects the
-  // stored token (expired, corrupted, or signed with a SECRET_KEY that
-  // no longer matches the server's current one). Without this hook a
-  // stale token causes every protected screen to silently show empty
-  // data forever, which looks like "the database isn't loading" but is
-  // actually an auth failure.
   onUnauthorized: null,
 
   async call(method, path, body) {
@@ -233,12 +227,11 @@ function getNextQuestionOffline(answers, asked) {
 }
 
 // ─────────────────────────────────────────────
-// PredictOffline
+// OFFLINE PREDICTION
 // ─────────────────────────────────────────────
 function predictOffline(answers) {
   const yesCount = Object.values(answers).filter((v) => v === true).length;
 
-  // Not enough confirmed symptoms to make any meaningful prediction.
   if (yesCount < 2) {
     return {
       disease:     null,
@@ -261,13 +254,11 @@ function predictOffline(answers) {
       const syms = DISEASE_SYMPTOM_MAP[d] || [];
       const yes  = syms.filter((s) => answers[s] === true).length;
       const sc   = scoreDisease(d, answers);
-      // Confidence is the actual yes/symptom ratio — no artificial floor.
       const conf = Math.min(0.95, Math.max(0.10, yes / Math.max(syms.length, 1)));
       return { d, sc, conf, yes };
     })
     .sort((a, b) => b.sc - a.sc);
 
-  // If the best score is zero or negative, no disease is positively supported.
   if (sorted[0].sc <= 0) {
     return {
       disease:     null,
@@ -341,6 +332,141 @@ const injectStyles = () => {
       --t-slow:300ms var(--ease);
       --focus-ring:0 0 0 3px rgba(12,138,126,0.28);
     }
+
+    /* ── Dark theme ────────────────────────────────────────────────── */
+    :root[data-theme="dark"] {
+      --ink:      #d4e4f0;
+      --ink-2:    #b8cfdf;
+      --ink-3:    #96afc2;
+      --muted:    #6a8299;
+      --muted-l:  #4a6278;
+      --border:   #1e3148;
+      --border-l: #162840;
+      --surface:  #132031;
+      --bg:       #0e1b2a;
+      --teal-xl:  #04201c;
+      --teal-l:   #07342e;
+      --teal-d:   #0ea898;
+      --teal-dd:  #0c8a7e;
+      --red-l:    #3a1212;
+      --amber-l:  #2e1f06;
+      --green-l:  #0e2a18;
+      --blue-l:   #0c1e38;
+      --purple-l: #1a1040;
+      --shadow-xs:0 1px 2px rgba(0,0,0,0.25);
+      --shadow-s: 0 1px 4px rgba(0,0,0,0.32),0 1px 2px rgba(0,0,0,0.22);
+      --shadow:   0 6px 24px rgba(0,0,0,0.38),0 2px 6px rgba(0,0,0,0.24);
+      --shadow-l: 0 14px 48px rgba(0,0,0,0.48),0 4px 12px rgba(0,0,0,0.28);
+    }
+
+    /* Risk badges — dark mode */
+    :root[data-theme="dark"] .badge-High   { background:#3a1212; color:#f4a0a0; }
+    :root[data-theme="dark"] .badge-Medium { background:#2e1f06; color:#f0b860; }
+    :root[data-theme="dark"] .badge-Low    { background:#0e2a18; color:#6ddc96; }
+    :root[data-theme="dark"] .badge-teal   { background:#04201c; color:#0ea898; }
+
+    /* Structural surfaces — dark mode */
+    :root[data-theme="dark"] .shell         { background:var(--bg); }
+    :root[data-theme="dark"] .sidebar       { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .bottom-nav    { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .nav-item:hover,
+    :root[data-theme="dark"] .nav-item.active { background:var(--teal-xl); color:var(--teal-d); }
+
+    /* Auth */
+    :root[data-theme="dark"] .auth-wrap {
+      background:linear-gradient(165deg,#04201c 0%,#0e1b2a 60%);
+    }
+
+    /* Inputs */
+    :root[data-theme="dark"] .field-input {
+      background:#0e1b2a; color:var(--ink); border-color:var(--border);
+    }
+    :root[data-theme="dark"] .field-input:focus { border-color:var(--teal-d); }
+    :root[data-theme="dark"] .field-input::placeholder { color:var(--muted-l); }
+
+    /* Search */
+    :root[data-theme="dark"] .search-input {
+      background:var(--surface); color:var(--ink); border-color:var(--border);
+    }
+    :root[data-theme="dark"] .search-input:focus { border-color:var(--teal-d); }
+
+    /* Chips */
+    :root[data-theme="dark"] .chip.on {
+      background:var(--teal-xl); border-color:var(--teal-d); color:var(--teal-d);
+    }
+
+    /* Tabs */
+    :root[data-theme="dark"] .tabs      { background:var(--border-l); }
+    :root[data-theme="dark"] .tab.active{ background:var(--surface); }
+
+    /* Disclaimer */
+    :root[data-theme="dark"] .disclaimer            { background:#2e1f06; border-color:#5c3e0a; }
+    :root[data-theme="dark"] .disclaimer p          { color:#e8c07a; }
+
+    /* Rec bubbles */
+    :root[data-theme="dark"] .rec-bubble            { background:var(--surface); }
+
+    /* Score bars */
+    :root[data-theme="dark"] .score-bar-fill {
+      background:linear-gradient(90deg,var(--muted-l),var(--muted));
+    }
+
+    /* Result rings */
+    :root[data-theme="dark"] .result-ring-High   { background:linear-gradient(155deg,#3a1212,#561a1a); box-shadow:0 0 0 10px rgba(226,61,61,0.06); }
+    :root[data-theme="dark"] .result-ring-Medium { background:linear-gradient(155deg,#2e1f06,#4a3008); box-shadow:0 0 0 10px rgba(232,147,15,0.06); }
+    :root[data-theme="dark"] .result-ring-Low    { background:linear-gradient(155deg,#0e2a18,#143d22); box-shadow:0 0 0 10px rgba(31,157,85,0.06); }
+    :root[data-theme="dark"] .result-ring-None   { background:linear-gradient(155deg,#0e2a18,#143d22); box-shadow:0 0 0 10px rgba(31,157,85,0.06); }
+    :root[data-theme="dark"] .no-symptoms-ring   { background:linear-gradient(155deg,#0e2a18,#143d22); box-shadow:0 0 0 10px rgba(31,157,85,0.06); }
+
+    /* Assessment landing hero */
+    :root[data-theme="dark"] .al-hero { background:linear-gradient(150deg,#04201c 0%,#0e1b2a 100%); border-color:var(--teal-l); }
+
+    /* About mission */
+    :root[data-theme="dark"] .about-mission       { background:var(--teal-xl); border-color:var(--teal-l); }
+    :root[data-theme="dark"] .about-mission-label { color:var(--teal-d); }
+    :root[data-theme="dark"] .about-mission-text  { color:var(--ink-2); }
+
+    /* Edit / security panels */
+    :root[data-theme="dark"] .edit-panel    { background:var(--border-l); border-color:var(--border); }
+    :root[data-theme="dark"] .sec-field-wrap{ background:var(--border-l); border-color:var(--border); }
+
+    /* Question screen */
+    :root[data-theme="dark"] .q-screen       { background:var(--bg); }
+    :root[data-theme="dark"] .q-topbar       { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .q-close        { background:var(--border-l); }
+    :root[data-theme="dark"] .q-close:hover  { background:var(--border); }
+
+    /* Answer buttons */
+    :root[data-theme="dark"] .ans-btn           { background:var(--surface); border-color:var(--border); color:var(--ink); }
+    :root[data-theme="dark"] .ans-btn.yes       { background:var(--teal-xl); border-color:var(--teal-l); color:var(--teal-d); }
+    :root[data-theme="dark"] .ans-btn.no        { background:var(--border-l); border-color:var(--border); color:var(--ink-3); }
+    :root[data-theme="dark"] .ans-yes-icon      { background:var(--teal-l); }
+    :root[data-theme="dark"] .ans-no-icon       { background:var(--border); }
+
+    /* Analyzing */
+    :root[data-theme="dark"] .analyzing { background:var(--bg); }
+
+    /* Toggle slider */
+    :root[data-theme="dark"] .toggle-slider { background:var(--border); }
+
+    /* Menu & feat icons */
+    :root[data-theme="dark"] .menu-ico   { background:var(--border-l); }
+    :root[data-theme="dark"] .feat-icon  { background:var(--border-l); }
+
+    /* Icon button hover */
+    :root[data-theme="dark"] .icon-btn:hover { background:var(--border) !important; }
+
+    /* Password toggle */
+    :root[data-theme="dark"] .pw-toggle        { color:var(--muted-l); }
+    :root[data-theme="dark"] .pw-toggle:hover  { color:var(--teal-d); background:var(--teal-xl); }
+
+    /* Toast */
+    :root[data-theme="dark"] .notif { background:#d4e4f0; color:#0b1726; }
+
+    /* Bottom nav active */
+    :root[data-theme="dark"] .bnav-item.active { color:var(--teal-d); }
+
+    /* ── Base styles ───────────────────────────────────────────────── */
     html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;}
     body{font-size:15px;}
     #root{height:100%;}
@@ -636,8 +762,17 @@ const injectStyles = () => {
       .hero-card{padding:20px 16px;}
     }
     @media(min-width:1280px){
-      .page-head, .page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}
+      .page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}
     }
+
+    /* Settings theme preview strip */
+    .theme-preview-strip{display:flex;gap:8px;margin-top:12px;}
+    .theme-preview-swatch{flex:1;height:48px;border-radius:10px;border:2px solid transparent;cursor:pointer;transition:border-color var(--t-fast),transform var(--t-fast);display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;letter-spacing:0.04em;}
+    .theme-preview-swatch:hover{transform:translateY(-1px);}
+    .theme-preview-swatch.selected{border-color:var(--teal);}
+    .theme-preview-swatch.light-sw{background:#f4f7f9;color:#0b1726;}
+    .theme-preview-swatch.dark-sw{background:#0e1b2a;color:#d4e4f0;}
+    .theme-preview-swatch.system-sw{background:linear-gradient(135deg,#f4f7f9 50%,#0e1b2a 50%);color:transparent;}
   `;
   document.head.appendChild(el);
 };
@@ -702,7 +837,6 @@ function HealthProfessionalIllus({ width = 120, height = 140 }) {
   );
 }
 
-// Category illustrations
 const IllusGeneral = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#fdecec"/>
@@ -806,7 +940,11 @@ function QuestionIllus({ question }) {
   if (src) {
     return (
       <div className="q-illus">
-        <img src={src} alt={question?.category || "symptom"} style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }} />
+        <img
+          src={src}
+          alt={question?.category || "symptom"}
+          style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }}
+        />
       </div>
     );
   }
@@ -842,6 +980,9 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "eye":       return <svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
     case "eyeOff":    return <svg {...p}><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>;
     case "calendar":  return <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
+    case "sun":       return <svg {...p}><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>;
+    case "moon":      return <svg {...p}><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>;
+    case "monitor":   return <svg {...p}><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>;
     default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
@@ -861,7 +1002,7 @@ function Notif({ msg }) {
 function RecBubble({ icon, label, text, accent, bg }) {
   if (!text) return null;
   return (
-    <div className="rec-bubble" style={{ borderLeftColor: accent, background: bg || "#fff" }}>
+    <div className="rec-bubble" style={{ borderLeftColor: accent }}>
       <div className="rec-bubble-icon" style={{ background: `${accent}18` }}>
         <Icon name={icon} size={16} color={accent} />
       </div>
@@ -894,6 +1035,38 @@ export default function App() {
   const [analyzing,  setAnalyzing]  = useState(false);
   const [result,     setResult]     = useState(null);
 
+  // ── Theme state ─────────────────────────────────────────────────────
+  const [theme, setTheme] = useState(() => {
+    const saved = Store.get("tc_settings");
+    return saved?.theme || "light";
+  });
+
+  // Apply data-theme to <html> whenever theme changes.
+  // "system" resolves via matchMedia and re-applies live if the OS preference
+  // changes while the app is open. The event listener is cleaned up on unmount.
+  useEffect(() => {
+    const root = document.documentElement;
+
+    const applyResolved = (resolved) => {
+      root.setAttribute("data-theme", resolved);
+    };
+
+    if (theme === "system") {
+      const mq = window.matchMedia("(prefers-color-scheme: dark)");
+      applyResolved(mq.matches ? "dark" : "light");
+      const handler = (e) => applyResolved(e.matches ? "dark" : "light");
+      mq.addEventListener("change", handler);
+      return () => mq.removeEventListener("change", handler);
+    }
+
+    applyResolved(theme);
+  }, [theme]);
+
+  // Stable callback handed down to SettingsScreen for instant live preview.
+  const handleThemeChange = useCallback((newTheme) => {
+    setTheme(newTheme);
+  }, []);
+
   const MAX_Q = 15;
 
   const toast = useCallback((msg) => {
@@ -907,8 +1080,8 @@ export default function App() {
     const t1 = setTimeout(() => setSplashFade(true), 1900);
     const t2 = setTimeout(() => {
       setSplash(false);
-      const saved = Store.get(USER_KEY);
-      const token = localStorage.getItem(TOKEN_KEY);
+      const saved  = Store.get(USER_KEY);
+      const token  = localStorage.getItem(TOKEN_KEY);
       if (saved && token && saved.token === token) {
         _loggingOut = false;
         setUser(saved);
@@ -948,10 +1121,6 @@ export default function App() {
     toast("Signed out successfully.");
   }, [toast]);
 
-  // Whenever any API call comes back 401 (expired token, corrupted token,
-  // or a token signed with a SECRET_KEY the server no longer recognizes),
-  // clear the local session and bounce back to the sign-in screen instead
-  // of leaving every screen silently empty.
   useEffect(() => {
     api.onUnauthorized = () => {
       if (_loggingOut || !user) return;
@@ -1016,9 +1185,6 @@ export default function App() {
       } catch {}
     }
 
-    // Fall back to offline prediction if backend call failed or no session.
-    // The offline function now returns disease: null when evidence is insufficient,
-    // so we pass it through directly — no special-casing needed here.
     if (!pred) pred = predictOffline(finalAnswers);
 
     if (_loggingOut) return;
@@ -1064,7 +1230,7 @@ export default function App() {
       case "assessment": return <AssessmentLanding onStart={startAssessment} />;
       case "records":    return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
       case "profile":    return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
-      case "settings":   return <SettingsScreen onBack={() => setPage("profile")} toast={toast} />;
+      case "settings":   return <SettingsScreen onBack={() => setPage("profile")} toast={toast} onThemeChange={handleThemeChange} currentTheme={theme} />;
       case "privacy":    return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} onLogout={logout} />;
       case "about":      return <AboutScreen onBack={() => setPage("profile")} />;
       case "mydata":     return <MyDataScreen onBack={() => setPage("profile")} toast={toast} />;
@@ -1092,8 +1258,8 @@ export default function App() {
           ))}
         </nav>
         <div className="sidebar-foot" style={{ marginTop: "auto" }}>
-          <button className="nav-item" style={{ color: "#e23d3d", width: "100%" }} onClick={logout}>
-            <Icon name="logout" size={16} color="#e23d3d" />
+          <button className="nav-item" style={{ color: "var(--red)", width: "100%" }} onClick={logout}>
+            <Icon name="logout" size={16} color="var(--red)" />
             Sign Out
           </button>
         </div>
@@ -1222,21 +1388,15 @@ function HomeScreen({ userId, user, onStart, onNav }) {
   useEffect(() => {
     let cancelled = false;
     api.get("/patient/history")
-      .then((d) => {
-        if (cancelled || _loggingOut) return;
-        setRecords(d.slice(0, 3));
-      })
-      .catch(() => {
-        if (cancelled || _loggingOut) return;
-        setRecords([]);
-      });
+      .then((d) => { if (cancelled || _loggingOut) return; setRecords(d.slice(0, 3)); })
+      .catch(() => { if (cancelled || _loggingOut) return; setRecords([]); });
     return () => { cancelled = true; };
   }, [userId]);
 
   const stats = [
-    { label: "Assessments", val: records.length,                                        icon: "activity", color: "#0c8a7e" },
-    { label: "High Risk",   val: records.filter((r) => r.risk === "High").length,       icon: "alert",    color: "#e23d3d" },
-    { label: "Last Check",  val: records[0] ? fmtDate(records[0].created_at) : "None", icon: "calendar", color: "#2f6fed" },
+    { label: "Assessments", val: records.length,                                        icon: "activity", color: "var(--teal)" },
+    { label: "High Risk",   val: records.filter((r) => r.risk === "High").length,       icon: "alert",    color: "var(--red)"  },
+    { label: "Last Check",  val: records[0] ? fmtDate(records[0].created_at) : "None", icon: "calendar", color: "var(--blue)" },
   ];
 
   return (
@@ -1244,7 +1404,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
       <div className="home-header">
         <div>
           <div className="greeting">Good day,</div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700 }}>
+          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, color: "var(--ink)" }}>
             {(user?.name || "Patient").split(" ")[0]}
           </div>
         </div>
@@ -1256,7 +1416,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
         <div className="hero-eyebrow">Guided Clinical Assessment</div>
         <div className="hero-headline">Check your symptoms in under 2 minutes</div>
         <button className="hero-btn" onClick={onStart}>
-          Start Assessment <Icon name="chevR" size={14} color="var(--teal-d)" />
+          Start Assessment <Icon name="chevR" size={14} color="var(--teal-dd)" />
         </button>
       </div>
 
@@ -1313,9 +1473,9 @@ function HomeScreen({ userId, user, onStart, onNav }) {
 // ─────────────────────────────────────────────
 function AssessmentLanding({ onStart }) {
   const features = [
-    { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "#0c8a7e", bg: "#eefcfa" },
-    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "#2f6fed", bg: "#eaf1ff" },
-    { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",           color: "#7c5cf0", bg: "#f1ecfe" },
+    { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "var(--teal)",   bg: "var(--teal-xl)"  },
+    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "var(--blue)",   bg: "var(--blue-l)"   },
+    { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",           color: "var(--purple)", bg: "var(--purple-l)" },
   ];
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
@@ -1410,7 +1570,12 @@ function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
 // ─────────────────────────────────────────────
 function AnalyzingScreen() {
   const [step, setStep] = useState(0);
-  const steps = ["Processing your responses...","Running diagnostic models...","Calculating risk level...","Preparing your recommendations..."];
+  const steps = [
+    "Processing your responses...",
+    "Running diagnostic models...",
+    "Calculating risk level...",
+    "Preparing your recommendations...",
+  ];
   useEffect(() => {
     const t = setInterval(() => setStep((s) => Math.min(s + 1, steps.length - 1)), 680);
     return () => clearInterval(t);
@@ -1418,7 +1583,9 @@ function AnalyzingScreen() {
   return (
     <div className="analyzing">
       <div className="spin-ring"><IllusAnalysis /></div>
-      <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, textAlign: "center" }}>Analysing Results</div>
+      <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, textAlign: "center", color: "var(--ink)" }}>
+        Analysing Results
+      </div>
       <div className="t-subtitle mt-2 text-c" style={{ minHeight: 22 }}>{steps[step]}</div>
       <div className="loading-dots"><div className="ldot" /><div className="ldot" /><div className="ldot" /></div>
     </div>
@@ -1430,12 +1597,11 @@ function AnalyzingScreen() {
 // ─────────────────────────────────────────────
 function ResultScreen({ result, onReset, onNewCheck }) {
 
-  // ── No-symptom path ──────────────────────────────────────────────
   if (!result.disease) {
     return (
       <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
         <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Your Result</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Your Result</div>
           <button onClick={onReset} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
             <Icon name="x" size={16} color="var(--muted)" />
           </button>
@@ -1444,34 +1610,16 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           <div className="no-symptoms-ring">
             <Icon name="check" size={52} color="var(--green)" />
           </div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 10 }}>
+          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 10, color: "var(--ink)" }}>
             No Symptoms Detected
           </div>
           <div style={{ fontSize: 15, color: "var(--muted)", lineHeight: 1.65, marginBottom: 32, maxWidth: 380, margin: "0 auto 32px" }}>
             Based on your responses, you did not report any significant symptoms. There are no indicators of the conditions this system screens for.
           </div>
           <div className="rec-bubbles mb-4" style={{ textAlign: "left" }}>
-            <RecBubble
-              icon="heart"
-              label="What this means"
-              text="Your answers did not match the symptom patterns for any of the 22 conditions in our database."
-              accent="#16793f"
-              bg="#e9f9ee"
-            />
-            <RecBubble
-              icon="user"
-              label="Recommendation"
-              text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic."
-              accent="#2f6fed"
-              bg="#eaf1ff"
-            />
-            <RecBubble
-              icon="info"
-              label="Good to know"
-              text="This result does not mean you are definitely healthy, it means your answers did not point to a specific condition."
-              accent="#7c5cf0"
-              bg="#f1ecfe"
-            />
+            <RecBubble icon="heart"     label="What this means"  text="Your answers did not match the symptom patterns for any of the 22 conditions in our database." accent="var(--green-d)"  bg="var(--green-l)"  />
+            <RecBubble icon="user"      label="Recommendation"   text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic." accent="var(--blue-d)"  bg="var(--blue-l)"   />
+            <RecBubble icon="info"      label="Good to know"     text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition." accent="var(--purple-d)" bg="var(--purple-l)" />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Retake Assessment</button>
@@ -1482,7 +1630,6 @@ function ResultScreen({ result, onReset, onNewCheck }) {
     );
   }
 
-  // ── Normal disease result path ────────────────────────────────────
   const risk   = result.risk || "Medium";
   const color  = RISK_COLOR[risk];
   const bg     = RISK_BG[risk];
@@ -1494,7 +1641,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Your Result</div>
+        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Your Result</div>
         <button onClick={onReset} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="x" size={16} color="var(--muted)" />
         </button>
@@ -1508,7 +1655,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
         </div>
         <div className="card card-p mb-3 text-c">
           <div className="t-label mb-2">Predicted Condition</div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12 }}>{result.disease}</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12, color: "var(--ink)" }}>{result.disease}</div>
           <div style={{ height: 6, background: "var(--border-l)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
             <div style={{
               height: "100%",
@@ -1527,10 +1674,10 @@ function ResultScreen({ result, onReset, onNewCheck }) {
         </div>
         <div className="section-ttl mb-2">What to Do</div>
         <div className="rec-bubbles mb-4">
-          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16793f" bg="#e9f9ee" />
-          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#1d54c4" bg="#eaf1ff" />
-          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}   bg={bg} />
-          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#c22f2f" bg="#fdecec" />}
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  bg="var(--green-l)"  />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)"   />
+          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}           bg={bg}              />
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" bg="var(--red-l)" />}
         </div>
         {scores.length > 0 && (
           <div className="card card-p mb-4">
@@ -1639,8 +1786,8 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
 }
 
 function RecordDetail({ record, onBack }) {
-  const color = RISK_COLOR[record.risk] || "#0c8a7e";
-  const bg    = RISK_BG[record.risk]   || "#e9f9ee";
+  const color = RISK_COLOR[record.risk] || "var(--teal)";
+  const bg    = RISK_BG[record.risk]   || "var(--green-l)";
   const rec   = record.recommendation  || {};
   const syms  = (record.active_symptoms || []).map((s) => s.replace(/_/g, " "));
   return (
@@ -1649,14 +1796,14 @@ function RecordDetail({ record, onBack }) {
         <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
-        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700 }}>Assessment Detail</div>
+        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Assessment Detail</div>
       </div>
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
         <div className="card card-p text-c mb-3">
           <div className={`result-ring result-ring-${record.risk}`} style={{ width: 90, height: 90 }}>
             <Icon name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"} size={36} color={color} />
           </div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px" }}>{record.disease}</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px", color: "var(--ink)" }}>{record.disease}</div>
           <span className={`badge badge-${record.risk}`}>{record.risk} Risk</span>
           <div className="t-subtitle mt-2" style={{ fontSize: 12 }}>
             {record.patient_name} · {new Date(record.created_at).toLocaleString("en-GB")}
@@ -1670,17 +1817,17 @@ function RecordDetail({ record, onBack }) {
         </div>
         <div className="section-ttl mb-2">Recommendations</div>
         <div className="rec-bubbles mb-4">
-          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="#16793f" bg="#e9f9ee" />
-          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="#1d54c4" bg="#eaf1ff" />
-          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}   bg={bg} />
-          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="#c22f2f" bg="#fdecec" />}
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  bg="var(--green-l)"  />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)"   />
+          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}           bg={bg}              />
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" bg="var(--red-l)" />}
         </div>
         {syms.length > 0 && (
           <div className="card card-p mb-4">
             <div className="section-ttl mb-2">Reported Symptoms ({syms.length})</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {syms.map((s) => (
-                <span key={s} style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal)" }}>
+                <span key={s} style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal-d)" }}>
                   {s}
                 </span>
               ))}
@@ -1802,7 +1949,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             <div className="ps-lbl">Assessments</div>
           </div>
           <div className="ps-card">
-            <div className="ps-val" style={{ color: "#e23d3d" }}>{p.high_risk_count || 0}</div>
+            <div className="ps-val" style={{ color: "var(--red)" }}>{p.high_risk_count || 0}</div>
             <div className="ps-lbl">High Risk</div>
           </div>
         </div>
@@ -1811,7 +1958,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             {menuItems.map((item) => (
               <div key={item.label} className="menu-item" onClick={item.action}>
                 <div className="menu-ico"><Icon name={item.icon} size={16} color="var(--muted)" /></div>
-                <span style={{ flex: 1, fontSize: 14, fontWeight: 500 }}>{item.label}</span>
+                <span style={{ flex: 1, fontSize: 14, fontWeight: 500, color: "var(--ink)" }}>{item.label}</span>
                 <Icon name="chevR" size={14} color="var(--muted-l)" />
               </div>
             ))}
@@ -1884,7 +2031,7 @@ function MyDataScreen({ onBack, toast }) {
       </div>
       <div className="page-body">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
-          {[["High","#e23d3d"],["Medium","#e8930f"],["Low","#1f9d55"]].map(([r,c]) => (
+          {[["High","var(--red)"],["Medium","var(--amber)"],["Low","var(--green)"]].map(([r,c]) => (
             <div key={r} className="stat-card">
               <div className="stat-val" style={{ color: c }}>{counts[r]}</div>
               <div className="stat-lbl">{r}</div>
@@ -1924,7 +2071,7 @@ function MyDataScreen({ onBack, toast }) {
                 {delId === r.id ? (
                   <div style={{ display: "flex", gap: 6 }}>
                     <button onClick={() => deleteRecord(r.id)}
-                      style={{ border: "none", background: "#e23d3d", color: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                      style={{ border: "none", background: "var(--red)", color: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
                       Confirm
                     </button>
                     <button onClick={() => setDelId(null)}
@@ -1934,8 +2081,8 @@ function MyDataScreen({ onBack, toast }) {
                   </div>
                 ) : (
                   <button onClick={() => deleteRecord(r.id)}
-                    style={{ border: "none", background: "#fdecec", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
-                    <Icon name="trash" size={13} color="#e23d3d" />
+                    style={{ border: "none", background: "var(--red-l)", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
+                    <Icon name="trash" size={13} color="var(--red)" />
                   </button>
                 )}
               </div>
@@ -1996,10 +2143,10 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
   };
 
   const privacyPoints = [
-    { icon: "database", color: "#0c8a7e", bg: "var(--teal-xl)", label: "Data stays yours",        desc: "Your assessment history is stored in a secured database tied to your account only." },
-    { icon: "user",     color: "#2f6fed", bg: "#eaf1ff",        label: "No third-party sharing", desc: "Your personal health data is never sold or shared with advertisers or third parties." },
-    { icon: "shield",   color: "#7c5cf0", bg: "#f1ecfe",        label: "Encrypted in transit",   desc: "All data between your device and our servers is protected using HTTPS encryption." },
-    { icon: "trash",    color: "#e23d3d", bg: "#fdecec",        label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
+    { icon: "database", color: "var(--teal)",   bg: "var(--teal-xl)",  label: "Data stays yours",        desc: "Your assessment history is stored in a secured database tied to your account only." },
+    { icon: "user",     color: "var(--blue)",   bg: "var(--blue-l)",   label: "No third-party sharing",  desc: "Your personal health data is never sold or shared with advertisers or third parties." },
+    { icon: "shield",   color: "var(--purple)", bg: "var(--purple-l)", label: "Encrypted in transit",    desc: "All data between your device and our servers is protected using HTTPS encryption." },
+    { icon: "trash",    color: "var(--red)",    bg: "var(--red-l)",    label: "Right to delete",         desc: "You can permanently delete your account and all associated data at any time." },
   ];
 
   return (
@@ -2015,8 +2162,8 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
           <div className="sec-section-title">Account Security</div>
           <div className="card card-p">
             <div className="sec-row" style={{ paddingTop: 0 }}>
-              <div className="sec-row-icon" style={{ background: "#eaf1ff" }}>
-                <Icon name="edit" size={16} color="#2f6fed" />
+              <div className="sec-row-icon" style={{ background: "var(--blue-l)" }}>
+                <Icon name="edit" size={16} color="var(--blue)" />
               </div>
               <div className="sec-row-body">
                 <div className="sec-row-label">Change Password</div>
@@ -2062,20 +2209,20 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
                 </div>
                 {newPw.length > 0 && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "8px 12px", borderRadius: 8,
-                    background: newPw.length < 8 ? "#fdecec" : "#e9f9ee",
-                    border: `1px solid ${newPw.length < 8 ? "#fac6c6" : "#aee8c4"}` }}>
-                    <Icon name={newPw.length < 8 ? "alert" : "check"} size={13} color={newPw.length < 8 ? "#e23d3d" : "#1f9d55"} />
-                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw.length < 8 ? "#e23d3d" : "#16793f" }}>
+                    background: newPw.length < 8 ? "var(--red-l)" : "var(--green-l)",
+                    border: `1px solid ${newPw.length < 8 ? "var(--red-d)" : "var(--green-d)"}` }}>
+                    <Icon name={newPw.length < 8 ? "alert" : "check"} size={13} color={newPw.length < 8 ? "var(--red)" : "var(--green)"} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw.length < 8 ? "var(--red-d)" : "var(--green-d)" }}>
                       {newPw.length < 8 ? `${8 - newPw.length} more character${8 - newPw.length !== 1 ? "s" : ""} needed` : "Password length is good"}
                     </span>
                   </div>
                 )}
                 {confirmPw.length > 0 && (
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", borderRadius: 8,
-                    background: newPw !== confirmPw ? "#fdecec" : "#e9f9ee",
-                    border: `1px solid ${newPw !== confirmPw ? "#fac6c6" : "#aee8c4"}` }}>
-                    <Icon name={newPw !== confirmPw ? "x" : "check"} size={13} color={newPw !== confirmPw ? "#e23d3d" : "#1f9d55"} />
-                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw !== confirmPw ? "#e23d3d" : "#16793f" }}>
+                    background: newPw !== confirmPw ? "var(--red-l)" : "var(--green-l)",
+                    border: `1px solid ${newPw !== confirmPw ? "var(--red-d)" : "var(--green-d)"}` }}>
+                    <Icon name={newPw !== confirmPw ? "x" : "check"} size={13} color={newPw !== confirmPw ? "var(--red)" : "var(--green)"} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw !== confirmPw ? "var(--red-d)" : "var(--green-d)" }}>
                       {newPw !== confirmPw ? "Passwords do not match" : "Passwords match"}
                     </span>
                   </div>
@@ -2118,7 +2265,7 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
         <div className="sec-section">
           <div className="sec-section-title">Danger Zone</div>
           <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
-            <div style={{ fontWeight: 700, color: "#e23d3d", marginBottom: 4, fontSize: 14 }}>Delete Account</div>
+            <div style={{ fontWeight: 700, color: "var(--red)", marginBottom: 4, fontSize: 14 }}>Delete Account</div>
             <div className="t-subtitle mb-3" style={{ fontSize: 13 }}>
               Permanently removes your account and all health records. This cannot be undone.
             </div>
@@ -2147,17 +2294,17 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
 // ─────────────────────────────────────────────
 function AboutScreen({ onBack }) {
   const features = [
-    { icon: "activity",  color: "#0c8a7e", bg: "var(--teal-xl)", title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers — no irrelevant questions, no wasted time." },
-    { icon: "database",  color: "#2f6fed", bg: "#eaf1ff",        title: "Machine Learning Diagnosis",  desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 22 tropical and common diseases." },
-    { icon: "shield",    color: "#7c5cf0", bg: "#f1ecfe",        title: "Risk Stratification",         desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
-    { icon: "heart",     color: "#e23d3d", bg: "#fdecec",        title: "AI-Powered Recommendations",  desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
-    { icon: "clipboard", color: "#e8930f", bg: "#fef3e0",        title: "Assessment History",          desc: "All past results are stored securely so you and your care provider can track changes over time." },
-    { icon: "user",      color: "#1f9d55", bg: "#e9f9ee",        title: "Built for West Africa",       desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
+    { icon: "activity",  color: "var(--teal)",   bg: "var(--teal-xl)",  title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers — no irrelevant questions, no wasted time." },
+    { icon: "database",  color: "var(--blue)",   bg: "var(--blue-l)",   title: "Machine Learning Diagnosis",   desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 22 tropical and common diseases." },
+    { icon: "shield",    color: "var(--purple)", bg: "var(--purple-l)", title: "Risk Stratification",          desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
+    { icon: "heart",     color: "var(--red)",    bg: "var(--red-l)",    title: "AI-Powered Recommendations",   desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
+    { icon: "clipboard", color: "var(--amber)",  bg: "var(--amber-l)",  title: "Assessment History",           desc: "All past results are stored securely so you and your care provider can track changes over time." },
+    { icon: "user",      color: "var(--green)",  bg: "var(--green-l)",  title: "Built for West Africa",        desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
   ];
   const team = [
-    { initials: "OA", name: "Obed Mensah",          role: "Full-Stack Developer · Frontend, Backend & ML", color: "#0c8a7e", bg: "var(--teal-xl)" },
-    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping", color: "#2f6fed", bg: "#eaf1ff" },
-    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                    color: "#7c5cf0", bg: "#f1ecfe" },
+    { initials: "OA", name: "Obed Mensah",          role: "Full-Stack Developer · Frontend, Backend & ML",      color: "var(--teal)",   bg: "var(--teal-xl)"  },
+    { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping", color: "var(--blue)",   bg: "var(--blue-l)"   },
+    { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                         color: "var(--purple)", bg: "var(--purple-l)" },
   ];
   const versionInfo = [
     { key: "Version",     val: "1.0.0" },
@@ -2250,26 +2397,51 @@ function AboutScreen({ onBack }) {
 // ─────────────────────────────────────────────
 // SETTINGS SCREEN
 // ─────────────────────────────────────────────
-function SettingsScreen({ onBack, toast }) {
-  const [theme,    setTheme]    = useState("light");
+function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
+  const [theme,    setTheme]    = useState(currentTheme || "light");
   const [notifs,   setNotifs]   = useState(true);
   const [lang,     setLang]     = useState("en");
   const [fontSize, setFontSize] = useState("medium");
 
+  // Sync local state if the parent-supplied currentTheme changes
+  // (e.g. navigating away and back while the OS flipped system preference).
+  useEffect(() => {
+    if (currentTheme && currentTheme !== theme) setTheme(currentTheme);
+  }, [currentTheme]);
+
   useEffect(() => {
     const s = Store.get("tc_settings");
-    if (s) { setTheme(s.theme || "light"); setNotifs(s.notifications !== false); setLang(s.language || "en"); setFontSize(s.fontSize || "medium"); }
+    if (s) {
+      setTheme(s.theme || currentTheme || "light");
+      setNotifs(s.notifications !== false);
+      setLang(s.language || "en");
+      setFontSize(s.fontSize || "medium");
+    }
   }, []);
+
+  const applyTheme = (val) => {
+    setTheme(val);
+    if (onThemeChange) onThemeChange(val);
+  };
 
   const save = () => {
     Store.set("tc_settings", { theme, notifications: notifs, language: lang, fontSize });
+    if (onThemeChange) onThemeChange(theme);
     toast("Settings saved.");
   };
+
+  const THEME_OPTIONS = [
+    { val: "light",  label: "Light",  icon: "sun"     },
+    { val: "dark",   label: "Dark",   icon: "moon"    },
+    { val: "system", label: "System", icon: "monitor" },
+  ];
 
   const ChipGroup = ({ options, value, onChange }) => (
     <div className="chip-row">
       {options.map((o) => (
-        <button key={o.val} className={`chip${value === o.val ? " on" : ""}`} onClick={() => onChange(o.val)}>{o.label}</button>
+        <button key={o.val} className={`chip${value === o.val ? " on" : ""}`} onClick={() => onChange(o.val)}>
+          {o.label}
+        </button>
       ))}
     </div>
   );
@@ -2281,62 +2453,6 @@ function SettingsScreen({ onBack, toast }) {
     </label>
   );
 
-  const sections = [
-    {
-      title: "Appearance",
-      content: (
-        <>
-          <div className="t-label mb-2">Theme</div>
-          <ChipGroup options={[{val:"light",label:"Light"},{val:"dark",label:"Dark"},{val:"system",label:"System"}]} value={theme} onChange={setTheme} />
-          <div className="t-label mt-3 mb-2">Text Size</div>
-          <ChipGroup options={[{val:"small",label:"Small"},{val:"medium",label:"Medium"},{val:"large",label:"Large"}]} value={fontSize} onChange={setFontSize} />
-        </>
-      ),
-    },
-    {
-      title: "Notifications",
-      content: (
-        <div className="toggle-row">
-          <div>
-            <div style={{ fontWeight: 600, fontSize: 14 }}>Push Notifications</div>
-            <div className="t-subtitle" style={{ fontSize: 12 }}>Health reminders and updates</div>
-          </div>
-          <Toggle checked={notifs} onChange={setNotifs} />
-        </div>
-      ),
-    },
-    {
-      title: "Language",
-      content: (
-        <ChipGroup
-          options={[{val:"en",label:"English"},{val:"tw",label:"Twi"},{val:"fr",label:"French"},{val:"ha",label:"Hausa"}]}
-          value={lang} onChange={setLang}
-        />
-      ),
-    },
-    {
-      title: "Privacy",
-      content: (
-        <>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
-            <Icon name="shield" size={16} color="#1f9d55" />
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>Encrypted Storage</div>
-              <div className="t-subtitle" style={{ fontSize: 12 }}>All data is secured in transit and at rest</div>
-            </div>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 10 }}>
-            <Icon name="check" size={16} color="#1f9d55" />
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 13 }}>No Third-Party Sharing</div>
-              <div className="t-subtitle" style={{ fontSize: 12 }}>Your health data is never shared</div>
-            </div>
-          </div>
-        </>
-      ),
-    },
-  ];
-
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
@@ -2346,12 +2462,109 @@ function SettingsScreen({ onBack, toast }) {
         <div className="t-display">Settings</div>
       </div>
       <div className="page-body">
-        {sections.map((s) => (
-          <div key={s.title} style={{ marginBottom: 16 }}>
-            <div className="section-ttl mb-2">{s.title}</div>
-            <div className="card card-p">{s.content}</div>
+
+        {/* Appearance */}
+        <div style={{ marginBottom: 16 }}>
+          <div className="section-ttl mb-2">Appearance</div>
+          <div className="card card-p">
+
+            <div className="t-label mb-2">Theme</div>
+            {/* Visual preview swatches for immediate context */}
+            <div className="theme-preview-strip">
+              {THEME_OPTIONS.map((o) => (
+                <button
+                  key={o.val}
+                  className={`theme-preview-swatch ${o.val}-sw${theme === o.val ? " selected" : ""}`}
+                  onClick={() => applyTheme(o.val)}
+                  aria-pressed={theme === o.val}
+                  aria-label={`${o.label} theme`}
+                >
+                  <span style={{
+                    display: "flex", flexDirection: "column", alignItems: "center", gap: 4,
+                    color: o.val === "dark" ? "#d4e4f0" : o.val === "system" ? "transparent" : "#0b1726",
+                  }}>
+                    <Icon name={o.icon} size={16} color={o.val === "dark" ? "#d4e4f0" : o.val === "system" ? "var(--teal)" : "#0b1726"} />
+                    <span style={{ fontSize: 10, fontWeight: 700, letterSpacing: "0.05em",
+                      color: o.val === "dark" ? "#d4e4f0" : o.val === "system" ? "var(--ink)" : "#0b1726" }}>
+                      {o.label}
+                    </span>
+                  </span>
+                </button>
+              ))}
+            </div>
+            {/* Chip row for keyboard / assistive tech accessibility */}
+            <div style={{ marginTop: 10 }}>
+              <ChipGroup
+                options={THEME_OPTIONS}
+                value={theme}
+                onChange={applyTheme}
+              />
+            </div>
+            {theme === "system" && (
+              <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
+                <Icon name="monitor" size={13} color="var(--muted)" />
+                Follows your device display settings and updates live.
+              </div>
+            )}
+
+            <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+              <div className="t-label mb-2">Text Size</div>
+              <ChipGroup
+                options={[{val:"small",label:"Small"},{val:"medium",label:"Medium"},{val:"large",label:"Large"}]}
+                value={fontSize}
+                onChange={setFontSize}
+              />
+            </div>
           </div>
-        ))}
+        </div>
+
+        {/* Notifications */}
+        <div style={{ marginBottom: 16 }}>
+          <div className="section-ttl mb-2">Notifications</div>
+          <div className="card card-p">
+            <div className="toggle-row">
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: "var(--ink)" }}>Push Notifications</div>
+                <div className="t-subtitle" style={{ fontSize: 12 }}>Health reminders and updates</div>
+              </div>
+              <Toggle checked={notifs} onChange={setNotifs} />
+            </div>
+          </div>
+        </div>
+
+        {/* Language */}
+        <div style={{ marginBottom: 16 }}>
+          <div className="section-ttl mb-2">Language</div>
+          <div className="card card-p">
+            <ChipGroup
+              options={[{val:"en",label:"English"},{val:"tw",label:"Twi"},{val:"fr",label:"French"},{val:"ha",label:"Hausa"}]}
+              value={lang}
+              onChange={setLang}
+            />
+          </div>
+        </div>
+
+        {/* Privacy */}
+        <div style={{ marginBottom: 16 }}>
+          <div className="section-ttl mb-2">Privacy</div>
+          <div className="card card-p">
+            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
+              <Icon name="shield" size={16} color="var(--green)" />
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>Encrypted Storage</div>
+                <div className="t-subtitle" style={{ fontSize: 12 }}>All data is secured in transit and at rest</div>
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 10 }}>
+              <Icon name="check" size={16} color="var(--green)" />
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>No Third-Party Sharing</div>
+                <div className="t-subtitle" style={{ fontSize: 12 }}>Your health data is never shared</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <button className="btn btn-primary btn-full" onClick={save}>Save Settings</button>
       </div>
     </div>
