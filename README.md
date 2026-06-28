@@ -1,6 +1,6 @@
 # TropiCare
 
-Adaptive symptom checker with ML based disease risk prediction, built for tropical disease triage.
+An AI-guided symptom checker built to help patients and clinicians identify tropical diseases faster with clear risk levels and personalised recommendations.
 
 **LIVE APP:** **[TropiCare](https://tropi-care.vercel.app/)**
 
