@@ -2013,7 +2013,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           <Icon name="logout" size={15} color="#fff" /> Sign Out
         </button>
         <div className="text-c mt-4" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.7 }}>
-          TropiCare v1.0 · Symptom Checker for Tropical Diseases
+          TropiCare · Symptom Checker for Tropical Diseases
         </div>
       </div>
     </div>
