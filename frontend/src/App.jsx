@@ -17,11 +17,6 @@ const API_BASE = "https://tropicare.onrender.com/api/v1";
 const TOKEN_KEY = "tc_token";
 const USER_KEY  = "tc_user";
 
-/*
- * Module-level flag: set to true the moment logout() fires.
- * Any in-flight .then() callbacks check this before calling setState.
- * Reset to false when a new login completes.
- */
 let _loggingOut = false;
 
 const api = {
@@ -234,18 +229,15 @@ function predictOffline(answers) {
 
   if (yesCount < 2) {
     return {
-      disease:     null,
-      confidence:  0.0,
-      risk:        "None",
+      disease: null, confidence: 0.0, risk: "None",
       explanation: "No significant symptoms were reported.",
       recommendation: {
         home_care: "You appear to be in good health based on your responses.",
-        test:      "No tests are indicated at this time.",
-        doctor:    "See a doctor if you develop any symptoms or feel unwell.",
-        safety:    "",
+        test: "No tests are indicated at this time.",
+        doctor: "See a doctor if you develop any symptoms or feel unwell.",
+        safety: "",
       },
-      all_scores: {},
-      method:     "insufficient_evidence",
+      all_scores: {}, method: "insufficient_evidence",
     };
   }
 
@@ -261,18 +253,15 @@ function predictOffline(answers) {
 
   if (sorted[0].sc <= 0) {
     return {
-      disease:     null,
-      confidence:  0.0,
-      risk:        "None",
+      disease: null, confidence: 0.0, risk: "None",
       explanation: "No significant symptoms were reported.",
       recommendation: {
         home_care: "You appear to be in good health based on your responses.",
-        test:      "No tests are indicated at this time.",
-        doctor:    "See a doctor if you develop any symptoms or feel unwell.",
-        safety:    "",
+        test: "No tests are indicated at this time.",
+        doctor: "See a doctor if you develop any symptoms or feel unwell.",
+        safety: "",
       },
-      all_scores: {},
-      method:     "insufficient_evidence",
+      all_scores: {}, method: "insufficient_evidence",
     };
   }
 
@@ -280,21 +269,47 @@ function predictOffline(answers) {
   const risk = RISK_MAP[top.d] || "Medium";
 
   return {
-    disease:     top.d,
-    confidence:  top.conf,
-    risk,
+    disease: top.d, confidence: top.conf, risk,
     explanation: `The reported symptoms are consistent with ${top.d}.`,
     recommendation: {
       home_care: "Rest, stay hydrated, and monitor your symptoms closely.",
-      test:      "Consult a healthcare provider to arrange appropriate diagnostic tests.",
-      doctor:    risk === "High" ? "Visit a hospital or clinic without delay." : "See a doctor if symptoms persist or worsen.",
-      safety:    risk === "High" ? "Do not wait — seek medical attention today." : "",
+      test: "Consult a healthcare provider to arrange appropriate diagnostic tests.",
+      doctor: risk === "High" ? "Visit a hospital or clinic without delay." : "See a doctor if symptoms persist or worsen.",
+      safety: risk === "High" ? "Do not wait — seek medical attention today." : "",
     },
     all_scores: Object.fromEntries(
       sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])
     ),
     method: "offline-scoring",
   };
+}
+
+// ─────────────────────────────────────────────
+// CONFIDENCE TRAJECTORY
+// Simulates how model confidence builds as each
+// positive symptom is added sequentially.
+// Returns an array: [{symptom, confidence}]
+// ─────────────────────────────────────────────
+function buildConfidenceTrajectory(disease, activeSymptoms) {
+  if (!disease || !activeSymptoms || activeSymptoms.length === 0) return [];
+  const diseaseSyms = DISEASE_SYMPTOM_MAP[disease] || [];
+  // Only positive symptoms that belong to the predicted disease, in order
+  const relevant = activeSymptoms.filter((s) => diseaseSyms.includes(s));
+  if (relevant.length === 0) return [];
+
+  const points = [];
+  const running = {};
+  relevant.forEach((sym, i) => {
+    running[sym] = true;
+    const yes = diseaseSyms.filter((s) => running[s]).length;
+    const conf = Math.min(0.95, Math.max(0.05, yes / Math.max(diseaseSyms.length, 1)));
+    points.push({
+      label: sym.replace(/_/g, " "),
+      confidence: parseFloat((conf * 100).toFixed(1)),
+      index: i + 1,
+    });
+  });
+  return points;
 }
 
 // ─────────────────────────────────────────────
@@ -333,177 +348,108 @@ const injectStyles = () => {
       --focus-ring:0 0 0 3px rgba(12,138,126,0.28);
     }
 
-    /* ── Dark theme — clean, professional clinical palette ───────────── */
+    /* ── Dark theme ─────────────────────────────────────────────── */
     :root[data-theme="dark"] {
-      --ink:      #e8eef3;
-      --ink-2:    #c3ced9;
-      --ink-3:    #94a3b3;
-      --muted:    #7c8a99;
-      --muted-l:  #4f5d6c;
-      --border:   #263241;
-      --border-l: #1c2733;
-      --surface:  #161f29;
-      --bg:       #0f161e;
-      --teal:     #14b8a6;
-      --teal-d:   #2dd4bf;
-      --teal-dd:  #0e8f80;
-      --teal-l:   #1b3d35;
-      --teal-xl:  #102621;
-      --teal-rgb: 20,184,166;
-      --red:      #f25656;
-      --red-d:    #f87171;
-      --red-l:    #2c1618;
-      --amber:    #e8a838;
-      --amber-d:  #fbbf24;
-      --amber-l:  #2a2013;
-      --green:    #34c77f;
-      --green-d:  #4ade80;
-      --green-l:  #102420;
-      --blue:     #5b8def;
-      --blue-d:   #7ea8f5;
-      --blue-l:   #142233;
-      --purple:   #9b86f3;
-      --purple-d: #b3a2f7;
-      --purple-l: #1d1a33;
+      --ink:#e8eef3;--ink-2:#c3ced9;--ink-3:#94a3b3;
+      --muted:#7c8a99;--muted-l:#4f5d6c;
+      --border:#263241;--border-l:#1c2733;
+      --surface:#161f29;--bg:#0f161e;
+      --teal:#14b8a6;--teal-d:#2dd4bf;--teal-dd:#0e8f80;
+      --teal-l:#1b3d35;--teal-xl:#102621;--teal-rgb:20,184,166;
+      --red:#f25656;--red-d:#f87171;--red-l:#2c1618;
+      --amber:#e8a838;--amber-d:#fbbf24;--amber-l:#2a2013;
+      --green:#34c77f;--green-d:#4ade80;--green-l:#102420;
+      --blue:#5b8def;--blue-d:#7ea8f5;--blue-l:#142233;
+      --purple:#9b86f3;--purple-d:#b3a2f7;--purple-l:#1d1a33;
       --shadow-xs:0 1px 2px rgba(0,0,0,0.30);
-      --shadow-s: 0 1px 4px rgba(0,0,0,0.35),0 1px 2px rgba(0,0,0,0.24);
-      --shadow:   0 6px 24px rgba(0,0,0,0.42),0 2px 6px rgba(0,0,0,0.26);
-      --shadow-l: 0 14px 48px rgba(0,0,0,0.52),0 4px 12px rgba(0,0,0,0.30);
-      --focus-ring: 0 0 0 3px rgba(20,184,166,0.30);
+      --shadow-s:0 1px 4px rgba(0,0,0,0.35),0 1px 2px rgba(0,0,0,0.24);
+      --shadow:0 6px 24px rgba(0,0,0,0.42),0 2px 6px rgba(0,0,0,0.26);
+      --shadow-l:0 14px 48px rgba(0,0,0,0.52),0 4px 12px rgba(0,0,0,0.30);
+      --focus-ring:0 0 0 3px rgba(20,184,166,0.30);
     }
-
-    /* Risk badges — dark mode */
     :root[data-theme="dark"] .badge-High   { background:var(--red-l); color:var(--red-d); }
     :root[data-theme="dark"] .badge-Medium { background:var(--amber-l); color:var(--amber-d); }
     :root[data-theme="dark"] .badge-Low    { background:var(--green-l); color:var(--green-d); }
     :root[data-theme="dark"] .badge-teal   { background:var(--teal-xl); color:var(--teal-d); }
-
-    /* Structural surfaces — dark mode */
-    :root[data-theme="dark"] .shell         { background:var(--bg); }
-    :root[data-theme="dark"] .sidebar       { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .bottom-nav    { background:var(--surface); border-color:var(--border); box-shadow:0 -6px 24px rgba(0,0,0,0.3); }
+    :root[data-theme="dark"] .shell        { background:var(--bg); }
+    :root[data-theme="dark"] .sidebar      { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .bottom-nav   { background:var(--surface); border-color:var(--border); box-shadow:0 -6px 24px rgba(0,0,0,0.3); }
     :root[data-theme="dark"] .nav-item:hover,
     :root[data-theme="dark"] .nav-item.active { background:var(--teal-xl); color:var(--teal-d); }
-    :root[data-theme="dark"] .card { box-shadow:var(--shadow-s); }
-
-    /* Auth */
-    :root[data-theme="dark"] .auth-wrap {
-      background:linear-gradient(165deg,#102621 0%,#0f161e 60%);
-    }
-    :root[data-theme="dark"] .auth-box .card { box-shadow:0 12px 40px rgba(0,0,0,0.45); }
-
-    /* Inputs */
-    :root[data-theme="dark"] .field-input {
-      background:#0c1218; color:var(--ink); border-color:var(--border);
-    }
-    :root[data-theme="dark"] .field-input:hover { border-color:var(--muted-l); }
-    :root[data-theme="dark"] .field-input:focus { border-color:var(--teal-d); }
+    :root[data-theme="dark"] .card         { box-shadow:var(--shadow-s); }
+    :root[data-theme="dark"] .auth-wrap    { background:linear-gradient(165deg,#102621 0%,#0f161e 60%); }
+    :root[data-theme="dark"] .field-input  { background:#0c1218; color:var(--ink); border-color:var(--border); }
+    :root[data-theme="dark"] .field-input:hover  { border-color:var(--muted-l); }
+    :root[data-theme="dark"] .field-input:focus  { border-color:var(--teal-d); }
     :root[data-theme="dark"] .field-input::placeholder { color:var(--muted-l); }
-    :root[data-theme="dark"] .field-select {
-      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c8a99' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-    }
-
-    /* Search */
-    :root[data-theme="dark"] .search-input {
-      background:var(--surface); color:var(--ink); border-color:var(--border);
-    }
+    :root[data-theme="dark"] .field-select { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c8a99' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); }
+    :root[data-theme="dark"] .search-input { background:var(--surface); color:var(--ink); border-color:var(--border); }
     :root[data-theme="dark"] .search-input:focus { border-color:var(--teal-d); }
-
-    /* Chips */
-    :root[data-theme="dark"] .chip { background:var(--surface); border-color:var(--border); color:var(--muted); }
-    :root[data-theme="dark"] .chip:hover { border-color:var(--muted-l); }
-    :root[data-theme="dark"] .chip.on {
-      background:var(--teal-xl); border-color:var(--teal-d); color:var(--teal-d);
-    }
-
-    /* Tabs */
-    :root[data-theme="dark"] .tabs      { background:var(--border-l); }
-    :root[data-theme="dark"] .tab       { color:var(--muted); }
-    :root[data-theme="dark"] .tab.active{ background:var(--surface); color:var(--ink); }
-
-    /* Disclaimer */
-    :root[data-theme="dark"] .disclaimer            { background:var(--amber-l); border-color:#4a3a1a; }
-    :root[data-theme="dark"] .disclaimer p          { color:var(--amber-d); }
-
-    /* Rec bubbles */
-    :root[data-theme="dark"] .rec-bubble            { background:var(--surface); }
-    :root[data-theme="dark"] .rec-bubble-text       { color:var(--ink-2); }
-
-    /* Score bars */
-    :root[data-theme="dark"] .score-bar-fill {
-      background:linear-gradient(90deg,var(--muted-l),var(--muted));
-    }
+    :root[data-theme="dark"] .chip         { background:var(--surface); border-color:var(--border); color:var(--muted); }
+    :root[data-theme="dark"] .chip:hover   { border-color:var(--muted-l); }
+    :root[data-theme="dark"] .chip.on      { background:var(--teal-xl); border-color:var(--teal-d); color:var(--teal-d); }
+    :root[data-theme="dark"] .tabs         { background:var(--border-l); }
+    :root[data-theme="dark"] .tab          { color:var(--muted); }
+    :root[data-theme="dark"] .tab.active   { background:var(--surface); color:var(--ink); }
+    :root[data-theme="dark"] .disclaimer   { background:var(--amber-l); border-color:#4a3a1a; }
+    :root[data-theme="dark"] .disclaimer p { color:var(--amber-d); }
+    :root[data-theme="dark"] .rec-bubble   { background:var(--surface); }
+    :root[data-theme="dark"] .rec-bubble-text { color:var(--ink-2); }
+    :root[data-theme="dark"] .score-bar-fill  { background:linear-gradient(90deg,var(--muted-l),var(--muted)); }
     :root[data-theme="dark"] .score-bar-track { background:var(--border-l); }
-
-    /* Result rings */
     :root[data-theme="dark"] .result-ring-High   { background:linear-gradient(155deg,#241417,#33181c); box-shadow:0 0 0 10px rgba(242,86,86,0.08); }
     :root[data-theme="dark"] .result-ring-Medium { background:linear-gradient(155deg,#241c10,#332514); box-shadow:0 0 0 10px rgba(232,168,56,0.08); }
     :root[data-theme="dark"] .result-ring-Low    { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
     :root[data-theme="dark"] .result-ring-None   { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
     :root[data-theme="dark"] .no-symptoms-ring   { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
-
-    /* Assessment landing hero */
-    :root[data-theme="dark"] .al-hero { background:linear-gradient(150deg,var(--teal-xl) 0%,var(--blue-l) 100%); border-color:var(--teal-l); }
-
-    /* About mission */
-    :root[data-theme="dark"] .about-mission       { background:var(--teal-xl); border-color:var(--teal-l); }
+    :root[data-theme="dark"] .al-hero      { background:linear-gradient(150deg,var(--teal-xl) 0%,var(--blue-l) 100%); border-color:var(--teal-l); }
+    :root[data-theme="dark"] .about-mission { background:var(--teal-xl); border-color:var(--teal-l); }
     :root[data-theme="dark"] .about-mission-label { color:var(--teal-d); }
     :root[data-theme="dark"] .about-mission-text  { color:var(--ink-2); }
-    :root[data-theme="dark"] .about-fact          { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .about-team-card     { background:var(--surface); border-color:var(--border); }
-
-    /* Edit / security panels */
-    :root[data-theme="dark"] .edit-panel    { background:var(--border-l); border-color:var(--border); }
-    :root[data-theme="dark"] .sec-field-wrap{ background:var(--border-l); border-color:var(--border); }
-
-    /* Question screen */
-    :root[data-theme="dark"] .q-screen       { background:var(--bg); }
-    :root[data-theme="dark"] .q-topbar       { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .q-close        { background:var(--border-l); }
-    :root[data-theme="dark"] .q-close:hover  { background:var(--border); }
-    :root[data-theme="dark"] .q-cat-pill     { background:var(--teal-xl); color:var(--teal-d); border-color:var(--teal-l); }
-    :root[data-theme="dark"] .prog-track     { background:var(--border-l); }
-
-    /* Answer buttons */
-    :root[data-theme="dark"] .ans-btn           { background:var(--surface); border-color:var(--border); color:var(--ink); }
-    :root[data-theme="dark"] .ans-btn.yes       { background:var(--teal-xl); border-color:var(--teal-l); color:var(--teal-d); }
-    :root[data-theme="dark"] .ans-btn.no        { background:var(--border-l); border-color:var(--border); color:var(--ink-3); }
-    :root[data-theme="dark"] .ans-yes-icon      { background:var(--teal-l); }
-    :root[data-theme="dark"] .ans-no-icon       { background:var(--border); }
-
-    /* Analyzing */
-    :root[data-theme="dark"] .analyzing { background:var(--bg); }
-
-    /* Toggle slider */
-    :root[data-theme="dark"] .toggle-slider { background:var(--border); }
-
-    /* Menu & feat icons */
-    :root[data-theme="dark"] .menu-ico   { background:var(--border-l); }
-    :root[data-theme="dark"] .feat-icon  { background:var(--border-l); }
-
-    /* Icon button hover */
-    :root[data-theme="dark"] .icon-btn { background:var(--border-l) !important; }
+    :root[data-theme="dark"] .about-fact   { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .about-team-card { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .edit-panel   { background:var(--border-l); border-color:var(--border); }
+    :root[data-theme="dark"] .sec-field-wrap { background:var(--border-l); border-color:var(--border); }
+    :root[data-theme="dark"] .q-screen     { background:var(--bg); }
+    :root[data-theme="dark"] .q-topbar     { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .q-close      { background:var(--border-l); }
+    :root[data-theme="dark"] .q-close:hover{ background:var(--border); }
+    :root[data-theme="dark"] .q-cat-pill   { background:var(--teal-xl); color:var(--teal-d); border-color:var(--teal-l); }
+    :root[data-theme="dark"] .prog-track   { background:var(--border-l); }
+    :root[data-theme="dark"] .ans-btn      { background:var(--surface); border-color:var(--border); color:var(--ink); }
+    :root[data-theme="dark"] .ans-btn.yes  { background:var(--teal-xl); border-color:var(--teal-l); color:var(--teal-d); }
+    :root[data-theme="dark"] .ans-btn.no   { background:var(--border-l); border-color:var(--border); color:var(--ink-3); }
+    :root[data-theme="dark"] .ans-yes-icon { background:var(--teal-l); }
+    :root[data-theme="dark"] .ans-no-icon  { background:var(--border); }
+    :root[data-theme="dark"] .analyzing    { background:var(--bg); }
+    :root[data-theme="dark"] .toggle-slider{ background:var(--border); }
+    :root[data-theme="dark"] .menu-ico     { background:var(--border-l); }
+    :root[data-theme="dark"] .feat-icon    { background:var(--border-l); }
+    :root[data-theme="dark"] .icon-btn     { background:var(--border-l) !important; }
     :root[data-theme="dark"] .icon-btn:hover { background:var(--border) !important; }
-
-    /* Password toggle */
-    :root[data-theme="dark"] .pw-toggle        { color:var(--muted-l); }
-    :root[data-theme="dark"] .pw-toggle:hover  { color:var(--teal-d); background:var(--teal-xl); }
-
-    /* Toast */
-    :root[data-theme="dark"] .notif { background:#e8eef3; color:#0f161e; box-shadow:var(--shadow-l); }
-
-    /* Bottom nav active */
+    :root[data-theme="dark"] .pw-toggle    { color:var(--muted-l); }
+    :root[data-theme="dark"] .pw-toggle:hover { color:var(--teal-d); background:var(--teal-xl); }
+    :root[data-theme="dark"] .notif        { background:#e8eef3; color:#0f161e; box-shadow:var(--shadow-l); }
     :root[data-theme="dark"] .bnav-item.active { color:var(--teal-d); }
-
-    /* Hero / about hero gradients stay legible on dark */
-    :root[data-theme="dark"] .hero-card  { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
-    :root[data-theme="dark"] .about-hero { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
-
-    /* Settings theme preview swatches */
+    :root[data-theme="dark"] .hero-card    { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
+    :root[data-theme="dark"] .about-hero   { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
     :root[data-theme="dark"] .theme-preview-swatch { border-color:var(--border); }
     :root[data-theme="dark"] .theme-preview-swatch.selected { border-color:var(--teal-d); box-shadow:0 0 0 2px rgba(20,184,166,0.2); }
 
-    /* ── Base styles ───────────────────────────────────────────────── */
+    /* ── Print / PDF styles ─────────────────────────────────────── */
+    @media print {
+      @page { margin: 18mm 16mm; size: A4; }
+      * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      body * { visibility: hidden; }
+      #tc-print-root, #tc-print-root * { visibility: visible; }
+      #tc-print-root { position: absolute; left: 0; top: 0; width: 100%; }
+      .tc-print-header { display: block !important; }
+      .tc-no-print { display: none !important; }
+      .tc-print-page-break { page-break-before: always; }
+    }
+    .tc-print-header { display: none; }
+
+    /* ── Base styles ────────────────────────────────────────────── */
     html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;}
     body{font-size:15px;}
     #root{height:100%;}
@@ -735,7 +681,6 @@ const injectStyles = () => {
     .toggle input:focus-visible+.toggle-slider{box-shadow:var(--focus-ring);}
     .toggle-slider::before{content:'';position:absolute;height:19px;width:19px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:transform var(--t-fast);box-shadow:var(--shadow-s);}
     .toggle input:checked+.toggle-slider::before{transform:translateX(19px);}
-    .danger-zone{border:1.5px solid var(--red);border-radius:var(--radius);padding:18px;margin-bottom:20px;}
     .icon-btn{transition:background var(--t-fast),transform var(--t-fast);min-width:36px;min-height:36px;align-items:center;justify-content:center;}
     .icon-btn:hover{background:var(--border)!important;}
     .icon-btn:active{transform:scale(0.92);}
@@ -773,7 +718,6 @@ const injectStyles = () => {
     .about-mission-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--teal-d);margin-bottom:8px;}
     .about-mission-text{font-size:14px;color:var(--ink-2);line-height:1.65;font-weight:500;}
     .about-fact-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
-    @media(max-width:380px){.about-fact-grid{grid-template-columns:1fr 1fr;gap:8px;}}
     .about-fact{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;transition:box-shadow var(--t-med);}
     .about-fact:hover{box-shadow:var(--shadow-s);}
     .about-fact-val{font-family:var(--display);font-size:26px;font-weight:700;color:var(--teal-d);line-height:1;margin-bottom:4px;}
@@ -793,16 +737,8 @@ const injectStyles = () => {
     .about-version-key{font-size:13px;color:var(--muted);}
     .about-version-val{font-size:13px;font-weight:700;color:var(--ink);text-align:right;}
     .no-symptoms-ring{width:110px;height:110px;border-radius:99px;background:linear-gradient(155deg,#d6f3e1,#aee8c4);box-shadow:0 0 0 10px rgba(31,157,85,0.09);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;animation:ring-in 0.45s var(--ease-spring);}
-    @media(max-width:359px){
-      .stats-row{grid-template-columns:1fr 1fr 1fr;}
-      .q-answers{max-width:100%;}
-      .hero-card{padding:20px 16px;}
-    }
-    @media(min-width:1280px){
-      .page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}
-    }
-
-    /* Settings theme preview strip — compact, clean, fully rounded pills */
+    @media(max-width:359px){.stats-row{grid-template-columns:1fr 1fr 1fr;}.q-answers{max-width:100%;}.hero-card{padding:20px 16px;}}
+    @media(min-width:1280px){.page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}}
     .theme-preview-strip{display:flex;gap:6px;margin-top:10px;}
     .theme-preview-swatch{flex:1;height:40px;border-radius:999px;border:1.5px solid var(--border);cursor:pointer;transition:border-color var(--t-fast),transform var(--t-fast),box-shadow var(--t-fast);display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:0.03em;background:var(--surface);padding:0 10px;}
     .theme-preview-swatch:hover{transform:translateY(-1px);box-shadow:var(--shadow-s);}
@@ -810,14 +746,7 @@ const injectStyles = () => {
     .theme-preview-swatch.light-sw{background:#f4f7f9;color:#0b1726;}
     .theme-preview-swatch.dark-sw{background:#0f161e;color:#e8eef3;}
     .theme-preview-swatch.system-sw{background:linear-gradient(135deg,#f4f7f9 50%,#0f161e 50%);color:var(--ink);}
-    @media(max-width:480px){
-      .theme-preview-strip{gap:5px;}
-      .theme-preview-swatch{height:38px;font-size:10px;padding:0 6px;gap:4px;}
-    }
-    @media(max-width:360px){
-      .theme-preview-swatch{height:36px;font-size:0;gap:0;}
-      .theme-preview-swatch svg{margin:0;}
-    }
+    @media(max-width:480px){.theme-preview-strip{gap:5px;}.theme-preview-swatch{height:38px;font-size:10px;padding:0 6px;gap:4px;}}
   `;
   document.head.appendChild(el);
 };
@@ -985,11 +914,8 @@ function QuestionIllus({ question }) {
   if (src) {
     return (
       <div className="q-illus">
-        <img
-          src={src}
-          alt={question?.category || "symptom"}
-          style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }}
-        />
+        <img src={src} alt={question?.category || "symptom"}
+          style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }} />
       </div>
     );
   }
@@ -1028,6 +954,9 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "sun":       return <svg {...p}><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>;
     case "moon":      return <svg {...p}><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>;
     case "monitor":   return <svg {...p}><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>;
+    case "download":  return <svg {...p}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
+    case "printer":   return <svg {...p}><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>;
+    case "trending":  return <svg {...p}><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>;
     default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
@@ -1060,6 +989,402 @@ function RecBubble({ icon, label, text, accent, bg }) {
 }
 
 // ─────────────────────────────────────────────
+// CONFIDENCE LINE CHART (pure SVG, no library)
+// ─────────────────────────────────────────────
+function ConfidenceChart({ points, color = "#0c8a7e" }) {
+  if (!points || points.length < 2) return null;
+
+  const W = 560;
+  const H = 200;
+  const PAD_L = 48;
+  const PAD_R = 16;
+  const PAD_T = 16;
+  const PAD_B = 48;
+  const chartW = W - PAD_L - PAD_R;
+  const chartH = H - PAD_T - PAD_B;
+
+  const maxConf = Math.min(100, Math.max(...points.map((p) => p.confidence)) + 10);
+  const minConf = Math.max(0, Math.min(...points.map((p) => p.confidence)) - 10);
+
+  const xScale = (i) => PAD_L + (i / (points.length - 1)) * chartW;
+  const yScale = (v) => PAD_T + chartH - ((v - minConf) / (maxConf - minConf)) * chartH;
+
+  const pathD = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${xScale(i).toFixed(1)} ${yScale(p.confidence).toFixed(1)}`)
+    .join(" ");
+
+  const areaD =
+    pathD +
+    ` L ${xScale(points.length - 1).toFixed(1)} ${(PAD_T + chartH).toFixed(1)}` +
+    ` L ${PAD_L.toFixed(1)} ${(PAD_T + chartH).toFixed(1)} Z`;
+
+  const yGridLines = [0, 25, 50, 75, 100].filter((v) => v >= minConf - 5 && v <= maxConf + 5);
+
+  return (
+    <svg
+      viewBox={`0 0 ${W} ${H}`}
+      style={{ width: "100%", height: "auto", overflow: "visible" }}
+      aria-label="Confidence trajectory chart"
+    >
+      <defs>
+        <linearGradient id="conf-grad" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.18" />
+          <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+        </linearGradient>
+        <clipPath id="conf-clip">
+          <rect x={PAD_L} y={PAD_T} width={chartW} height={chartH} />
+        </clipPath>
+      </defs>
+
+      {/* Grid lines */}
+      {yGridLines.map((v) => (
+        <g key={v}>
+          <line
+            x1={PAD_L} y1={yScale(v).toFixed(1)}
+            x2={PAD_L + chartW} y2={yScale(v).toFixed(1)}
+            stroke="#dde4ea" strokeWidth="1" strokeDasharray={v === 0 ? "none" : "4 3"}
+          />
+          <text
+            x={PAD_L - 6} y={yScale(v).toFixed(1)}
+            textAnchor="end" dominantBaseline="middle"
+            fontSize="10" fill="#90a0ae" fontFamily="Sora, sans-serif"
+          >
+            {v}%
+          </text>
+        </g>
+      ))}
+
+      {/* Area fill */}
+      <path d={areaD} fill="url(#conf-grad)" clipPath="url(#conf-clip)" />
+
+      {/* Line */}
+      <path d={pathD} fill="none" stroke={color} strokeWidth="2.5"
+        strokeLinecap="round" strokeLinejoin="round" clipPath="url(#conf-clip)" />
+
+      {/* Data points */}
+      {points.map((p, i) => (
+        <g key={i}>
+          <circle cx={xScale(i).toFixed(1)} cy={yScale(p.confidence).toFixed(1)}
+            r="5" fill="#fff" stroke={color} strokeWidth="2.5" />
+          <text
+            x={xScale(i).toFixed(1)} y={yScale(p.confidence) - 10}
+            textAnchor="middle" fontSize="9" fill={color}
+            fontFamily="Sora, sans-serif" fontWeight="700"
+          >
+            {p.confidence}%
+          </text>
+        </g>
+      ))}
+
+      {/* X-axis labels */}
+      {points.map((p, i) => {
+        if (points.length > 8 && i % 2 !== 0) return null;
+        return (
+          <text
+            key={i}
+            x={xScale(i).toFixed(1)}
+            y={PAD_T + chartH + 14}
+            textAnchor="middle"
+            fontSize="9"
+            fill="#90a0ae"
+            fontFamily="Sora, sans-serif"
+          >
+            {p.label.length > 10 ? p.label.slice(0, 9) + "." : p.label}
+          </text>
+        );
+      })}
+
+      {/* Axis lines */}
+      <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + chartH}
+        stroke="#dde4ea" strokeWidth="1.5" />
+      <line x1={PAD_L} y1={PAD_T + chartH} x2={PAD_L + chartW} y2={PAD_T + chartH}
+        stroke="#dde4ea" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────
+// PDF REPORT CONTENT (rendered into #tc-print-root)
+// This component is hidden on screen and only visible
+// to the browser's print engine.
+// ─────────────────────────────────────────────
+function PrintReport({ result, patientName, patientAge, patientGender, assessmentDate }) {
+  const risk       = result?.risk || "None";
+  const disease    = result?.disease;
+  const rec        = result?.recommendation || {};
+  const scores     = result?.all_scores || {};
+  const activeSyms = result?.active_symptoms || [];
+  const confidence = result?.confidence || 0;
+  const traj       = disease ? buildConfidenceTrajectory(disease, activeSyms) : [];
+
+  const riskColors = { High: "#c22f2f", Medium: "#b9740a", Low: "#16793f", None: "#16793f" };
+  const riskBgs    = { High: "#fdecec", Medium: "#fef3e0", Low: "#e9f9ee",  None: "#e9f9ee" };
+  const riskColor  = riskColors[risk] || "#0c8a7e";
+  const riskBg     = riskBgs[risk]    || "#eefcfa";
+
+  const otherScores = Object.entries(scores)
+    .filter(([d]) => d !== disease)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6);
+
+  const reportId = `TC-${Date.now().toString(36).toUpperCase()}`;
+
+  const s = {
+    page:    { fontFamily: "'Sora', 'Helvetica Neue', Arial, sans-serif", color: "#0b1726", lineHeight: 1.5 },
+    header:  { background: "#074d47", color: "#fff", padding: "20px 28px 18px", display: "flex", justifyContent: "space-between", alignItems: "flex-start", borderRadius: "12px 12px 0 0", marginBottom: 0 },
+    logoRow: { display: "flex", alignItems: "center", gap: 10 },
+    logoBox: { width: 36, height: 36, background: "rgba(255,255,255,0.15)", borderRadius: 9, display: "flex", alignItems: "center", justifyContent: "center", border: "1px solid rgba(255,255,255,0.2)" },
+    logoName:{ fontFamily: "'Playfair Display', Georgia, serif", fontSize: 20, fontWeight: 700, letterSpacing: -0.3, color: "#fff" },
+    logoSub: { fontSize: 9, color: "rgba(255,255,255,0.65)", fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.07em", marginTop: 1 },
+    reportMeta: { textAlign: "right", fontSize: 10, color: "rgba(255,255,255,0.7)", lineHeight: 1.7 },
+    body:    { padding: "0 28px 28px", background: "#fff" },
+    section: { marginBottom: 22 },
+    sectionTitle: { fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.09em", color: "#5b6b7c", marginBottom: 10, paddingBottom: 5, borderBottom: "1.5px solid #eef2f5" },
+    patientGrid: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "10px 20px", background: "#f4f7f9", borderRadius: 10, padding: "14px 18px", border: "1px solid #dde4ea" },
+    patientCell: { display: "flex", flexDirection: "column", gap: 2 },
+    cellLabel:   { fontSize: 9, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "#90a0ae" },
+    cellValue:   { fontSize: 13, fontWeight: 600, color: "#0b1726" },
+    diagnosisBox: { background: riskBg, border: `1.5px solid ${riskColor}30`, borderRadius: 12, padding: "18px 20px", display: "flex", alignItems: "center", gap: 20 },
+    diagRingOuter: { width: 70, height: 70, borderRadius: "50%", background: "#fff", border: `3px solid ${riskColor}`, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", flexShrink: 0 },
+    diagPct:  { fontSize: 15, fontWeight: 800, color: riskColor, lineHeight: 1 },
+    diagPctLabel: { fontSize: 8, color: riskColor, fontWeight: 600, marginTop: 1 },
+    diseaseName: { fontFamily: "'Playfair Display', Georgia, serif", fontSize: 22, fontWeight: 700, color: "#0b1726", marginBottom: 4, lineHeight: 1.2 },
+    riskBadge: { display: "inline-block", background: riskColor, color: "#fff", padding: "2px 12px", borderRadius: 99, fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 },
+    explanation: { fontSize: 12, color: "#324154", lineHeight: 1.6, marginTop: 6 },
+    recTable: { width: "100%", borderCollapse: "collapse" },
+    recRow:   { borderBottom: "1px solid #eef2f5" },
+    recLabel: { fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.06em", color: "#5b6b7c", padding: "9px 12px 9px 0", width: 130, verticalAlign: "top" },
+    recValue: { fontSize: 12, color: "#0b1726", padding: "9px 0", lineHeight: 1.6 },
+    scoreBar: { display: "flex", alignItems: "center", gap: 10, marginBottom: 7 },
+    scoreLabel: { fontSize: 11, color: "#324154", width: 160, flexShrink: 0 },
+    scoreTrack: { flex: 1, height: 6, background: "#eef2f5", borderRadius: 99, overflow: "hidden" },
+    scoreFill:  { height: "100%", background: "linear-gradient(90deg,#90a0ae,#5b6b7c)", borderRadius: 99 },
+    scorePct:   { fontSize: 11, color: "#5b6b7c", width: 34, textAlign: "right", fontWeight: 700 },
+    symGrid:    { display: "flex", flexWrap: "wrap", gap: 6 },
+    symChip:    { padding: "4px 10px", background: "#eefcfa", border: "1px solid #bdf0ea", borderRadius: 99, fontSize: 10, fontWeight: 600, color: "#0a6b62" },
+    chartBox:   { background: "#f4f7f9", borderRadius: 10, padding: "14px 12px 6px", border: "1px solid #dde4ea" },
+    chartTitle: { fontSize: 10, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "#5b6b7c", marginBottom: 8 },
+    disclaimer: { background: "#fef3e0", border: "1px solid #f3cf8f", borderRadius: 9, padding: "12px 14px", display: "flex", gap: 10, alignItems: "flex-start", marginTop: 20 },
+    discText:   { fontSize: 10, color: "#7a4a09", lineHeight: 1.6 },
+    footer:     { borderTop: "1.5px solid #dde4ea", paddingTop: 14, marginTop: 20, display: "flex", justifyContent: "space-between", alignItems: "center" },
+    footerText: { fontSize: 9, color: "#90a0ae" },
+    footerBrand:{ fontSize: 9, fontWeight: 700, color: "#5b6b7c" },
+    safetyBox:  { background: "#fdecec", border: "1px solid #fac6c6", borderRadius: 9, padding: "10px 14px", marginTop: 8 },
+    safetyText: { fontSize: 11, color: "#c22f2f", fontWeight: 600 },
+  };
+
+  return (
+    <div style={s.page}>
+      {/* Report header */}
+      <div style={s.header}>
+        <div>
+          <div style={s.logoRow}>
+            <div style={s.logoBox}>
+              <MedicalHeartMark size={20} color="#fff" />
+            </div>
+            <div>
+              <div style={s.logoName}>TropiCare</div>
+              <div style={s.logoSub}>AI Symptom Assessment Report</div>
+            </div>
+          </div>
+          <div style={{ marginTop: 14, fontSize: 10, color: "rgba(255,255,255,0.7)" }}>
+            Kwame Nkrumah University of Science and Technology · KNUST, Ghana
+          </div>
+        </div>
+        <div style={s.reportMeta}>
+          <div><strong style={{ color: "#fff" }}>Report ID</strong>: {reportId}</div>
+          <div><strong style={{ color: "#fff" }}>Date</strong>: {assessmentDate}</div>
+          <div><strong style={{ color: "#fff" }}>Generated by</strong>: TropiCare v1.0</div>
+          <div style={{ marginTop: 8, padding: "4px 10px", background: "rgba(255,255,255,0.12)", borderRadius: 6, border: "1px solid rgba(255,255,255,0.2)", fontSize: 9, color: "rgba(255,255,255,0.85)" }}>
+            FOR CLINICAL REFERENCE ONLY
+          </div>
+        </div>
+      </div>
+
+      {/* Thin teal accent bar */}
+      <div style={{ height: 4, background: "linear-gradient(90deg,#0c8a7e,#14b8a6,#0a6b62)", marginBottom: 0 }} />
+
+      <div style={s.body}>
+
+        {/* Patient information */}
+        <div style={{ ...s.section, marginTop: 20 }}>
+          <div style={s.sectionTitle}>Patient Information</div>
+          <div style={s.patientGrid}>
+            <div style={s.patientCell}>
+              <span style={s.cellLabel}>Full Name</span>
+              <span style={s.cellValue}>{patientName || "Not provided"}</span>
+            </div>
+            <div style={s.patientCell}>
+              <span style={s.cellLabel}>Age</span>
+              <span style={s.cellValue}>{patientAge ? `${patientAge} years` : "Not provided"}</span>
+            </div>
+            <div style={s.patientCell}>
+              <span style={s.cellLabel}>Gender</span>
+              <span style={s.cellValue}>{patientGender || "Not provided"}</span>
+            </div>
+            <div style={s.patientCell}>
+              <span style={s.cellLabel}>Assessment Date</span>
+              <span style={s.cellValue}>{assessmentDate}</span>
+            </div>
+            <div style={s.patientCell}>
+              <span style={s.cellLabel}>Symptoms Reported</span>
+              <span style={s.cellValue}>{activeSyms.length} confirmed</span>
+            </div>
+            <div style={s.patientCell}>
+              <span style={s.cellLabel}>Risk Classification</span>
+              <span style={{ ...s.cellValue, color: riskColor, fontWeight: 700 }}>{risk}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Primary diagnosis */}
+        {disease ? (
+          <div style={s.section}>
+            <div style={s.sectionTitle}>Primary Diagnosis</div>
+            <div style={s.diagnosisBox}>
+              <div style={s.diagRingOuter}>
+                <div style={s.diagPct}>{Math.round(confidence * 100)}%</div>
+                <div style={s.diagPctLabel}>match</div>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={s.riskBadge}>{risk} Risk</div>
+                <div style={s.diseaseName}>{disease}</div>
+                {result.explanation && (
+                  <div style={s.explanation}>{result.explanation}</div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div style={s.section}>
+            <div style={s.sectionTitle}>Diagnosis Result</div>
+            <div style={{ ...s.diagnosisBox, background: "#e9f9ee", border: "1.5px solid #aee8c430" }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#16793f" }}>No significant condition identified</div>
+            </div>
+          </div>
+        )}
+
+        {/* Clinical recommendations */}
+        {disease && (
+          <div style={s.section}>
+            <div style={s.sectionTitle}>Clinical Recommendations</div>
+            <table style={s.recTable}>
+              <tbody>
+                {[
+                  { label: "Home Care",        value: rec.home_care },
+                  { label: "Recommended Test", value: rec.test      },
+                  { label: "Doctor Visit",     value: rec.doctor    },
+                ].filter((r) => r.value).map((row) => (
+                  <tr key={row.label} style={s.recRow}>
+                    <td style={s.recLabel}>{row.label}</td>
+                    <td style={s.recValue}>{row.value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {rec.safety && (
+              <div style={s.safetyBox}>
+                <div style={s.safetyText}>Safety Warning: {rec.safety}</div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Reported symptoms */}
+        {activeSyms.length > 0 && (
+          <div style={s.section}>
+            <div style={s.sectionTitle}>Confirmed Symptoms ({activeSyms.length})</div>
+            <div style={s.symGrid}>
+              {activeSyms.map((sym) => (
+                <span key={sym} style={s.symChip}>{sym.replace(/_/g, " ")}</span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Confidence trajectory chart */}
+        {traj.length >= 2 && (
+          <div style={s.section}>
+            <div style={s.sectionTitle}>Model Confidence Trajectory</div>
+            <div style={s.chartBox}>
+              <div style={s.chartTitle}>
+                How confidence in {disease} built as each symptom was confirmed
+              </div>
+              <ConfidenceChart points={traj} color="#0c8a7e" />
+              <div style={{ fontSize: 9, color: "#90a0ae", marginTop: 6 }}>
+                X-axis: symptoms confirmed in order reported. Y-axis: model confidence percentage.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Differential possibilities */}
+        {otherScores.length > 0 && (
+          <div style={s.section}>
+            <div style={s.sectionTitle}>Differential Diagnosis — Other Possibilities</div>
+            <div style={{ marginBottom: 6, fontSize: 11, color: "#5b6b7c" }}>
+              Conditions considered by the model and their relative match scores:
+            </div>
+            {otherScores.map(([d, conf]) => (
+              <div key={d} style={s.scoreBar}>
+                <span style={s.scoreLabel}>{d}</span>
+                <div style={s.scoreTrack}>
+                  <div style={{ ...s.scoreFill, width: `${Math.round(conf * 100)}%` }} />
+                </div>
+                <span style={s.scorePct}>{Math.round(conf * 100)}%</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 10, color: "#90a0ae", marginTop: 8 }}>
+              These scores indicate relative symptom overlap, not confirmed diagnoses. Clinical evaluation is required to rule out alternatives.
+            </div>
+          </div>
+        )}
+
+        {/* Medical disclaimer */}
+        <div style={s.disclaimer}>
+          <div style={{ fontSize: 14, color: "#b9740a", flexShrink: 0, marginTop: 1 }}>!</div>
+          <div style={s.discText}>
+            <strong>Medical Disclaimer:</strong> This report is generated by TropiCare, an AI-assisted symptom assessment tool developed for educational and informational purposes at KNUST, Ghana. It does not constitute a clinical diagnosis and must not be used as a substitute for professional medical advice, examination, or treatment. The information contained herein should be reviewed and verified by a qualified healthcare professional before any clinical decision is made. If you are experiencing a medical emergency, seek immediate care at the nearest hospital or emergency facility.
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div style={s.footer}>
+          <div style={s.footerText}>
+            Report ID: {reportId} &nbsp;&middot;&nbsp; Generated: {assessmentDate}<br />
+            TropiCare · KNUST Final Year Project 2026 · AI Tropical Disease Checker
+          </div>
+          <div style={s.footerBrand}>TropiCare v1.0</div>
+        </div>
+
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// PDF DOWNLOAD BUTTON
+// ─────────────────────────────────────────────
+function DownloadReportButton({ result, patientName, patientAge, patientGender, assessmentDate, className = "" }) {
+  const handlePrint = () => {
+    window.print();
+  };
+
+  if (!result || !result.disease) return null;
+
+  return (
+    <button
+      className={`btn btn-outline tc-no-print ${className}`}
+      onClick={handlePrint}
+      title="Download PDF report"
+    >
+      <Icon name="download" size={16} color="var(--teal-d)" />
+      Download Report
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────
 // MAIN APP
 // ─────────────────────────────────────────────
 export default function App() {
@@ -1086,16 +1411,9 @@ export default function App() {
     return saved?.theme || "light";
   });
 
-  // Apply data-theme to <html> whenever theme changes.
-  // "system" resolves via matchMedia and re-applies live if the OS preference
-  // changes while the app is open. The event listener is cleaned up on unmount.
   useEffect(() => {
     const root = document.documentElement;
-
-    const applyResolved = (resolved) => {
-      root.setAttribute("data-theme", resolved);
-    };
-
+    const applyResolved = (resolved) => root.setAttribute("data-theme", resolved);
     if (theme === "system") {
       const mq = window.matchMedia("(prefers-color-scheme: dark)");
       applyResolved(mq.matches ? "dark" : "light");
@@ -1103,14 +1421,10 @@ export default function App() {
       mq.addEventListener("change", handler);
       return () => mq.removeEventListener("change", handler);
     }
-
     applyResolved(theme);
   }, [theme]);
 
-  // Stable callback handed down to SettingsScreen for instant live preview.
-  const handleThemeChange = useCallback((newTheme) => {
-    setTheme(newTheme);
-  }, []);
+  const handleThemeChange = useCallback((newTheme) => { setTheme(newTheme); }, []);
 
   const MAX_Q = 15;
 
@@ -1120,13 +1434,12 @@ export default function App() {
     _notifTimer = setTimeout(() => setNotif(""), 2600);
   }, []);
 
-  // Restore session on mount
   useEffect(() => {
     const t1 = setTimeout(() => setSplashFade(true), 1900);
     const t2 = setTimeout(() => {
       setSplash(false);
-      const saved  = Store.get(USER_KEY);
-      const token  = localStorage.getItem(TOKEN_KEY);
+      const saved = Store.get(USER_KEY);
+      const token = localStorage.getItem(TOKEN_KEY);
       if (saved && token && saved.token === token) {
         _loggingOut = false;
         setUser(saved);
@@ -1151,18 +1464,10 @@ export default function App() {
     _loggingOut = true;
     api.setToken(null);
     Store.remove(USER_KEY);
-    setAssActive(false);
-    setResult(null);
-    setAnalyzing(false);
-    setAnswers({});
-    setAsked([]);
-    setCurrentQ(null);
-    setQIdx(0);
-    setSessionId(null);
-    setDetailRec(null);
-    setPage("home");
-    setUser(null);
-    setNotif("");
+    setAssActive(false); setResult(null); setAnalyzing(false);
+    setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0);
+    setSessionId(null); setDetailRec(null); setPage("home");
+    setUser(null); setNotif("");
     toast("Signed out successfully.");
   }, [toast]);
 
@@ -1186,7 +1491,7 @@ export default function App() {
       sid    = data.session_id;
       firstQ = data.first_question || ALL_QUESTIONS[0];
       setSessionId(sid);
-    } catch { /* offline fallback */ }
+    } catch {}
     if (_loggingOut) return;
     setCurrentQ(firstQ);
     setAssActive(true);
@@ -1221,7 +1526,6 @@ export default function App() {
     setAnalyzing(true);
     await new Promise((r) => setTimeout(r, 2400));
     if (_loggingOut) return;
-
     let pred = null;
     if (sessionId) {
       try {
@@ -1229,9 +1533,7 @@ export default function App() {
         if (_loggingOut) return;
       } catch {}
     }
-
     if (!pred) pred = predictOffline(finalAnswers);
-
     if (_loggingOut) return;
     setResult(pred);
     setAnalyzing(false);
@@ -1259,21 +1561,40 @@ export default function App() {
 
   if (!user) return <AuthScreen onLogin={login} toast={toast} />;
   if (analyzing) return <AnalyzingScreen />;
-  if (page === "result" && result) return <ResultScreen result={result} onReset={resetAssessment} onNewCheck={startAssessment} />;
+  if (page === "result" && result) return (
+    <>
+      {/* Hidden print target — always rendered when result exists */}
+      <div id="tc-print-root" style={{ display: "none" }}>
+        <PrintReport
+          result={result}
+          patientName={user?.name || ""}
+          patientAge={user?.age || ""}
+          patientGender={user?.gender || ""}
+          assessmentDate={new Date().toLocaleDateString("en-GB", { day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+        />
+      </div>
+      <ResultScreen
+        result={result}
+        onReset={resetAssessment}
+        onNewCheck={startAssessment}
+        user={user}
+      />
+    </>
+  );
   if (assActive && currentQ) return <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />;
 
   const navItems = [
-    { id: "home",       label: "Home",    icon: "home" },
-    { id: "assessment", label: "Check",   icon: "activity" },
+    { id: "home",       label: "Home",    icon: "home"      },
+    { id: "assessment", label: "Check",   icon: "activity"  },
     { id: "records",    label: "Records", icon: "clipboard" },
-    { id: "profile",    label: "Profile", icon: "user" },
+    { id: "profile",    label: "Profile", icon: "user"      },
   ];
 
   const renderPage = () => {
     switch (page) {
       case "home":       return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
       case "assessment": return <AssessmentLanding onStart={startAssessment} />;
-      case "records":    return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
+      case "records":    return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} user={user} />;
       case "profile":    return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
       case "settings":   return <SettingsScreen onBack={() => setPage("profile")} toast={toast} onThemeChange={handleThemeChange} currentTheme={theme} />;
       case "privacy":    return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} onLogout={logout} />;
@@ -1338,10 +1659,7 @@ function AuthScreen({ onLogin, toast }) {
   const [showPw,  setShowPw]  = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const switchMode = (m) => {
-    setMode(m);
-    setName(""); setEmail(""); setPw(""); setAge(""); setGender("");
-  };
+  const switchMode = (m) => { setMode(m); setName(""); setEmail(""); setPw(""); setAge(""); setGender(""); };
 
   const submit = async () => {
     if (!email.trim() || !pw.trim()) { toast("Please fill in all required fields."); return; }
@@ -1455,7 +1773,6 @@ function HomeScreen({ userId, user, onStart, onNav }) {
         </div>
         <div className="avatar">{(user?.name || "P")[0].toUpperCase()}</div>
       </div>
-
       <div className="hero-card">
         <div className="hero-bg-icon"><Icon name="heart" size={110} color="#fff" /></div>
         <div className="hero-eyebrow">Guided Clinical Assessment</div>
@@ -1464,7 +1781,6 @@ function HomeScreen({ userId, user, onStart, onNav }) {
           Start Assessment <Icon name="chevR" size={14} color="var(--teal-dd)" />
         </button>
       </div>
-
       <div className="stats-row">
         {stats.map((s) => (
           <div key={s.label} className="stat-card">
@@ -1476,7 +1792,6 @@ function HomeScreen({ userId, user, onStart, onNav }) {
           </div>
         ))}
       </div>
-
       {records.length > 0 && (
         <div className="section">
           <div className="section-ttl">Recent Assessments</div>
@@ -1496,7 +1811,6 @@ function HomeScreen({ userId, user, onStart, onNav }) {
           </div>
         </div>
       )}
-
       <div className="section">
         <div className="section-ttl">Disease Coverage</div>
         <div className="card card-p">
@@ -1526,12 +1840,8 @@ function AssessmentLanding({ onStart }) {
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div className="al-hero">
         <div className="al-hero-text">
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--teal)", marginBottom: 6 }}>
-            Symptom Assessment
-          </div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, color: "var(--ink)", lineHeight: 1.3, marginBottom: 8 }}>
-            Talk to our AI clinician
-          </div>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--teal)", marginBottom: 6 }}>Symptom Assessment</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, color: "var(--ink)", lineHeight: 1.3, marginBottom: 8 }}>Talk to our AI clinician</div>
           <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
             Answer a short set of questions and receive a detailed assessment with personalised recommendations.
           </div>
@@ -1640,7 +1950,10 @@ function AnalyzingScreen() {
 // ─────────────────────────────────────────────
 // RESULT SCREEN
 // ─────────────────────────────────────────────
-function ResultScreen({ result, onReset, onNewCheck }) {
+function ResultScreen({ result, onReset, onNewCheck, user }) {
+  const assessmentDate = new Date().toLocaleDateString("en-GB", {
+    day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
 
   if (!result.disease) {
     return (
@@ -1652,9 +1965,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           </button>
         </div>
         <div style={{ maxWidth: 600, margin: "0 auto", padding: "48px 16px 64px", textAlign: "center" }}>
-          <div className="no-symptoms-ring">
-            <Icon name="check" size={52} color="var(--green)" />
-          </div>
+          <div className="no-symptoms-ring"><Icon name="check" size={52} color="var(--green)" /></div>
           <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 10, color: "var(--ink)" }}>
             No Symptoms Detected
           </div>
@@ -1662,9 +1973,9 @@ function ResultScreen({ result, onReset, onNewCheck }) {
             Based on your responses, you did not report any significant symptoms. There are no indicators of the conditions this system screens for.
           </div>
           <div className="rec-bubbles mb-4" style={{ textAlign: "left" }}>
-            <RecBubble icon="heart"     label="What this means"  text="Your answers did not match the symptom patterns for any of the 22 conditions in our database." accent="var(--green-d)"  bg="var(--green-l)"  />
-            <RecBubble icon="user"      label="Recommendation"   text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic." accent="var(--blue-d)"  bg="var(--blue-l)"   />
-            <RecBubble icon="info"      label="Good to know"     text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition." accent="var(--purple-d)" bg="var(--purple-l)" />
+            <RecBubble icon="heart"  label="What this means"  text="Your answers did not match the symptom patterns for any of the 22 conditions in our database." accent="var(--green-d)" bg="var(--green-l)" />
+            <RecBubble icon="user"   label="Recommendation"   text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic." accent="var(--blue-d)"  bg="var(--blue-l)"  />
+            <RecBubble icon="info"   label="Good to know"     text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition." accent="var(--purple-d)" bg="var(--purple-l)" />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Retake Assessment</button>
@@ -1682,14 +1993,25 @@ function ResultScreen({ result, onReset, onNewCheck }) {
   const scores = result.all_scores
     ? Object.entries(result.all_scores).filter(([d]) => d !== result.disease).slice(0, 4)
     : [];
+  const activeSyms = result.active_symptoms || [];
+  const traj       = buildConfidenceTrajectory(result.disease, activeSyms);
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Your Result</div>
-        <button onClick={onReset} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
-          <Icon name="x" size={16} color="var(--muted)" />
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <DownloadReportButton
+            result={{ ...result, active_symptoms: activeSyms }}
+            patientName={user?.name}
+            patientAge={user?.age}
+            patientGender={user?.gender}
+            assessmentDate={assessmentDate}
+          />
+          <button onClick={onReset} className="icon-btn tc-no-print" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+            <Icon name="x" size={16} color="var(--muted)" />
+          </button>
+        </div>
       </div>
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "24px 16px 64px" }}>
         <div className="text-c mb-4">
@@ -1702,13 +2024,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           <div className="t-label mb-2">Predicted Condition</div>
           <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12, color: "var(--ink)" }}>{result.disease}</div>
           <div style={{ height: 6, background: "var(--border-l)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
-            <div style={{
-              height: "100%",
-              width: `${Math.round(result.confidence * 100)}%`,
-              background: `linear-gradient(90deg, ${color}80, ${color})`,
-              borderRadius: 99,
-              transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)",
-            }} />
+            <div style={{ height: "100%", width: `${Math.round(result.confidence * 100)}%`, background: `linear-gradient(90deg, ${color}80, ${color})`, borderRadius: 99, transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)" }} />
           </div>
           <div style={{ fontSize: 13, fontWeight: 700, color }}>{Math.round(result.confidence * 100)}% match</div>
           {result.explanation && (
@@ -1717,13 +2033,29 @@ function ResultScreen({ result, onReset, onNewCheck }) {
             </div>
           )}
         </div>
+
+        {/* Confidence trajectory chart */}
+        {traj.length >= 2 && (
+          <div className="card card-p mb-3">
+            <div className="section-ttl mb-1" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <Icon name="trending" size={13} color="var(--teal)" />
+              Confidence Trajectory
+            </div>
+            <div className="t-subtitle mb-3" style={{ fontSize: 11 }}>
+              How model confidence in {result.disease} built as each symptom was confirmed
+            </div>
+            <ConfidenceChart points={traj} color="#0c8a7e" />
+          </div>
+        )}
+
         <div className="section-ttl mb-2">What to Do</div>
         <div className="rec-bubbles mb-4">
-          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  bg="var(--green-l)"  />
-          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)"   />
-          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}           bg={bg}              />
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)" bg="var(--green-l)" />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)"  />
+          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}          bg={bg}             />
           {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" bg="var(--red-l)" />}
         </div>
+
         {scores.length > 0 && (
           <div className="card card-p mb-4">
             <div className="section-ttl mb-3">Other Possibilities</div>
@@ -1738,13 +2070,23 @@ function ResultScreen({ result, onReset, onNewCheck }) {
             ))}
           </div>
         )}
+
         <div className="disclaimer mb-4">
           <Icon name="alert" size={14} color="var(--amber)" />
           <p>This result is for informational purposes only. It does not replace a clinical diagnosis. Consult a qualified healthcare professional before making any medical decisions.</p>
         </div>
+
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Start New Assessment</button>
-          <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
+          <DownloadReportButton
+            result={{ ...result, active_symptoms: activeSyms }}
+            patientName={user?.name}
+            patientAge={user?.age}
+            patientGender={user?.gender}
+            assessmentDate={assessmentDate}
+            className="btn-full"
+          />
+          <button className="btn btn-primary btn-full btn-lg tc-no-print" onClick={onNewCheck}>Start New Assessment</button>
+          <button className="btn btn-secondary btn-full tc-no-print" onClick={onReset}>Return to Home</button>
         </div>
       </div>
     </div>
@@ -1754,7 +2096,7 @@ function ResultScreen({ result, onReset, onNewCheck }) {
 // ─────────────────────────────────────────────
 // RECORDS SCREEN
 // ─────────────────────────────────────────────
-function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
+function RecordsScreen({ toast, onDetail, detail, onClearDetail, user }) {
   const [records, setRecords] = useState([]);
   const [search,  setSearch]  = useState("");
   const [filter,  setFilter]  = useState("All");
@@ -1775,7 +2117,7 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
     }
   };
 
-  if (detail) return <RecordDetail record={detail} onBack={onClearDetail} />;
+  if (detail) return <RecordDetail record={detail} onBack={onClearDetail} user={user} />;
 
   const filtered = records.filter((r) => {
     const ms = (r.disease || "").toLowerCase().includes(search.toLowerCase())
@@ -1830,57 +2172,138 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
   );
 }
 
-function RecordDetail({ record, onBack }) {
-  const color = RISK_COLOR[record.risk] || "var(--teal)";
-  const bg    = RISK_BG[record.risk]   || "var(--green-l)";
-  const rec   = record.recommendation  || {};
-  const syms  = (record.active_symptoms || []).map((s) => s.replace(/_/g, " "));
+function RecordDetail({ record, onBack, user }) {
+  const color    = RISK_COLOR[record.risk] || "var(--teal)";
+  const bg       = RISK_BG[record.risk]   || "var(--green-l)";
+  const rec      = record.recommendation  || {};
+  const syms     = (record.active_symptoms || []).map((s) => s.replace(/_/g, " "));
+  const rawSyms  = record.active_symptoms || [];
+  const traj     = record.disease ? buildConfidenceTrajectory(record.disease, rawSyms) : [];
+  const scores   = record.all_scores
+    ? Object.entries(record.all_scores).filter(([d]) => d !== record.disease).slice(0, 4)
+    : [];
+  const assessmentDate = new Date(record.created_at).toLocaleDateString("en-GB", {
+    day: "2-digit", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+
+  const printResult = {
+    disease:        record.disease,
+    risk:           record.risk,
+    confidence:     record.confidence,
+    explanation:    record.explanation,
+    recommendation: record.recommendation,
+    all_scores:     record.ml_scores || record.all_scores || {},
+    active_symptoms: rawSyms,
+  };
+
   return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
-          <Icon name="chevL" size={16} color="var(--ink)" />
-        </button>
-        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Assessment Detail</div>
+    <>
+      {/* Hidden print root for this record */}
+      <div id="tc-print-root" style={{ display: "none" }}>
+        <PrintReport
+          result={printResult}
+          patientName={record.patient_name || user?.name || ""}
+          patientAge={user?.age || ""}
+          patientGender={user?.gender || ""}
+          assessmentDate={assessmentDate}
+        />
       </div>
-      <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
-        <div className="card card-p text-c mb-3">
-          <div className={`result-ring result-ring-${record.risk}`} style={{ width: 90, height: 90 }}>
-            <Icon name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"} size={36} color={color} />
-          </div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px", color: "var(--ink)" }}>{record.disease}</div>
-          <span className={`badge badge-${record.risk}`}>{record.risk} Risk</span>
-          <div className="t-subtitle mt-2" style={{ fontSize: 12 }}>
-            {record.patient_name} · {new Date(record.created_at).toLocaleString("en-GB")}
-          </div>
-          <div style={{ fontSize: 13, fontWeight: 700, color, marginTop: 6 }}>
-            {Math.round((record.confidence || 0) * 100)}% match
-          </div>
-          {record.explanation && (
-            <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>{record.explanation}</div>
+
+      <div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
+          <button onClick={onBack} className="icon-btn tc-no-print" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+            <Icon name="chevL" size={16} color="var(--ink)" />
+          </button>
+          <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)", flex: 1 }}>Assessment Detail</div>
+          {record.disease && (
+            <DownloadReportButton
+              result={printResult}
+              patientName={record.patient_name || user?.name}
+              patientAge={user?.age}
+              patientGender={user?.gender}
+              assessmentDate={assessmentDate}
+            />
           )}
         </div>
-        <div className="section-ttl mb-2">Recommendations</div>
-        <div className="rec-bubbles mb-4">
-          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  bg="var(--green-l)"  />
-          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)"   />
-          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}           bg={bg}              />
-          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" bg="var(--red-l)" />}
-        </div>
-        {syms.length > 0 && (
-          <div className="card card-p mb-4">
-            <div className="section-ttl mb-2">Reported Symptoms ({syms.length})</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {syms.map((s) => (
-                <span key={s} style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal-d)" }}>
-                  {s}
-                </span>
+        <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
+          <div className="card card-p text-c mb-3">
+            <div className={`result-ring result-ring-${record.risk}`} style={{ width: 90, height: 90 }}>
+              <Icon name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"} size={36} color={color} />
+            </div>
+            <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px", color: "var(--ink)" }}>{record.disease}</div>
+            <span className={`badge badge-${record.risk}`}>{record.risk} Risk</span>
+            <div className="t-subtitle mt-2" style={{ fontSize: 12 }}>
+              {record.patient_name} · {new Date(record.created_at).toLocaleString("en-GB")}
+            </div>
+            <div style={{ fontSize: 13, fontWeight: 700, color, marginTop: 6 }}>
+              {Math.round((record.confidence || 0) * 100)}% match
+            </div>
+            {record.explanation && (
+              <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>{record.explanation}</div>
+            )}
+          </div>
+
+          {/* Confidence trajectory */}
+          {traj.length >= 2 && (
+            <div className="card card-p mb-3">
+              <div className="section-ttl mb-1" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Icon name="trending" size={13} color="var(--teal)" />
+                Confidence Trajectory
+              </div>
+              <div className="t-subtitle mb-3" style={{ fontSize: 11 }}>
+                How model confidence in {record.disease} built as each symptom was confirmed
+              </div>
+              <ConfidenceChart points={traj} color="#0c8a7e" />
+            </div>
+          )}
+
+          <div className="section-ttl mb-2">Recommendations</div>
+          <div className="rec-bubbles mb-4">
+            <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)" bg="var(--green-l)" />
+            <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)"  />
+            <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}          bg={bg}             />
+            {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" bg="var(--red-l)" />}
+          </div>
+
+          {scores.length > 0 && (
+            <div className="card card-p mb-3">
+              <div className="section-ttl mb-3">Other Possibilities</div>
+              {scores.map(([d, conf]) => (
+                <div key={d} className="score-bar-row">
+                  <span className="score-bar-name">{d}</span>
+                  <div className="score-bar-track">
+                    <div className="score-bar-fill" style={{ width: `${Math.round(conf * 100)}%` }} />
+                  </div>
+                  <span className="score-bar-pct">{Math.round(conf * 100)}%</span>
+                </div>
               ))}
             </div>
+          )}
+
+          {syms.length > 0 && (
+            <div className="card card-p mb-4">
+              <div className="section-ttl mb-2">Reported Symptoms ({syms.length})</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {syms.map((s) => (
+                  <span key={s} style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal-d)" }}>{s}</span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ marginTop: 8 }}>
+            <DownloadReportButton
+              result={printResult}
+              patientName={record.patient_name || user?.name}
+              patientAge={user?.age}
+              patientGender={user?.gender}
+              assessmentDate={assessmentDate}
+              className="btn-full"
+            />
           </div>
-        )}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -1920,11 +2343,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
     }
   };
 
-  const cancelEdit = () => {
-    setName(user?.name || ""); setAge(user?.age || ""); setGender(user?.gender || "");
-    setEditing(false);
-  };
-
+  const cancelEdit = () => { setName(user?.name || ""); setAge(user?.age || ""); setGender(user?.gender || ""); setEditing(false); };
   const p = { ...user, ...profile };
 
   const menuItems = [
@@ -2013,7 +2432,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           <Icon name="logout" size={15} color="#fff" /> Sign Out
         </button>
         <div className="text-c mt-4" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.7 }}>
-          TropiCare · Symptom Checker for Tropical Diseases
+          TropiCare v1.0 · Symptom Checker for Tropical Diseases
         </div>
       </div>
     </div>
@@ -2061,10 +2480,7 @@ function MyDataScreen({ onBack, toast }) {
 
   const counts = { High: 0, Medium: 0, Low: 0 };
   records.forEach((r) => { if (counts[r.risk] !== undefined) counts[r.risk]++; });
-
-  const shown = records.filter((r) =>
-    (r.disease || "").toLowerCase().includes(search.toLowerCase())
-  );
+  const shown = records.filter((r) => (r.disease || "").toLowerCase().includes(search.toLowerCase()));
 
   return (
     <div>
@@ -2083,20 +2499,15 @@ function MyDataScreen({ onBack, toast }) {
             </div>
           ))}
         </div>
-
         <div style={{ background: "var(--teal-xl)", border: "1px solid var(--teal-l)", borderRadius: "var(--radius)", padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-start" }}>
           <Icon name="shield" size={16} color="var(--teal)" />
-          <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, margin: 0 }}>
-            This screen shows your assessments only.
-          </p>
+          <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, margin: 0 }}>This screen shows your assessments only.</p>
         </div>
-
         <div className="section-ttl mb-2">My Assessments ({records.length})</div>
         <div className="search-wrap mb-3">
           <span className="search-icon"><Icon name="search" size={15} /></span>
           <input className="search-input" placeholder="Search by disease..." value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
-
         {loading ? (
           <div className="empty-state"><div className="t-subtitle">Loading...</div></div>
         ) : shown.length === 0 ? (
@@ -2172,11 +2583,7 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
   };
 
   const deleteAccount = async () => {
-    if (!deleteConfirm) {
-      setDeleteConfirm(true);
-      setTimeout(() => setDeleteConfirm(false), 6000);
-      return;
-    }
+    if (!deleteConfirm) { setDeleteConfirm(true); setTimeout(() => setDeleteConfirm(false), 6000); return; }
     setDeleteLoading(true);
     try {
       await api.delete("/user/account");
@@ -2188,10 +2595,10 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
   };
 
   const privacyPoints = [
-    { icon: "database", color: "var(--teal)",   bg: "var(--teal-xl)",  label: "Data stays yours",        desc: "Your assessment history is stored in a secured database tied to your account only." },
-    { icon: "user",     color: "var(--blue)",   bg: "var(--blue-l)",   label: "No third-party sharing",  desc: "Your personal health data is never sold or shared with advertisers or third parties." },
-    { icon: "shield",   color: "var(--purple)", bg: "var(--purple-l)", label: "Encrypted in transit",    desc: "All data between your device and our servers is protected using HTTPS encryption." },
-    { icon: "trash",    color: "var(--red)",    bg: "var(--red-l)",    label: "Right to delete",         desc: "You can permanently delete your account and all associated data at any time." },
+    { icon: "database", color: "var(--teal)",   bg: "var(--teal-xl)",  label: "Data stays yours",       desc: "Your assessment history is stored in a secured database tied to your account only." },
+    { icon: "user",     color: "var(--blue)",   bg: "var(--blue-l)",   label: "No third-party sharing", desc: "Your personal health data is never sold or shared with advertisers or third parties." },
+    { icon: "shield",   color: "var(--purple)", bg: "var(--purple-l)", label: "Encrypted in transit",   desc: "All data between your device and our servers is protected using HTTPS encryption." },
+    { icon: "trash",    color: "var(--red)",    bg: "var(--red-l)",    label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
   ];
 
   return (
@@ -2289,7 +2696,6 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
             </div>
           </div>
         </div>
-
         <div className="sec-section">
           <div className="sec-section-title">Your Privacy</div>
           <div className="card card-p">
@@ -2306,7 +2712,6 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
             ))}
           </div>
         </div>
-
         <div className="sec-section">
           <div className="sec-section-title">Danger Zone</div>
           <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
@@ -2448,8 +2853,6 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
   const [lang,     setLang]     = useState("en");
   const [fontSize, setFontSize] = useState("medium");
 
-  // Sync local state if the parent-supplied currentTheme changes
-  // (e.g. navigating away and back while the OS flipped system preference).
   useEffect(() => {
     if (currentTheme && currentTheme !== theme) setTheme(currentTheme);
   }, [currentTheme]);
@@ -2464,10 +2867,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
     }
   }, []);
 
-  const applyTheme = (val) => {
-    setTheme(val);
-    if (onThemeChange) onThemeChange(val);
-  };
+  const applyTheme = (val) => { setTheme(val); if (onThemeChange) onThemeChange(val); };
 
   const save = () => {
     Store.set("tc_settings", { theme, notifications: notifs, language: lang, fontSize });
@@ -2484,9 +2884,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
   const ChipGroup = ({ options, value, onChange }) => (
     <div className="chip-row">
       {options.map((o) => (
-        <button key={o.val} className={`chip${value === o.val ? " on" : ""}`} onClick={() => onChange(o.val)}>
-          {o.label}
-        </button>
+        <button key={o.val} className={`chip${value === o.val ? " on" : ""}`} onClick={() => onChange(o.val)}>{o.label}</button>
       ))}
     </div>
   );
@@ -2507,29 +2905,20 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
         <div className="t-display">Settings</div>
       </div>
       <div className="page-body">
-
-        {/* Appearance */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Appearance</div>
           <div className="card card-p">
-
             <div className="t-label mb-2">Theme</div>
-            {/* Compact, fully rounded theme switcher — works cleanly on all screen sizes */}
             <div className="theme-preview-strip">
               {THEME_OPTIONS.map((o) => (
-                <button
-                  key={o.val}
+                <button key={o.val}
                   className={`theme-preview-swatch ${o.val}-sw${theme === o.val ? " selected" : ""}`}
                   onClick={() => applyTheme(o.val)}
                   aria-pressed={theme === o.val}
                   aria-label={`${o.label} theme`}
                   title={`${o.label} theme`}
                 >
-                  <Icon
-                    name={o.icon}
-                    size={14}
-                    color={o.val === "dark" ? "#e8eef3" : o.val === "system" ? "var(--teal)" : "#0b1726"}
-                  />
+                  <Icon name={o.icon} size={14} color={o.val === "dark" ? "#e8eef3" : o.val === "system" ? "var(--teal)" : "#0b1726"} />
                   <span>{o.label}</span>
                 </button>
               ))}
@@ -2540,19 +2929,12 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
                 Follows your device display settings and updates live.
               </div>
             )}
-
             <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
               <div className="t-label mb-2">Text Size</div>
-              <ChipGroup
-                options={[{val:"small",label:"Small"},{val:"medium",label:"Medium"},{val:"large",label:"Large"}]}
-                value={fontSize}
-                onChange={setFontSize}
-              />
+              <ChipGroup options={[{val:"small",label:"Small"},{val:"medium",label:"Medium"},{val:"large",label:"Large"}]} value={fontSize} onChange={setFontSize} />
             </div>
           </div>
         </div>
-
-        {/* Notifications */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Notifications</div>
           <div className="card card-p">
@@ -2565,20 +2947,12 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
             </div>
           </div>
         </div>
-
-        {/* Language */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Language</div>
           <div className="card card-p">
-            <ChipGroup
-              options={[{val:"en",label:"English"},{val:"tw",label:"Twi"},{val:"fr",label:"French"},{val:"ha",label:"Hausa"}]}
-              value={lang}
-              onChange={setLang}
-            />
+            <ChipGroup options={[{val:"en",label:"English"},{val:"tw",label:"Twi"},{val:"fr",label:"French"},{val:"ha",label:"Hausa"}]} value={lang} onChange={setLang} />
           </div>
         </div>
-
-        {/* Privacy */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Privacy</div>
           <div className="card card-p">
@@ -2598,7 +2972,6 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
             </div>
           </div>
         </div>
-
         <button className="btn btn-primary btn-full" onClick={save}>Save Settings</button>
       </div>
     </div>
@@ -2610,7 +2983,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
 // ─────────────────────────────────────────────
 function getGreeting() {
   const hour = new Date().getHours();
-  if (hour >= 5 && hour < 12)  return "Good morning,";
+  if (hour >= 5  && hour < 12) return "Good morning,";
   if (hour >= 12 && hour < 17) return "Good afternoon,";
   if (hour >= 17 && hour < 21) return "Good evening,";
   return "Good night,";
