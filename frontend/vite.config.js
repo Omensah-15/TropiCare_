@@ -7,6 +7,7 @@ export default defineConfig({
     include: ['jspdf'],
   },
   build: {
+    chunkSizeWarningLimit: 800,
     commonjsOptions: {
       include: [/jspdf/, /node_modules/],
     },
