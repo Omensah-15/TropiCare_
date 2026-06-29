@@ -1,6 +1,6 @@
 /*
  * TropiCare
- * Backend: FastAPI (tropicare.onrender.com)
+ * Backend: FastAPI (tropicare.onrender.com) 
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -18,6 +18,11 @@ const API_BASE = "https://tropicare.onrender.com/api/v1";
 const TOKEN_KEY = "tc_token";
 const USER_KEY  = "tc_user";
 
+/*
+ * Module-level flag: set to true the moment logout() fires.
+ * Any in-flight .then() callbacks check this before calling setState.
+ * Reset to false when a new login completes.
+ */
 let _loggingOut = false;
 
 const api = {
@@ -37,31 +42,20 @@ const api = {
 
   onUnauthorized: null,
 
-  // FIX: retry with exponential backoff for Render cold-starts.
-  // Network errors (not HTTP errors) are retried up to 3 times.
-  async call(method, path, body, attempt = 0) {
-    try {
-      const res = await fetch(`${API_BASE}${path}`, {
-        method,
-        headers:    api.headers(),
-        body:       body !== undefined ? JSON.stringify(body) : undefined,
-      });
-      if (!res.ok) {
-        if (res.status === 401 && api.onUnauthorized) api.onUnauthorized();
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail || `HTTP ${res.status}`);
+  async call(method, path, body) {
+    const res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: api.headers(),
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      if (res.status === 401 && api.onUnauthorized) {
+        api.onUnauthorized();
       }
-      return res.json();
-    } catch (e) {
-      // Only retry on network-level failures, not on HTTP errors like 401/404.
-      const isNetworkErr = !(e.message && e.message.startsWith("HTTP"));
-      if (isNetworkErr && attempt < 3 && !_loggingOut) {
-        const wait = 1500 * Math.pow(2, attempt); // 1.5s, 3s, 6s
-        await new Promise((r) => setTimeout(r, wait));
-        return api.call(method, path, body, attempt + 1);
-      }
-      throw e;
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `HTTP ${res.status}`);
     }
+    return res.json();
   },
 
   get:    (path)       => api.call("GET",    path),
@@ -233,6 +227,14 @@ function getNextQuestionOffline(answers, asked) {
   return ALL_QUESTIONS.find((q) => !asked.includes(q.id)) || null;
 }
 
+// ─────────────────────────────────────────────
+// OFFLINE CONFIDENCE SNAPSHOT
+//
+// Mirrors the backend's compute_score_snapshot: an ungated readout of
+// the model's current belief after every answered question. Used only
+// when the device cannot reach the API, so the confidence-evolution
+// chart in the PDF report never ends up empty.
+// ─────────────────────────────────────────────
 function computeOfflineSnapshot(answers) {
   const snapshot = {};
   Object.keys(DISEASE_SYMPTOM_MAP).forEach((d) => {
@@ -243,12 +245,17 @@ function computeOfflineSnapshot(answers) {
   return snapshot;
 }
 
+// ─────────────────────────────────────────────
+// OFFLINE PREDICTION
+// ─────────────────────────────────────────────
 function predictOffline(answers) {
   const yesCount = Object.values(answers).filter((v) => v === true).length;
 
   if (yesCount < 2) {
     return {
-      disease: null, confidence: 0.0, risk: "None",
+      disease:     null,
+      confidence:  0.0,
+      risk:        "None",
       explanation: "No significant symptoms were reported.",
       recommendation: {
         home_care: "You appear to be in good health based on your responses.",
@@ -256,7 +263,8 @@ function predictOffline(answers) {
         doctor:    "See a doctor if you develop any symptoms or feel unwell.",
         safety:    "",
       },
-      all_scores: {}, method: "insufficient_evidence",
+      all_scores: {},
+      method:     "insufficient_evidence",
     };
   }
 
@@ -272,7 +280,9 @@ function predictOffline(answers) {
 
   if (sorted[0].sc <= 0) {
     return {
-      disease: null, confidence: 0.0, risk: "None",
+      disease:     null,
+      confidence:  0.0,
+      risk:        "None",
       explanation: "No significant symptoms were reported.",
       recommendation: {
         home_care: "You appear to be in good health based on your responses.",
@@ -280,7 +290,8 @@ function predictOffline(answers) {
         doctor:    "See a doctor if you develop any symptoms or feel unwell.",
         safety:    "",
       },
-      all_scores: {}, method: "insufficient_evidence",
+      all_scores: {},
+      method:     "insufficient_evidence",
     };
   }
 
@@ -298,7 +309,9 @@ function predictOffline(answers) {
       doctor:    risk === "High" ? "Visit a hospital or clinic without delay." : "See a doctor if symptoms persist or worsen.",
       safety:    risk === "High" ? "Do not wait — seek medical attention today." : "",
     },
-    all_scores: Object.fromEntries(sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])),
+    all_scores: Object.fromEntries(
+      sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])
+    ),
     method: "offline-scoring",
   };
 }
@@ -333,98 +346,186 @@ const injectStyles = () => {
       --shadow-l:0 14px 48px rgba(11,23,38,0.14),0 4px 12px rgba(11,23,38,0.06);
       --ease:cubic-bezier(0.4,0,0.2,1);
       --ease-spring:cubic-bezier(0.34,1.56,0.64,1);
-      --t-fast:150ms var(--ease);--t-med:220ms var(--ease);--t-slow:300ms var(--ease);
+      --t-fast:150ms var(--ease);
+      --t-med:220ms var(--ease);
+      --t-slow:300ms var(--ease);
       --focus-ring:0 0 0 3px rgba(12,138,126,0.28);
     }
+
+    /* ── Dark theme — clean, professional clinical palette ───────────── */
     :root[data-theme="dark"] {
-      --ink:#e8eef3;--ink-2:#c3ced9;--ink-3:#94a3b3;
-      --muted:#7c8a99;--muted-l:#4f5d6c;
-      --border:#263241;--border-l:#1c2733;
-      --surface:#161f29;--bg:#0f161e;
-      --teal:#14b8a6;--teal-d:#2dd4bf;--teal-dd:#0e8f80;--teal-l:#1b3d35;--teal-xl:#102621;
-      --teal-rgb:20,184,166;
-      --red:#f25656;--red-d:#f87171;--red-l:#2c1618;
-      --amber:#e8a838;--amber-d:#fbbf24;--amber-l:#2a2013;
-      --green:#34c77f;--green-d:#4ade80;--green-l:#102420;
-      --blue:#5b8def;--blue-d:#7ea8f5;--blue-l:#142233;
-      --purple:#9b86f3;--purple-d:#b3a2f7;--purple-l:#1d1a33;
+      --ink:      #e8eef3;
+      --ink-2:    #c3ced9;
+      --ink-3:    #94a3b3;
+      --muted:    #7c8a99;
+      --muted-l:  #4f5d6c;
+      --border:   #263241;
+      --border-l: #1c2733;
+      --surface:  #161f29;
+      --bg:       #0f161e;
+      --teal:     #14b8a6;
+      --teal-d:   #2dd4bf;
+      --teal-dd:  #0e8f80;
+      --teal-l:   #1b3d35;
+      --teal-xl:  #102621;
+      --teal-rgb: 20,184,166;
+      --red:      #f25656;
+      --red-d:    #f87171;
+      --red-l:    #2c1618;
+      --amber:    #e8a838;
+      --amber-d:  #fbbf24;
+      --amber-l:  #2a2013;
+      --green:    #34c77f;
+      --green-d:  #4ade80;
+      --green-l:  #102420;
+      --blue:     #5b8def;
+      --blue-d:   #7ea8f5;
+      --blue-l:   #142233;
+      --purple:   #9b86f3;
+      --purple-d: #b3a2f7;
+      --purple-l: #1d1a33;
       --shadow-xs:0 1px 2px rgba(0,0,0,0.30);
-      --shadow-s:0 1px 4px rgba(0,0,0,0.35),0 1px 2px rgba(0,0,0,0.24);
-      --shadow:0 6px 24px rgba(0,0,0,0.42),0 2px 6px rgba(0,0,0,0.26);
-      --shadow-l:0 14px 48px rgba(0,0,0,0.52),0 4px 12px rgba(0,0,0,0.30);
-      --focus-ring:0 0 0 3px rgba(20,184,166,0.30);
+      --shadow-s: 0 1px 4px rgba(0,0,0,0.35),0 1px 2px rgba(0,0,0,0.24);
+      --shadow:   0 6px 24px rgba(0,0,0,0.42),0 2px 6px rgba(0,0,0,0.26);
+      --shadow-l: 0 14px 48px rgba(0,0,0,0.52),0 4px 12px rgba(0,0,0,0.30);
+      --focus-ring: 0 0 0 3px rgba(20,184,166,0.30);
     }
+
+    /* Risk badges — dark mode */
     :root[data-theme="dark"] .badge-High   { background:var(--red-l); color:var(--red-d); }
     :root[data-theme="dark"] .badge-Medium { background:var(--amber-l); color:var(--amber-d); }
     :root[data-theme="dark"] .badge-Low    { background:var(--green-l); color:var(--green-d); }
     :root[data-theme="dark"] .badge-teal   { background:var(--teal-xl); color:var(--teal-d); }
+
+    /* Structural surfaces — dark mode */
     :root[data-theme="dark"] .shell         { background:var(--bg); }
     :root[data-theme="dark"] .sidebar       { background:var(--surface); border-color:var(--border); }
     :root[data-theme="dark"] .bottom-nav    { background:var(--surface); border-color:var(--border); box-shadow:0 -6px 24px rgba(0,0,0,0.3); }
-    :root[data-theme="dark"] .nav-item:hover,:root[data-theme="dark"] .nav-item.active { background:var(--teal-xl); color:var(--teal-d); }
+    :root[data-theme="dark"] .nav-item:hover,
+    :root[data-theme="dark"] .nav-item.active { background:var(--teal-xl); color:var(--teal-d); }
     :root[data-theme="dark"] .card { box-shadow:var(--shadow-s); }
-    :root[data-theme="dark"] .auth-wrap { background:linear-gradient(165deg,#102621 0%,#0f161e 60%); }
+
+    /* Auth */
+    :root[data-theme="dark"] .auth-wrap {
+      background:linear-gradient(165deg,#102621 0%,#0f161e 60%);
+    }
     :root[data-theme="dark"] .auth-box .card { box-shadow:0 12px 40px rgba(0,0,0,0.45); }
-    :root[data-theme="dark"] .field-input { background:#0c1218; color:var(--ink); border-color:var(--border); }
+
+    /* Inputs */
+    :root[data-theme="dark"] .field-input {
+      background:#0c1218; color:var(--ink); border-color:var(--border);
+    }
     :root[data-theme="dark"] .field-input:hover { border-color:var(--muted-l); }
     :root[data-theme="dark"] .field-input:focus { border-color:var(--teal-d); }
     :root[data-theme="dark"] .field-input::placeholder { color:var(--muted-l); }
-    :root[data-theme="dark"] .field-select { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c8a99' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); }
-    :root[data-theme="dark"] .search-input { background:var(--surface); color:var(--ink); border-color:var(--border); }
+    :root[data-theme="dark"] .field-select {
+      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c8a99' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+    }
+
+    /* Search */
+    :root[data-theme="dark"] .search-input {
+      background:var(--surface); color:var(--ink); border-color:var(--border);
+    }
     :root[data-theme="dark"] .search-input:focus { border-color:var(--teal-d); }
+
+    /* Chips */
     :root[data-theme="dark"] .chip { background:var(--surface); border-color:var(--border); color:var(--muted); }
     :root[data-theme="dark"] .chip:hover { border-color:var(--muted-l); }
-    :root[data-theme="dark"] .chip.on { background:var(--teal-xl); border-color:var(--teal-d); color:var(--teal-d); }
-    :root[data-theme="dark"] .tabs { background:var(--border-l); }
-    :root[data-theme="dark"] .tab { color:var(--muted); }
-    :root[data-theme="dark"] .tab.active { background:var(--surface); color:var(--ink); }
-    :root[data-theme="dark"] .disclaimer { background:var(--amber-l); border-color:#4a3a1a; }
-    :root[data-theme="dark"] .disclaimer p { color:var(--amber-d); }
-    :root[data-theme="dark"] .rec-bubble { background:var(--surface); }
-    :root[data-theme="dark"] .rec-bubble-text { color:var(--ink-2); }
-    :root[data-theme="dark"] .score-bar-fill { background:linear-gradient(90deg,var(--muted-l),var(--muted)); }
+    :root[data-theme="dark"] .chip.on {
+      background:var(--teal-xl); border-color:var(--teal-d); color:var(--teal-d);
+    }
+
+    /* Tabs */
+    :root[data-theme="dark"] .tabs      { background:var(--border-l); }
+    :root[data-theme="dark"] .tab       { color:var(--muted); }
+    :root[data-theme="dark"] .tab.active{ background:var(--surface); color:var(--ink); }
+
+    /* Disclaimer */
+    :root[data-theme="dark"] .disclaimer            { background:var(--amber-l); border-color:#4a3a1a; }
+    :root[data-theme="dark"] .disclaimer p          { color:var(--amber-d); }
+
+    /* Rec bubbles */
+    :root[data-theme="dark"] .rec-bubble            { background:var(--surface); }
+    :root[data-theme="dark"] .rec-bubble-text       { color:var(--ink-2); }
+
+    /* Score bars */
+    :root[data-theme="dark"] .score-bar-fill {
+      background:linear-gradient(90deg,var(--muted-l),var(--muted));
+    }
     :root[data-theme="dark"] .score-bar-track { background:var(--border-l); }
+
+    /* Result rings */
     :root[data-theme="dark"] .result-ring-High   { background:linear-gradient(155deg,#241417,#33181c); box-shadow:0 0 0 10px rgba(242,86,86,0.08); }
     :root[data-theme="dark"] .result-ring-Medium { background:linear-gradient(155deg,#241c10,#332514); box-shadow:0 0 0 10px rgba(232,168,56,0.08); }
     :root[data-theme="dark"] .result-ring-Low    { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
     :root[data-theme="dark"] .result-ring-None   { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
     :root[data-theme="dark"] .no-symptoms-ring   { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
+
+    /* Assessment landing hero */
     :root[data-theme="dark"] .al-hero { background:linear-gradient(150deg,var(--teal-xl) 0%,var(--blue-l) 100%); border-color:var(--teal-l); }
-    :root[data-theme="dark"] .about-mission { background:var(--teal-xl); border-color:var(--teal-l); }
+
+    /* About mission */
+    :root[data-theme="dark"] .about-mission       { background:var(--teal-xl); border-color:var(--teal-l); }
     :root[data-theme="dark"] .about-mission-label { color:var(--teal-d); }
-    :root[data-theme="dark"] .about-mission-text { color:var(--ink-2); }
-    :root[data-theme="dark"] .about-fact { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .about-team-card { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .edit-panel { background:var(--border-l); border-color:var(--border); }
-    :root[data-theme="dark"] .sec-field-wrap { background:var(--border-l); border-color:var(--border); }
-    :root[data-theme="dark"] .q-screen { background:var(--bg); }
-    :root[data-theme="dark"] .q-topbar { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .q-close { background:var(--border-l); }
-    :root[data-theme="dark"] .q-close:hover { background:var(--border); }
-    :root[data-theme="dark"] .q-cat-pill { background:var(--teal-xl); color:var(--teal-d); border-color:var(--teal-l); }
-    :root[data-theme="dark"] .prog-track { background:var(--border-l); }
-    :root[data-theme="dark"] .ans-btn { background:var(--surface); border-color:var(--border); color:var(--ink); }
-    :root[data-theme="dark"] .ans-btn.yes { background:var(--teal-xl); border-color:var(--teal-l); color:var(--teal-d); }
-    :root[data-theme="dark"] .ans-btn.no { background:var(--border-l); border-color:var(--border); color:var(--ink-3); }
-    :root[data-theme="dark"] .ans-yes-icon { background:var(--teal-l); }
-    :root[data-theme="dark"] .ans-no-icon { background:var(--border); }
+    :root[data-theme="dark"] .about-mission-text  { color:var(--ink-2); }
+    :root[data-theme="dark"] .about-fact          { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .about-team-card     { background:var(--surface); border-color:var(--border); }
+
+    /* Edit / security panels */
+    :root[data-theme="dark"] .edit-panel    { background:var(--border-l); border-color:var(--border); }
+    :root[data-theme="dark"] .sec-field-wrap{ background:var(--border-l); border-color:var(--border); }
+
+    /* Question screen */
+    :root[data-theme="dark"] .q-screen       { background:var(--bg); }
+    :root[data-theme="dark"] .q-topbar       { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .q-close        { background:var(--border-l); }
+    :root[data-theme="dark"] .q-close:hover  { background:var(--border); }
+    :root[data-theme="dark"] .q-cat-pill     { background:var(--teal-xl); color:var(--teal-d); border-color:var(--teal-l); }
+    :root[data-theme="dark"] .prog-track     { background:var(--border-l); }
+
+    /* Answer buttons */
+    :root[data-theme="dark"] .ans-btn           { background:var(--surface); border-color:var(--border); color:var(--ink); }
+    :root[data-theme="dark"] .ans-btn.yes       { background:var(--teal-xl); border-color:var(--teal-l); color:var(--teal-d); }
+    :root[data-theme="dark"] .ans-btn.no        { background:var(--border-l); border-color:var(--border); color:var(--ink-3); }
+    :root[data-theme="dark"] .ans-yes-icon      { background:var(--teal-l); }
+    :root[data-theme="dark"] .ans-no-icon       { background:var(--border); }
+
+    /* Analyzing */
     :root[data-theme="dark"] .analyzing { background:var(--bg); }
+
+    /* Toggle slider */
     :root[data-theme="dark"] .toggle-slider { background:var(--border); }
-    :root[data-theme="dark"] .menu-ico { background:var(--border-l); }
-    :root[data-theme="dark"] .feat-icon { background:var(--border-l); }
+
+    /* Menu & feat icons */
+    :root[data-theme="dark"] .menu-ico   { background:var(--border-l); }
+    :root[data-theme="dark"] .feat-icon  { background:var(--border-l); }
+
+    /* Icon button hover */
     :root[data-theme="dark"] .icon-btn { background:var(--border-l) !important; }
     :root[data-theme="dark"] .icon-btn:hover { background:var(--border) !important; }
-    :root[data-theme="dark"] .pw-toggle { color:var(--muted-l); }
-    :root[data-theme="dark"] .pw-toggle:hover { color:var(--teal-d); background:var(--teal-xl); }
+
+    /* Password toggle */
+    :root[data-theme="dark"] .pw-toggle        { color:var(--muted-l); }
+    :root[data-theme="dark"] .pw-toggle:hover  { color:var(--teal-d); background:var(--teal-xl); }
+
+    /* Toast */
     :root[data-theme="dark"] .notif { background:#e8eef3; color:#0f161e; box-shadow:var(--shadow-l); }
+
+    /* Bottom nav active */
     :root[data-theme="dark"] .bnav-item.active { color:var(--teal-d); }
-    :root[data-theme="dark"] .hero-card { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
+
+    /* Hero / about hero gradients stay legible on dark */
+    :root[data-theme="dark"] .hero-card  { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
     :root[data-theme="dark"] .about-hero { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
+
+    /* Settings theme preview swatches */
     :root[data-theme="dark"] .theme-preview-swatch { border-color:var(--border); }
     :root[data-theme="dark"] .theme-preview-swatch.selected { border-color:var(--teal-d); box-shadow:0 0 0 2px rgba(20,184,166,0.2); }
-    :root[data-theme="dark"] .server-banner { background:#1a2a1a; border-color:#2a4a2a; color:#4ade80; }
+
+    /* ── Base styles ───────────────────────────────────────────────── */
     html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;}
-    body{font-size:15px;}#root{height:100%;}
+    body{font-size:15px;}
+    #root{height:100%;}
     ::selection{background:var(--teal-l);color:var(--teal-dd);}
     a{color:var(--teal-d);}
     button,input,select,textarea{font-family:var(--font);}
@@ -454,7 +555,8 @@ const injectStyles = () => {
     .bnav-item svg{width:20px;height:20px;}
     .page{animation:pageIn var(--t-slow) var(--ease);}
     @keyframes pageIn{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:none;}}
-    .page-head{padding:24px 24px 0;}.page-body{padding:20px 24px 40px;}
+    .page-head{padding:24px 24px 0;}
+    .page-body{padding:20px 24px 40px;}
     @media(max-width:767px){.page-head{padding:18px 16px 0;}.page-body{padding:16px 16px 32px;}}
     @media(max-width:380px){.page-head{padding:16px 12px 0;}.page-body{padding:14px 12px 28px;}}
     .t-display{font-family:var(--display);font-size:26px;font-weight:700;color:var(--ink);line-height:1.2;letter-spacing:-0.3px;}
@@ -479,7 +581,9 @@ const injectStyles = () => {
     .btn-danger:active:not(:disabled){transform:translateY(0) scale(0.97);}
     .btn-outline{background:transparent;color:var(--teal-d);border:2px solid var(--teal);}
     .btn-outline:hover:not(:disabled){background:var(--teal-xl);}
-    .btn-full{width:100%;}.btn-lg{padding:16px 28px;font-size:15px;border-radius:var(--radius);min-height:52px;}.btn-sm{padding:9px 16px;font-size:12px;min-height:36px;}
+    .btn-full{width:100%;}
+    .btn-lg{padding:16px 28px;font-size:15px;border-radius:var(--radius);min-height:52px;}
+    .btn-sm{padding:9px 16px;font-size:12px;min-height:36px;}
     .field{margin-bottom:14px;}
     .field-label{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:6px;}
     .field-input{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:15px;color:var(--ink);background:var(--surface);outline:none;transition:border-color var(--t-fast),box-shadow var(--t-fast);min-height:46px;}
@@ -506,7 +610,8 @@ const injectStyles = () => {
     .splash-sub{color:rgba(255,255,255,0.62);font-size:13px;margin-top:6px;letter-spacing:0.04em;}
     .splash-dots{display:flex;gap:6px;margin-top:52px;}
     .splash-dot{width:6px;height:6px;border-radius:99px;background:rgba(255,255,255,0.4);animation:dot-bounce 1.3s ease-in-out infinite;}
-    .splash-dot:nth-child(2){animation-delay:0.18s;}.splash-dot:nth-child(3){animation-delay:0.36s;}
+    .splash-dot:nth-child(2){animation-delay:0.18s;}
+    .splash-dot:nth-child(3){animation-delay:0.36s;}
     @keyframes dot-bounce{0%,80%,100%{transform:scale(0.7);opacity:0.4;}40%{transform:scale(1.1);opacity:1;}}
     .auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:linear-gradient(165deg,var(--teal-xl) 0%,var(--bg) 60%);}
     @media(max-width:480px){.auth-wrap{padding:18px 14px;}}
@@ -591,7 +696,8 @@ const injectStyles = () => {
     .ans-btn.no{border-color:var(--border);background:var(--border-l);color:var(--ink-3);}
     .ans-btn.no:hover{background:var(--border);}
     .ans-btn-icon{width:30px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-    .ans-yes-icon{background:var(--teal-l);}.ans-no-icon{background:var(--border);}
+    .ans-yes-icon{background:var(--teal-l);}
+    .ans-no-icon{background:var(--border);}
     .q-anim{animation:qSlide var(--t-slow) var(--ease);}
     @keyframes qSlide{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:none;}}
     .analyzing{height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--bg);padding:24px;}
@@ -600,7 +706,8 @@ const injectStyles = () => {
     @keyframes spin-slow{to{transform:rotate(360deg);}}
     .loading-dots{display:flex;gap:7px;margin-top:24px;}
     .ldot{width:9px;height:9px;border-radius:99px;background:var(--teal);animation:dot-bounce 1.2s ease-in-out infinite;}
-    .ldot:nth-child(2){animation-delay:0.18s;}.ldot:nth-child(3){animation-delay:0.36s;}
+    .ldot:nth-child(2){animation-delay:0.18s;}
+    .ldot:nth-child(3){animation-delay:0.36s;}
     .result-ring{width:110px;height:110px;border-radius:99px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;animation:ring-in 0.45s var(--ease-spring);}
     @keyframes ring-in{from{transform:scale(0.6);opacity:0;}to{transform:scale(1);opacity:1;}}
     .result-ring-High{background:linear-gradient(155deg,#fde2e2,#fac6c6);box-shadow:0 0 0 10px rgba(226,61,61,0.09);}
@@ -609,7 +716,10 @@ const injectStyles = () => {
     .result-ring-None{background:linear-gradient(155deg,#d6f3e1,#aee8c4);box-shadow:0 0 0 10px rgba(31,157,85,0.09);}
     .rec-bubbles{display:flex;flex-direction:column;gap:10px;}
     .rec-bubble{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;border-radius:var(--radius);border-left:4px solid transparent;background:var(--surface);box-shadow:var(--shadow-s);animation:bubble-in var(--t-slow) ease both;}
-    .rec-bubble:nth-child(1){animation-delay:0.05s;}.rec-bubble:nth-child(2){animation-delay:0.12s;}.rec-bubble:nth-child(3){animation-delay:0.19s;}.rec-bubble:nth-child(4){animation-delay:0.26s;}
+    .rec-bubble:nth-child(1){animation-delay:0.05s;}
+    .rec-bubble:nth-child(2){animation-delay:0.12s;}
+    .rec-bubble:nth-child(3){animation-delay:0.19s;}
+    .rec-bubble:nth-child(4){animation-delay:0.26s;}
     @keyframes bubble-in{from{opacity:0;transform:translateX(-8px);}to{opacity:1;transform:none;}}
     .rec-bubble-icon{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
     .rec-bubble-label{font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;}
@@ -644,6 +754,7 @@ const injectStyles = () => {
     .toggle input:focus-visible+.toggle-slider{box-shadow:var(--focus-ring);}
     .toggle-slider::before{content:'';position:absolute;height:19px;width:19px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:transform var(--t-fast);box-shadow:var(--shadow-s);}
     .toggle input:checked+.toggle-slider::before{transform:translateX(19px);}
+    .danger-zone{border:1.5px solid var(--red);border-radius:var(--radius);padding:18px;margin-bottom:20px;}
     .icon-btn{transition:background var(--t-fast),transform var(--t-fast);min-width:36px;min-height:36px;align-items:center;justify-content:center;}
     .icon-btn:hover{background:var(--border)!important;}
     .icon-btn:active{transform:scale(0.92);}
@@ -681,6 +792,7 @@ const injectStyles = () => {
     .about-mission-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--teal-d);margin-bottom:8px;}
     .about-mission-text{font-size:14px;color:var(--ink-2);line-height:1.65;font-weight:500;}
     .about-fact-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
+    @media(max-width:380px){.about-fact-grid{grid-template-columns:1fr 1fr;gap:8px;}}
     .about-fact{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;transition:box-shadow var(--t-med);}
     .about-fact:hover{box-shadow:var(--shadow-s);}
     .about-fact-val{font-family:var(--display);font-size:26px;font-weight:700;color:var(--teal-d);line-height:1;margin-bottom:4px;}
@@ -700,12 +812,16 @@ const injectStyles = () => {
     .about-version-key{font-size:13px;color:var(--muted);}
     .about-version-val{font-size:13px;font-weight:700;color:var(--ink);text-align:right;}
     .no-symptoms-ring{width:110px;height:110px;border-radius:99px;background:linear-gradient(155deg,#d6f3e1,#aee8c4);box-shadow:0 0 0 10px rgba(31,157,85,0.09);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;animation:ring-in 0.45s var(--ease-spring);}
-    .server-banner{display:flex;align-items:center;gap:8px;padding:10px 16px;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:var(--radius-s);margin:0 24px 16px;font-size:12px;color:#2e7d32;font-weight:600;}
-    @media(max-width:767px){.server-banner{margin:0 16px 12px;}}
-    .skeleton{background:linear-gradient(90deg,var(--border-l) 25%,var(--border) 50%,var(--border-l) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:8px;}
-    @keyframes shimmer{0%{background-position:200% 0;}100%{background-position:-200% 0;}}
-    @media(max-width:359px){.stats-row{grid-template-columns:1fr 1fr 1fr;}.q-answers{max-width:100%;}.hero-card{padding:20px 16px;}}
-    @media(min-width:1280px){.page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}}
+    @media(max-width:359px){
+      .stats-row{grid-template-columns:1fr 1fr 1fr;}
+      .q-answers{max-width:100%;}
+      .hero-card{padding:20px 16px;}
+    }
+    @media(min-width:1280px){
+      .page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}
+    }
+
+    /* Settings theme preview strip — compact, clean, fully rounded pills */
     .theme-preview-strip{display:flex;gap:6px;margin-top:10px;}
     .theme-preview-swatch{flex:1;height:40px;border-radius:999px;border:1.5px solid var(--border);cursor:pointer;transition:border-color var(--t-fast),transform var(--t-fast),box-shadow var(--t-fast);display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:0.03em;background:var(--surface);padding:0 10px;}
     .theme-preview-swatch:hover{transform:translateY(-1px);box-shadow:var(--shadow-s);}
@@ -713,8 +829,14 @@ const injectStyles = () => {
     .theme-preview-swatch.light-sw{background:#f4f7f9;color:#0b1726;}
     .theme-preview-swatch.dark-sw{background:#0f161e;color:#e8eef3;}
     .theme-preview-swatch.system-sw{background:linear-gradient(135deg,#f4f7f9 50%,#0f161e 50%);color:var(--ink);}
-    @media(max-width:480px){.theme-preview-strip{gap:5px;}.theme-preview-swatch{height:38px;font-size:10px;padding:0 6px;gap:4px;}}
-    @media(max-width:360px){.theme-preview-swatch{height:36px;font-size:0;gap:0;}.theme-preview-swatch svg{margin:0;}}
+    @media(max-width:480px){
+      .theme-preview-strip{gap:5px;}
+      .theme-preview-swatch{height:38px;font-size:10px;padding:0 6px;gap:4px;}
+    }
+    @media(max-width:360px){
+      .theme-preview-swatch{height:36px;font-size:0;gap:0;}
+      .theme-preview-swatch svg{margin:0;}
+    }
   `;
   document.head.appendChild(el);
 };
@@ -753,7 +875,8 @@ function HealthProfessionalIllus({ width = 120, height = 140 }) {
       <rect x="30" y="72" width="60" height="60" rx="18" fill="#ffffff"/>
       <path d="M60 72 L45 80 L45 110 L60 104 L75 110 L75 80 Z" fill="#eefcfa" stroke="#b2dfdb" strokeWidth="1"/>
       <path d="M48 82 Q44 90 44 98 Q44 106 52 106 Q60 106 60 98" stroke="#0c8a7e" strokeWidth="2.5" fill="none" strokeLinecap="round"/>
-      <circle cx="60" cy="99" r="5" fill="#0c8a7e"/><circle cx="60" cy="99" r="2.5" fill="#bdf0ea"/>
+      <circle cx="60" cy="99" r="5" fill="#0c8a7e"/>
+      <circle cx="60" cy="99" r="2.5" fill="#bdf0ea"/>
       <line x1="48" y1="82" x2="42" y2="76" stroke="#0c8a7e" strokeWidth="2" strokeLinecap="round"/>
       <circle cx="42" cy="75" r="2" fill="#0c8a7e"/>
       <rect x="64" y="84" width="18" height="12" rx="3" fill="#e0f2f1" stroke="#b2dfdb" strokeWidth="1"/>
@@ -761,18 +884,23 @@ function HealthProfessionalIllus({ width = 120, height = 140 }) {
       <rect x="53" y="58" width="14" height="18" rx="5" fill="#f5cba7"/>
       <ellipse cx="60" cy="46" rx="22" ry="24" fill="#f5cba7"/>
       <path d="M38 42 Q38 22 60 22 Q82 22 82 42 Q82 34 60 32 Q38 34 38 42 Z" fill="#4a3728"/>
-      <ellipse cx="52" cy="46" rx="3.5" ry="4" fill="#fff"/><ellipse cx="68" cy="46" rx="3.5" ry="4" fill="#fff"/>
-      <circle cx="53" cy="47" r="2" fill="#3d2b1f"/><circle cx="69" cy="47" r="2" fill="#3d2b1f"/>
+      <ellipse cx="52" cy="46" rx="3.5" ry="4" fill="#fff"/>
+      <ellipse cx="68" cy="46" rx="3.5" ry="4" fill="#fff"/>
+      <circle cx="53" cy="47" r="2" fill="#3d2b1f"/>
+      <circle cx="69" cy="47" r="2" fill="#3d2b1f"/>
       <path d="M53 60 Q60 65 67 60" stroke="#c9785c" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
-      <ellipse cx="38" cy="48" rx="4" ry="6" fill="#f5cba7"/><ellipse cx="82" cy="48" rx="4" ry="6" fill="#f5cba7"/>
+      <ellipse cx="38" cy="48" rx="4" ry="6" fill="#f5cba7"/>
+      <ellipse cx="82" cy="48" rx="4" ry="6" fill="#f5cba7"/>
       <rect x="18" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#dde4ea" strokeWidth="1"/>
       <rect x="88" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#dde4ea" strokeWidth="1"/>
-      <ellipse cx="25" cy="118" rx="7" ry="6" fill="#f5cba7"/><ellipse cx="95" cy="118" rx="7" ry="6" fill="#f5cba7"/>
+      <ellipse cx="25" cy="118" rx="7" ry="6" fill="#f5cba7"/>
+      <ellipse cx="95" cy="118" rx="7" ry="6" fill="#f5cba7"/>
       <rect x="56" y="88" width="8" height="2.5" rx="1.25" fill="#0c8a7e" opacity="0.8"/>
       <rect x="58.75" y="85.25" width="2.5" height="8" rx="1.25" fill="#0c8a7e" opacity="0.8"/>
     </svg>
   );
 }
+
 const IllusGeneral = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#fdecec"/>
@@ -861,12 +989,14 @@ const IllusDoctor = () => (
     <ellipse cx="100" cy="44" rx="30" ry="20" fill="#1a2a3c"/>
   </svg>
 );
+
 const CATEGORY_ILLUS = {
   General: IllusGeneral, Respiratory: IllusRespiratory, Digestive: IllusDigestive,
   Liver: IllusLiver, Skin: IllusSkin, Eyes: IllusEyes, Urinary: IllusUrinary,
   Rectal: IllusDigestive, Neurological: IllusGeneral, Metabolic: IllusGeneral,
   Infection: IllusDoctor, History: IllusDoctor,
 };
+
 function QuestionIllus({ question }) {
   const imgPath = question ? SYMPTOM_IMAGES[question.id] : null;
   const catPath = question ? getCategoryImage(question.category) : null;
@@ -874,8 +1004,11 @@ function QuestionIllus({ question }) {
   if (src) {
     return (
       <div className="q-illus">
-        <img src={src} alt={question?.category || "symptom"}
-          style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }} />
+        <img
+          src={src}
+          alt={question?.category || "symptom"}
+          style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }}
+        />
       </div>
     );
   }
@@ -914,8 +1047,6 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "sun":       return <svg {...p}><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>;
     case "moon":      return <svg {...p}><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>;
     case "monitor":   return <svg {...p}><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>;
-    case "wifi-off":  return <svg {...p}><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06A10.94 10.94 0 0119 12.55"/><path d="M5 12.55a10.94 10.94 0 015.17-2.39"/><path d="M10.71 5.05A16 16 0 0122.56 9"/><path d="M1.42 9a15.91 15.91 0 014.7-2.88"/><path d="M8.53 16.11a6 6 0 016.95 0"/><line x1="12" y1="20" x2="12.01" y2="20"/></svg>;
-    case "refresh":   return <svg {...p}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>;
     default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
@@ -948,20 +1079,6 @@ function RecBubble({ icon, label, text, accent, bg }) {
 }
 
 // ─────────────────────────────────────────────
-// SERVER WAKE BANNER
-// Shows briefly when Render is cold-starting
-// ─────────────────────────────────────────────
-function ServerWakeBanner({ show }) {
-  if (!show) return null;
-  return (
-    <div className="server-banner">
-      <Icon name="refresh" size={14} color="#2e7d32" />
-      Connecting to server — this may take up to 30 seconds on first load...
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────
 // MAIN APP
 // ─────────────────────────────────────────────
 export default function App() {
@@ -981,20 +1098,29 @@ export default function App() {
   const [sessionId,  setSessionId]  = useState(null);
   const [analyzing,  setAnalyzing]  = useState(false);
   const [result,     setResult]     = useState(null);
+
+  // Confidence-evolution trajectory built locally as a fallback for the PDF
+  // report whenever the backend cannot be reached. When the backend is
+  // reachable, its own trajectory (built from the real ML model) takes
+  // priority and this local copy is discarded.
   const [trajectory, setTrajectory] = useState([]);
 
-  // FIX: server wake state — shown while Render cold-starts
-  const [serverWaking, setServerWaking] = useState(false);
-
-  // Theme state
+  // ── Theme state ─────────────────────────────────────────────────────
   const [theme, setTheme] = useState(() => {
     const saved = Store.get("tc_settings");
     return saved?.theme || "light";
   });
 
+  // Apply data-theme to <html> whenever theme changes.
+  // "system" resolves via matchMedia and re-applies live if the OS preference
+  // changes while the app is open. The event listener is cleaned up on unmount.
   useEffect(() => {
     const root = document.documentElement;
-    const applyResolved = (resolved) => root.setAttribute("data-theme", resolved);
+
+    const applyResolved = (resolved) => {
+      root.setAttribute("data-theme", resolved);
+    };
+
     if (theme === "system") {
       const mq = window.matchMedia("(prefers-color-scheme: dark)");
       applyResolved(mq.matches ? "dark" : "light");
@@ -1002,10 +1128,14 @@ export default function App() {
       mq.addEventListener("change", handler);
       return () => mq.removeEventListener("change", handler);
     }
+
     applyResolved(theme);
   }, [theme]);
 
-  const handleThemeChange = useCallback((newTheme) => setTheme(newTheme), []);
+  // Stable callback handed down to SettingsScreen for instant live preview.
+  const handleThemeChange = useCallback((newTheme) => {
+    setTheme(newTheme);
+  }, []);
 
   const MAX_Q = 15;
 
@@ -1015,13 +1145,13 @@ export default function App() {
     _notifTimer = setTimeout(() => setNotif(""), 2600);
   }, []);
 
-  // Restore session on mount + ping server to wake it early
+  // Restore session on mount
   useEffect(() => {
     const t1 = setTimeout(() => setSplashFade(true), 1900);
     const t2 = setTimeout(() => {
       setSplash(false);
-      const saved = Store.get(USER_KEY);
-      const token = localStorage.getItem(TOKEN_KEY);
+      const saved  = Store.get(USER_KEY);
+      const token  = localStorage.getItem(TOKEN_KEY);
       if (saved && token && saved.token === token) {
         _loggingOut = false;
         setUser(saved);
@@ -1031,27 +1161,7 @@ export default function App() {
         setUser(null);
       }
     }, 2300);
-
-    // FIX: ping the health endpoint during splash to wake Render early.
-    // If it takes more than 3 seconds, show the wake banner.
-    let wakeTimer;
-    const pingStart = Date.now();
-    wakeTimer = setTimeout(() => setServerWaking(true), 3000);
-    fetch(`${API_BASE.replace("/api/v1", "")}/health/live`)
-      .then(() => {
-        clearTimeout(wakeTimer);
-        setServerWaking(false);
-      })
-      .catch(() => {
-        clearTimeout(wakeTimer);
-        setServerWaking(false);
-      });
-
-    return () => {
-      clearTimeout(t1);
-      clearTimeout(t2);
-      clearTimeout(wakeTimer);
-    };
+    return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
   const login = (u) => {
@@ -1059,7 +1169,6 @@ export default function App() {
     api.setToken(u.token);
     Store.set(USER_KEY, u);
     setUser(u);
-    setServerWaking(false);
     setPage("home");
   };
 
@@ -1067,10 +1176,19 @@ export default function App() {
     _loggingOut = true;
     api.setToken(null);
     Store.remove(USER_KEY);
-    setAssActive(false); setResult(null); setAnalyzing(false);
-    setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0);
-    setSessionId(null); setTrajectory([]); setDetailRec(null);
-    setPage("home"); setUser(null); setNotif("");
+    setAssActive(false);
+    setResult(null);
+    setAnalyzing(false);
+    setAnswers({});
+    setAsked([]);
+    setCurrentQ(null);
+    setQIdx(0);
+    setSessionId(null);
+    setTrajectory([]);
+    setDetailRec(null);
+    setPage("home");
+    setUser(null);
+    setNotif("");
     toast("Signed out successfully.");
   }, [toast]);
 
@@ -1108,6 +1226,9 @@ export default function App() {
     setAnswers(newAnswers);
     setAsked(newAsked);
 
+    // Record a local confidence snapshot for every answer. This is the
+    // fallback trajectory used by the PDF report if the backend session
+    // could not be reached for this assessment.
     const snapshotScores = computeOfflineSnapshot(newAnswers);
     const top6 = Object.fromEntries(
       Object.entries(snapshotScores).sort((a, b) => b[1] - a[1]).slice(0, 6)
@@ -1118,7 +1239,6 @@ export default function App() {
     ]);
 
     if (newAsked.length >= MAX_Q) { finishAssessment(newAnswers); return; }
-
     let next = null;
     if (sessionId) {
       try {
@@ -1149,9 +1269,14 @@ export default function App() {
         if (_loggingOut) return;
       } catch {}
     }
+
     if (!pred) pred = predictOffline(finalAnswers);
+
     if (_loggingOut) return;
 
+    // The backend returns a real, model-derived confidence_trajectory.
+    // If that is unavailable (offline mode, or an empty array), fall back
+    // to the locally tracked trajectory so the PDF report always has data.
     const finalTrajectory = (pred.confidence_trajectory && pred.confidence_trajectory.length > 0)
       ? pred.confidence_trajectory
       : trajectory;
@@ -1163,8 +1288,8 @@ export default function App() {
 
   const resetAssessment = () => {
     setAssActive(false); setResult(null); setAnalyzing(false);
-    setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0);
-    setSessionId(null); setTrajectory([]);
+    setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0); setSessionId(null);
+    setTrajectory([]);
     setPage("home");
   };
 
@@ -1181,7 +1306,7 @@ export default function App() {
     );
   }
 
-  if (!user) return <AuthScreen onLogin={login} toast={toast} serverWaking={serverWaking} />;
+  if (!user) return <AuthScreen onLogin={login} toast={toast} />;
   if (analyzing) return <AnalyzingScreen />;
   if (page === "result" && result) return <ResultScreen result={result} user={user} onReset={resetAssessment} onNewCheck={startAssessment} toast={toast} />;
   if (assActive && currentQ) return <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />;
@@ -1195,7 +1320,7 @@ export default function App() {
 
   const renderPage = () => {
     switch (page) {
-      case "home":       return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} serverWaking={serverWaking} />;
+      case "home":       return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
       case "assessment": return <AssessmentLanding onStart={startAssessment} />;
       case "records":    return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
       case "profile":    return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
@@ -1203,7 +1328,7 @@ export default function App() {
       case "privacy":    return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} onLogout={logout} />;
       case "about":      return <AboutScreen onBack={() => setPage("profile")} />;
       case "mydata":     return <MyDataScreen onBack={() => setPage("profile")} toast={toast} />;
-      default:           return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} serverWaking={serverWaking} />;
+      default:           return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
     }
   };
 
@@ -1221,13 +1346,15 @@ export default function App() {
         <nav className="sidebar-nav">
           {[...navItems, { id: "settings", label: "Settings", icon: "settings" }].map((n) => (
             <button key={n.id} className={`nav-item${page === n.id ? " active" : ""}`} onClick={() => setPage(n.id)}>
-              <Icon name={n.icon} size={17} />{n.label}
+              <Icon name={n.icon} size={17} />
+              {n.label}
             </button>
           ))}
         </nav>
         <div className="sidebar-foot" style={{ marginTop: "auto" }}>
           <button className="nav-item" style={{ color: "var(--red)", width: "100%" }} onClick={logout}>
-            <Icon name="logout" size={16} color="var(--red)" />Sign Out
+            <Icon name="logout" size={16} color="var(--red)" />
+            Sign Out
           </button>
         </div>
       </aside>
@@ -1238,7 +1365,8 @@ export default function App() {
         {navItems.map((n) => (
           <button key={n.id} className={`bnav-item${page === n.id ? " active" : ""}`}
             onClick={() => { setPage(n.id); if (n.id !== "assessment") setAssActive(false); }}>
-            <Icon name={n.icon} size={20} /><span>{n.label}</span>
+            <Icon name={n.icon} size={20} />
+            <span>{n.label}</span>
           </button>
         ))}
       </nav>
@@ -1249,7 +1377,7 @@ export default function App() {
 // ─────────────────────────────────────────────
 // AUTH SCREEN
 // ─────────────────────────────────────────────
-function AuthScreen({ onLogin, toast, serverWaking }) {
+function AuthScreen({ onLogin, toast }) {
   const [mode,    setMode]    = useState("login");
   const [name,    setName]    = useState("");
   const [email,   setEmail]   = useState("");
@@ -1291,12 +1419,6 @@ function AuthScreen({ onLogin, toast, serverWaking }) {
           <div className="auth-title">TropiCare</div>
           <div className="auth-hint">Guided symptom assessment for tropical diseases</div>
         </div>
-        {serverWaking && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", background: "var(--teal-xl)", border: "1px solid var(--teal-l)", borderRadius: "var(--radius-s)", marginBottom: 14, fontSize: 12, color: "var(--teal-d)", fontWeight: 600 }}>
-            <Icon name="refresh" size={13} color="var(--teal-d)" />
-            Server is waking up — sign-in may take a few extra seconds.
-          </div>
-        )}
         <div className="card card-p" style={{ boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
           <div className="tabs mb-3">
             {["login","register"].map((m) => (
@@ -1353,41 +1475,22 @@ function AuthScreen({ onLogin, toast, serverWaking }) {
 
 // ─────────────────────────────────────────────
 // HOME SCREEN
-// FIX: now loads from /user/profile which gives the real assessment_count
-// and high_risk_count from the database, not just the last 3 records.
 // ─────────────────────────────────────────────
-function HomeScreen({ userId, user, onStart, onNav, serverWaking }) {
-  const [profile, setProfile] = useState(null);
+function HomeScreen({ userId, user, onStart, onNav }) {
   const [records, setRecords] = useState([]);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (!userId) return;
     let cancelled = false;
-    setLoading(true);
-
-    // Load profile (gives correct total counts) and recent records in parallel.
-    Promise.all([
-      api.get("/user/profile").catch(() => null),
-      api.get("/patient/history?limit=3").catch(() => []),
-    ]).then(([prof, hist]) => {
-      if (cancelled || _loggingOut) return;
-      if (prof) setProfile(prof);
-      setRecords(Array.isArray(hist) ? hist.slice(0, 3) : []);
-      setLoading(false);
-    });
-
+    api.get("/patient/history")
+      .then((d) => { if (cancelled || _loggingOut) return; setRecords(d.slice(0, 3)); })
+      .catch(() => { if (cancelled || _loggingOut) return; setRecords([]); });
     return () => { cancelled = true; };
   }, [userId]);
 
-  const assessmentCount = profile?.assessment_count ?? (loading ? "—" : 0);
-  const highRiskCount   = profile?.high_risk_count   ?? (loading ? "—" : 0);
-  const lastCheck       = records[0] ? fmtDate(records[0].created_at) : (loading ? "—" : "None");
-
   const stats = [
-    { label: "Assessments", val: assessmentCount, icon: "activity", color: "var(--teal)" },
-    { label: "High Risk",   val: highRiskCount,   icon: "alert",    color: "var(--red)"  },
-    { label: "Last Check",  val: lastCheck,        icon: "calendar", color: "var(--blue)" },
+    { label: "Assessments", val: records.length,                                        icon: "activity", color: "var(--teal)" },
+    { label: "High Risk",   val: records.filter((r) => r.risk === "High").length,       icon: "alert",    color: "var(--red)"  },
+    { label: "Last Check",  val: records[0] ? fmtDate(records[0].created_at) : "None", icon: "calendar", color: "var(--blue)" },
   ];
 
   return (
@@ -1396,13 +1499,11 @@ function HomeScreen({ userId, user, onStart, onNav, serverWaking }) {
         <div>
           <div className="greeting">{getGreeting()}</div>
           <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, color: "var(--ink)" }}>
-            {(profile?.name || user?.name || "Patient").split(" ")[0]}
+            {(user?.name || "Patient").split(" ")[0]}
           </div>
         </div>
-        <div className="avatar">{((profile?.name || user?.name || "P")[0]).toUpperCase()}</div>
+        <div className="avatar">{(user?.name || "P")[0].toUpperCase()}</div>
       </div>
-
-      <ServerWakeBanner show={serverWaking} />
 
       <div className="hero-card">
         <div className="hero-bg-icon"><Icon name="heart" size={110} color="#fff" /></div>
@@ -1430,15 +1531,15 @@ function HomeScreen({ userId, user, onStart, onNav, serverWaking }) {
           <div className="section-ttl">Recent Assessments</div>
           <div className="rec-list">
             {records.map((r) => (
-              <div key={r.id} className="rec-card" onClick={() => onNav("records")}>
-                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk] || "var(--teal)"}18` }}>
-                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk] || "var(--teal)"} />
+              <div key={r.id} className="rec-card">
+                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk]}18` }}>
+                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk]} />
                 </div>
                 <div className="rec-info">
-                  <div className="rec-name">{r.disease || "Assessment"}</div>
+                  <div className="rec-name">{r.disease}</div>
                   <div className="rec-meta">{fmtDate(r.created_at)}</div>
                 </div>
-                {r.risk && <span className={`badge badge-${r.risk}`}>{r.risk}</span>}
+                <span className={`badge badge-${r.risk}`}>{r.risk}</span>
               </div>
             ))}
           </div>
@@ -1474,14 +1575,20 @@ function AssessmentLanding({ onStart }) {
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div className="al-hero">
         <div className="al-hero-text">
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--teal)", marginBottom: 6 }}>Symptom Assessment</div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, color: "var(--ink)", lineHeight: 1.3, marginBottom: 8 }}>Talk to our AI clinician</div>
+          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--teal)", marginBottom: 6 }}>
+            Symptom Assessment
+          </div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, color: "var(--ink)", lineHeight: 1.3, marginBottom: 8 }}>
+            Talk to our AI clinician
+          </div>
           <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
             Answer a short set of questions and receive a detailed assessment with personalised recommendations.
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {["Free", "Under 2 min", "22 diseases"].map((t) => (
-              <span key={t} className="badge badge-teal"><Icon name="check" size={10} color="var(--teal)" />&nbsp;{t}</span>
+              <span key={t} className="badge badge-teal">
+                <Icon name="check" size={10} color="var(--teal)" />&nbsp;{t}
+              </span>
             ))}
           </div>
         </div>
@@ -1493,8 +1600,13 @@ function AssessmentLanding({ onStart }) {
           <div className="feat-list">
             {features.map((f) => (
               <div key={f.title} className="feat-row">
-                <div className="feat-icon" style={{ background: f.bg }}><Icon name={f.icon} size={16} color={f.color} /></div>
-                <div><div className="feat-title">{f.title}</div><div className="feat-desc">{f.desc}</div></div>
+                <div className="feat-icon" style={{ background: f.bg }}>
+                  <Icon name={f.icon} size={16} color={f.color} />
+                </div>
+                <div>
+                  <div className="feat-title">{f.title}</div>
+                  <div className="feat-desc">{f.desc}</div>
+                </div>
               </div>
             ))}
           </div>
@@ -1503,7 +1615,9 @@ function AssessmentLanding({ onStart }) {
           </div>
         </div>
         <button className="btn btn-primary btn-full btn-lg" onClick={onStart}>
-          <Icon name="activity" size={18} color="#fff" />Begin Assessment<Icon name="chevR" size={16} color="rgba(255,255,255,0.7)" />
+          <Icon name="activity" size={18} color="#fff" />
+          Begin Assessment
+          <Icon name="chevR" size={16} color="rgba(255,255,255,0.7)" />
         </button>
       </div>
     </div>
@@ -1532,10 +1646,12 @@ function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
         <div className="q-text">{question.question}</div>
         <div className="q-answers">
           <button className="ans-btn yes" onClick={() => answer(true)}>
-            <div className="ans-btn-icon ans-yes-icon"><Icon name="check" size={14} color="var(--teal-d)" /></div>Yes
+            <div className="ans-btn-icon ans-yes-icon"><Icon name="check" size={14} color="var(--teal-d)" /></div>
+            Yes
           </button>
           <button className="ans-btn no" onClick={() => answer(false)}>
-            <div className="ans-btn-icon ans-no-icon"><Icon name="x" size={14} color="var(--muted)" /></div>No
+            <div className="ans-btn-icon ans-no-icon"><Icon name="x" size={14} color="var(--muted)" /></div>
+            No
           </button>
         </div>
       </div>
@@ -1548,7 +1664,12 @@ function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
 // ─────────────────────────────────────────────
 function AnalyzingScreen() {
   const [step, setStep] = useState(0);
-  const steps = ["Processing your responses...","Running diagnostic models...","Calculating risk level...","Preparing your recommendations..."];
+  const steps = [
+    "Processing your responses...",
+    "Running diagnostic models...",
+    "Calculating risk level...",
+    "Preparing your recommendations...",
+  ];
   useEffect(() => {
     const t = setInterval(() => setStep((s) => Math.min(s + 1, steps.length - 1)), 680);
     return () => clearInterval(t);
@@ -1556,7 +1677,9 @@ function AnalyzingScreen() {
   return (
     <div className="analyzing">
       <div className="spin-ring"><IllusAnalysis /></div>
-      <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, textAlign: "center", color: "var(--ink)" }}>Analysing Results</div>
+      <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, textAlign: "center", color: "var(--ink)" }}>
+        Analysing Results
+      </div>
       <div className="t-subtitle mt-2 text-c" style={{ minHeight: 22 }}>{steps[step]}</div>
       <div className="loading-dots"><div className="ldot" /><div className="ldot" /><div className="ldot" /></div>
     </div>
@@ -1571,9 +1694,13 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
 
   const handleDownload = () => {
     setDownloading(true);
-    try { generateTropiCareReport({ patient: user, diagnosis: result }); }
-    catch { if (toast) toast("Could not generate the PDF report. Please try again."); }
-    finally { setDownloading(false); }
+    try {
+      generateTropiCareReport({ patient: user, diagnosis: result });
+    } catch (e) {
+      if (toast) toast("Could not generate the PDF report. Please try again.");
+    } finally {
+      setDownloading(false);
+    }
   };
 
   if (!result.disease) {
@@ -1586,19 +1713,23 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
           </button>
         </div>
         <div style={{ maxWidth: 600, margin: "0 auto", padding: "48px 16px 64px", textAlign: "center" }}>
-          <div className="no-symptoms-ring"><Icon name="check" size={52} color="var(--green)" /></div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 10, color: "var(--ink)" }}>No Symptoms Detected</div>
+          <div className="no-symptoms-ring">
+            <Icon name="check" size={52} color="var(--green)" />
+          </div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 10, color: "var(--ink)" }}>
+            No Symptoms Detected
+          </div>
           <div style={{ fontSize: 15, color: "var(--muted)", lineHeight: 1.65, marginBottom: 32, maxWidth: 380, margin: "0 auto 32px" }}>
-            Based on your responses, you did not report any significant symptoms.
+            Based on your responses, you did not report any significant symptoms. There are no indicators of the conditions this system screens for.
           </div>
           <div className="rec-bubbles mb-4" style={{ textAlign: "left" }}>
-            <RecBubble icon="heart"  label="What this means" text="Your answers did not match the symptom patterns for any of the 22 conditions in our database." accent="var(--green-d)" bg="var(--green-l)" />
-            <RecBubble icon="user"   label="Recommendation"  text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic." accent="var(--blue-d)" bg="var(--blue-l)" />
-            <RecBubble icon="info"   label="Good to know"    text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition." accent="var(--purple-d)" bg="var(--purple-l)" />
+            <RecBubble icon="heart"     label="What this means"  text="Your answers did not match the symptom patterns for any of the 22 conditions in our database." accent="var(--green-d)"  bg="var(--green-l)"  />
+            <RecBubble icon="user"      label="Recommendation"   text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic." accent="var(--blue-d)"  bg="var(--blue-l)"   />
+            <RecBubble icon="info"      label="Good to know"     text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition." accent="var(--purple-d)" bg="var(--purple-l)" />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
-              <Icon name="clipboard" size={15} />{downloading ? "Preparing PDF..." : "Download PDF Report"}
+              <Icon name="clipboard" size={15} /> {downloading ? "Preparing PDF..." : "Download PDF Report"}
             </button>
             <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Retake Assessment</button>
             <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
@@ -1635,7 +1766,13 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
           <div className="t-label mb-2">Predicted Condition</div>
           <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12, color: "var(--ink)" }}>{result.disease}</div>
           <div style={{ height: 6, background: "var(--border-l)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
-            <div style={{ height: "100%", width: `${Math.round(result.confidence * 100)}%`, background: `linear-gradient(90deg,${color}80,${color})`, borderRadius: 99, transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)" }} />
+            <div style={{
+              height: "100%",
+              width: `${Math.round(result.confidence * 100)}%`,
+              background: `linear-gradient(90deg, ${color}80, ${color})`,
+              borderRadius: 99,
+              transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)",
+            }} />
           </div>
           <div style={{ fontSize: 13, fontWeight: 700, color }}>{Math.round(result.confidence * 100)}% match</div>
           {result.explanation && (
@@ -1646,9 +1783,9 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
         </div>
         <div className="section-ttl mb-2">What to Do</div>
         <div className="rec-bubbles mb-4">
-          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)" bg="var(--green-l)" />
-          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)" />
-          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}          bg={bg}            />
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  bg="var(--green-l)"  />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)"   />
+          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}           bg={bg}              />
           {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" bg="var(--red-l)" />}
         </div>
         {scores.length > 0 && (
@@ -1657,7 +1794,9 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
             {scores.map(([d, conf]) => (
               <div key={d} className="score-bar-row">
                 <span className="score-bar-name">{d}</span>
-                <div className="score-bar-track"><div className="score-bar-fill" style={{ width: `${Math.round(conf * 100)}%` }} /></div>
+                <div className="score-bar-track">
+                  <div className="score-bar-fill" style={{ width: `${Math.round(conf * 100)}%` }} />
+                </div>
                 <span className="score-bar-pct">{Math.round(conf * 100)}%</span>
               </div>
             ))}
@@ -1669,7 +1808,7 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
-            <Icon name="clipboard" size={15} />{downloading ? "Preparing PDF..." : "Download PDF Report"}
+            <Icon name="clipboard" size={15} /> {downloading ? "Preparing PDF..." : "Download PDF Report"}
           </button>
           <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Start New Assessment</button>
           <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
@@ -1687,19 +1826,17 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
   const [search,  setSearch]  = useState("");
   const [filter,  setFilter]  = useState("All");
   const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState(false);
 
   useEffect(() => { load(); }, []);
 
   const load = async () => {
     setLoading(true);
-    setError(false);
     try {
       const data = await api.get("/patient/history");
       if (_loggingOut) return;
-      setRecords(Array.isArray(data) ? data : []);
+      setRecords(data);
     } catch {
-      if (!_loggingOut) { setRecords([]); setError(true); }
+      if (!_loggingOut) setRecords([]);
     } finally {
       if (!_loggingOut) setLoading(false);
     }
@@ -1717,14 +1854,7 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
   return (
     <div>
       <div className="page-head">
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div className="t-display">My Records</div>
-          {error && (
-            <button className="btn btn-secondary btn-sm" onClick={load}>
-              <Icon name="refresh" size={13} />Retry
-            </button>
-          )}
-        </div>
+        <div className="t-display">My Records</div>
         <div className="t-subtitle mt-1">{records.length} total assessment{records.length !== 1 ? "s" : ""}</div>
       </div>
       <div className="page-body">
@@ -1738,20 +1868,7 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
           ))}
         </div>
         {loading ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            {[1,2,3].map((i) => (
-              <div key={i} className="skeleton" style={{ height: 72, borderRadius: "var(--radius)" }} />
-            ))}
-          </div>
-        ) : error ? (
-          <div className="empty-state">
-            <Icon name="wifi-off" size={36} color="var(--muted-l)" />
-            <div className="t-title">Could not load records</div>
-            <div className="t-subtitle">Check your connection and try again.</div>
-            <button className="btn btn-primary btn-sm mt-3" onClick={load}>
-              <Icon name="refresh" size={14} color="#fff" />Try Again
-            </button>
-          </div>
+          <div className="empty-state"><div className="t-subtitle">Loading records...</div></div>
         ) : filtered.length === 0 ? (
           <div className="empty-state">
             <div style={{ width: 80, height: 80 }}><IllusDoctor /></div>
@@ -1762,14 +1879,14 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
           <div className="rec-list">
             {filtered.map((r) => (
               <div key={r.id} className="rec-card" onClick={() => onDetail(r)}>
-                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk] || "var(--teal)"}18` }}>
-                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk] || "var(--teal)"} />
+                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk]}18` }}>
+                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk]} />
                 </div>
                 <div className="rec-info">
-                  <div className="rec-name">{r.disease || "Assessment"}</div>
+                  <div className="rec-name">{r.disease}</div>
                   <div className="rec-meta">{r.patient_name} · {fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}%</div>
                 </div>
-                {r.risk && <span className={`badge badge-${r.risk}`}>{r.risk}</span>}
+                <span className={`badge badge-${r.risk}`}>{r.risk}</span>
                 <Icon name="chevR" size={14} color="var(--muted-l)" />
               </div>
             ))}
@@ -1784,12 +1901,15 @@ function RecordDetail({ record, onBack, toast }) {
   const [full,        setFull]        = useState(record);
   const [downloading, setDownloading] = useState(false);
 
+  // The list endpoint does not include ml_scores or confidence_trajectory.
+  // Fetch the full diagnosis record so the PDF report can show the
+  // differential diagnosis and the confidence-evolution chart correctly.
   useEffect(() => {
     let cancelled = false;
     if (!record?.id) return;
     api.get(`/patient/history/${record.id}`)
       .then((d) => { if (!cancelled && !_loggingOut) setFull({ ...record, ...d }); })
-      .catch(() => {});
+      .catch(() => { /* keep the summary record as a fallback */ });
     return () => { cancelled = true; };
   }, [record?.id]);
 
@@ -1800,9 +1920,16 @@ function RecordDetail({ record, onBack, toast }) {
 
   const handleDownload = () => {
     setDownloading(true);
-    try { generateTropiCareReport({ patient: { name: full.patient_name }, diagnosis: full }); }
-    catch { if (toast) toast("Could not generate the PDF report. Please try again."); }
-    finally { setDownloading(false); }
+    try {
+      generateTropiCareReport({
+        patient: { name: full.patient_name },
+        diagnosis: full,
+      });
+    } catch (e) {
+      if (toast) toast("Could not generate the PDF report. Please try again.");
+    } finally {
+      setDownloading(false);
+    }
   };
 
   return (
@@ -1832,9 +1959,9 @@ function RecordDetail({ record, onBack, toast }) {
         </div>
         <div className="section-ttl mb-2">Recommendations</div>
         <div className="rec-bubbles mb-4">
-          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)" bg="var(--green-l)" />
-          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)" />
-          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}          bg={bg}            />
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  bg="var(--green-l)"  />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)"   />
+          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}           bg={bg}              />
           {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" bg="var(--red-l)" />}
         </div>
         {syms.length > 0 && (
@@ -1842,13 +1969,15 @@ function RecordDetail({ record, onBack, toast }) {
             <div className="section-ttl mb-2">Reported Symptoms ({syms.length})</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {syms.map((s) => (
-                <span key={s} style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal-d)" }}>{s}</span>
+                <span key={s} style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal-d)" }}>
+                  {s}
+                </span>
               ))}
             </div>
           </div>
         )}
         <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
-          <Icon name="clipboard" size={15} />{downloading ? "Preparing PDF..." : "Download PDF Report"}
+          <Icon name="clipboard" size={15} /> {downloading ? "Preparing PDF..." : "Download PDF Report"}
         </button>
       </div>
     </div>
@@ -1857,22 +1986,20 @@ function RecordDetail({ record, onBack, toast }) {
 
 // ─────────────────────────────────────────────
 // PROFILE SCREEN
-// FIX: loads real profile data from /user/profile and keeps local
-// state in sync so assessment_count and high_risk_count are accurate.
 // ─────────────────────────────────────────────
 function ProfileScreen({ user, onLogout, onNav, toast }) {
   const [editing, setEditing] = useState(false);
   const [name,    setName]    = useState(user?.name   || "");
   const [age,     setAge]     = useState(user?.age    || "");
   const [gender,  setGender]  = useState(user?.gender || "");
-  const [profile, setProfile] = useState(null);
+  const [profile, setProfile] = useState({});
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     api.get("/user/profile")
       .then((d) => { if (!cancelled && !_loggingOut) setProfile(d); })
-      .catch(() => { if (!cancelled && !_loggingOut) setProfile(null); });
+      .catch(() => { if (!cancelled && !_loggingOut) setProfile(user || {}); });
     return () => { cancelled = true; };
   }, []);
 
@@ -1898,7 +2025,6 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
     setEditing(false);
   };
 
-  // Merge local user (from login) with live profile data
   const p = { ...user, ...profile };
 
   const menuItems = [
@@ -1914,7 +2040,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
         <div className="t-display">Profile</div>
         {!editing && (
           <button className="btn btn-secondary btn-sm" onClick={() => setEditing(true)}>
-            <Icon name="edit" size={13} />Edit
+            <Icon name="edit" size={13} /> Edit
           </button>
         )}
       </div>
@@ -1929,7 +2055,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             )}
             <div className="mt-2">
               <span className="badge badge-teal">
-                Member since {new Date(p.joined_at || p.created_at || Date.now()).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
+                Member since {new Date(p.joined_at || Date.now()).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
               </span>
             </div>
           </div>
@@ -1964,15 +2090,11 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
         )}
         <div className="profile-stat-grid">
           <div className="ps-card">
-            <div className="ps-val" style={{ color: "var(--teal)" }}>
-              {profile ? (profile.assessment_count ?? 0) : <span className="skeleton" style={{ display: "inline-block", width: 32, height: 28 }} />}
-            </div>
+            <div className="ps-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
             <div className="ps-lbl">Assessments</div>
           </div>
           <div className="ps-card">
-            <div className="ps-val" style={{ color: "var(--red)" }}>
-              {profile ? (profile.high_risk_count ?? 0) : <span className="skeleton" style={{ display: "inline-block", width: 24, height: 28 }} />}
-            </div>
+            <div className="ps-val" style={{ color: "var(--red)" }}>{p.high_risk_count || 0}</div>
             <div className="ps-lbl">High Risk</div>
           </div>
         </div>
@@ -1988,7 +2110,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
           </div>
         </div>
         <button className="btn btn-danger btn-full" onClick={onLogout}>
-          <Icon name="logout" size={15} color="#fff" />Sign Out
+          <Icon name="logout" size={15} color="#fff" /> Sign Out
         </button>
         <div className="text-c mt-4" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.7 }}>
           TropiCare · Symptom Checker for Tropical Diseases
@@ -2013,7 +2135,7 @@ function MyDataScreen({ onBack, toast }) {
     setLoading(true);
     try {
       const data = await api.get("/patient/history");
-      if (!_loggingOut) setRecords(Array.isArray(data) ? data : []);
+      if (!_loggingOut) setRecords(data);
     } catch {
       if (!_loggingOut) setRecords([]);
     } finally {
@@ -2039,7 +2161,10 @@ function MyDataScreen({ onBack, toast }) {
 
   const counts = { High: 0, Medium: 0, Low: 0 };
   records.forEach((r) => { if (counts[r.risk] !== undefined) counts[r.risk]++; });
-  const shown = records.filter((r) => (r.disease || "").toLowerCase().includes(search.toLowerCase()));
+
+  const shown = records.filter((r) =>
+    (r.disease || "").toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
     <div>
@@ -2058,19 +2183,22 @@ function MyDataScreen({ onBack, toast }) {
             </div>
           ))}
         </div>
+
         <div style={{ background: "var(--teal-xl)", border: "1px solid var(--teal-l)", borderRadius: "var(--radius)", padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-start" }}>
           <Icon name="shield" size={16} color="var(--teal)" />
-          <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, margin: 0 }}>This screen shows your assessments only.</p>
+          <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, margin: 0 }}>
+            This screen shows your assessments only.
+          </p>
         </div>
+
         <div className="section-ttl mb-2">My Assessments ({records.length})</div>
         <div className="search-wrap mb-3">
           <span className="search-icon"><Icon name="search" size={15} /></span>
           <input className="search-input" placeholder="Search by disease..." value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
+
         {loading ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            {[1,2,3].map((i) => <div key={i} className="skeleton" style={{ height: 60, borderRadius: "var(--radius)" }} />)}
-          </div>
+          <div className="empty-state"><div className="t-subtitle">Loading...</div></div>
         ) : shown.length === 0 ? (
           <div className="empty-state">
             <Icon name="database" size={36} color="var(--muted-l)" />
@@ -2081,17 +2209,24 @@ function MyDataScreen({ onBack, toast }) {
             {shown.map((r) => (
               <div key={r.id} className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>{r.disease || "Assessment"}</div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>{r.disease}</div>
                   <div className="t-subtitle" style={{ fontSize: 11 }}>{fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}% match</div>
                 </div>
-                {r.risk && <span className={`badge badge-${r.risk}`}>{r.risk}</span>}
+                <span className={`badge badge-${r.risk}`}>{r.risk}</span>
                 {delId === r.id ? (
                   <div style={{ display: "flex", gap: 6 }}>
-                    <button onClick={() => deleteRecord(r.id)} style={{ border: "none", background: "var(--red)", color: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>Confirm</button>
-                    <button onClick={() => setDelId(null)} style={{ border: "none", background: "var(--border-l)", color: "var(--muted)", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>Cancel</button>
+                    <button onClick={() => deleteRecord(r.id)}
+                      style={{ border: "none", background: "var(--red)", color: "#fff", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                      Confirm
+                    </button>
+                    <button onClick={() => setDelId(null)}
+                      style={{ border: "none", background: "var(--border-l)", color: "var(--muted)", borderRadius: 8, padding: "6px 10px", cursor: "pointer", fontSize: 12, fontWeight: 700 }}>
+                      Cancel
+                    </button>
                   </div>
                 ) : (
-                  <button onClick={() => deleteRecord(r.id)} style={{ border: "none", background: "var(--red-l)", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
+                  <button onClick={() => deleteRecord(r.id)}
+                    style={{ border: "none", background: "var(--red-l)", borderRadius: 8, padding: 7, cursor: "pointer", display: "flex" }}>
                     <Icon name="trash" size={13} color="var(--red)" />
                   </button>
                 )}
@@ -2131,7 +2266,9 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
       setCurrentPw(""); setNewPw(""); setConfirmPw(""); setPwExpanded(false);
     } catch (e) {
       toast(e.message || "Could not change password. Check your current password.");
-    } finally { setPwLoading(false); }
+    } finally {
+      setPwLoading(false);
+    }
   };
 
   const deleteAccount = async () => {
@@ -2151,10 +2288,10 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
   };
 
   const privacyPoints = [
-    { icon: "database", color: "var(--teal)",   bg: "var(--teal-xl)",  label: "Data stays yours",       desc: "Your assessment history is stored in a secured database tied to your account only." },
-    { icon: "user",     color: "var(--blue)",   bg: "var(--blue-l)",   label: "No third-party sharing", desc: "Your personal health data is never sold or shared with advertisers or third parties." },
-    { icon: "shield",   color: "var(--purple)", bg: "var(--purple-l)", label: "Encrypted in transit",   desc: "All data between your device and our servers is protected using HTTPS encryption." },
-    { icon: "trash",    color: "var(--red)",    bg: "var(--red-l)",    label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
+    { icon: "database", color: "var(--teal)",   bg: "var(--teal-xl)",  label: "Data stays yours",        desc: "Your assessment history is stored in a secured database tied to your account only." },
+    { icon: "user",     color: "var(--blue)",   bg: "var(--blue-l)",   label: "No third-party sharing",  desc: "Your personal health data is never sold or shared with advertisers or third parties." },
+    { icon: "shield",   color: "var(--purple)", bg: "var(--purple-l)", label: "Encrypted in transit",    desc: "All data between your device and our servers is protected using HTTPS encryption." },
+    { icon: "trash",    color: "var(--red)",    bg: "var(--red-l)",    label: "Right to delete",         desc: "You can permanently delete your account and all associated data at any time." },
   ];
 
   return (
@@ -2170,7 +2307,9 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
           <div className="sec-section-title">Account Security</div>
           <div className="card card-p">
             <div className="sec-row" style={{ paddingTop: 0 }}>
-              <div className="sec-row-icon" style={{ background: "var(--blue-l)" }}><Icon name="edit" size={16} color="var(--blue)" /></div>
+              <div className="sec-row-icon" style={{ background: "var(--blue-l)" }}>
+                <Icon name="edit" size={16} color="var(--blue)" />
+              </div>
               <div className="sec-row-body">
                 <div className="sec-row-label">Change Password</div>
                 <div className="sec-row-hint">Update your account password</div>
@@ -2182,25 +2321,41 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
             </div>
             {pwExpanded && (
               <div className="sec-field-wrap">
-                {[
-                  ["Current Password", currentPw, setCurrentPw, showCur, setShowCur, "Enter current password"],
-                  ["New Password",     newPw,     setNewPw,     showNew, setShowNew, "Min. 8 characters"],
-                  ["Confirm New Password", confirmPw, setConfirmPw, showCon, setShowCon, "Repeat new password"],
-                ].map(([label, val, setter, show, setShow, placeholder]) => (
-                  <div className="field" key={label}>
-                    <label className="field-label">{label}</label>
-                    <div className="pw-wrap">
-                      <input className="field-input" type={show ? "text" : "password"} placeholder={placeholder}
-                        value={val} onChange={(e) => setter(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && changePassword()} style={{ paddingRight: 46 }} />
-                      <button className="pw-toggle" type="button" onClick={() => setShow(!show)}>
-                        <Icon name={show ? "eyeOff" : "eye"} size={16} />
-                      </button>
-                    </div>
+                <div className="field">
+                  <label className="field-label">Current Password</label>
+                  <div className="pw-wrap">
+                    <input className="field-input" type={showCur ? "text" : "password"} placeholder="Enter current password"
+                      value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} style={{ paddingRight: 46 }} />
+                    <button className="pw-toggle" type="button" onClick={() => setShowCur(!showCur)}>
+                      <Icon name={showCur ? "eyeOff" : "eye"} size={16} />
+                    </button>
                   </div>
-                ))}
+                </div>
+                <div className="field">
+                  <label className="field-label">New Password</label>
+                  <div className="pw-wrap">
+                    <input className="field-input" type={showNew ? "text" : "password"} placeholder="Min. 8 characters"
+                      value={newPw} onChange={(e) => setNewPw(e.target.value)} style={{ paddingRight: 46 }} />
+                    <button className="pw-toggle" type="button" onClick={() => setShowNew(!showNew)}>
+                      <Icon name={showNew ? "eyeOff" : "eye"} size={16} />
+                    </button>
+                  </div>
+                </div>
+                <div className="field">
+                  <label className="field-label">Confirm New Password</label>
+                  <div className="pw-wrap">
+                    <input className="field-input" type={showCon ? "text" : "password"} placeholder="Repeat new password"
+                      value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && changePassword()} style={{ paddingRight: 46 }} />
+                    <button className="pw-toggle" type="button" onClick={() => setShowCon(!showCon)}>
+                      <Icon name={showCon ? "eyeOff" : "eye"} size={16} />
+                    </button>
+                  </div>
+                </div>
                 {newPw.length > 0 && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "8px 12px", borderRadius: 8, background: newPw.length < 8 ? "var(--red-l)" : "var(--green-l)", border: `1px solid ${newPw.length < 8 ? "var(--red-d)" : "var(--green-d)"}` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "8px 12px", borderRadius: 8,
+                    background: newPw.length < 8 ? "var(--red-l)" : "var(--green-l)",
+                    border: `1px solid ${newPw.length < 8 ? "var(--red-d)" : "var(--green-d)"}` }}>
                     <Icon name={newPw.length < 8 ? "alert" : "check"} size={13} color={newPw.length < 8 ? "var(--red)" : "var(--green)"} />
                     <span style={{ fontSize: 12, fontWeight: 600, color: newPw.length < 8 ? "var(--red-d)" : "var(--green-d)" }}>
                       {newPw.length < 8 ? `${8 - newPw.length} more character${8 - newPw.length !== 1 ? "s" : ""} needed` : "Password length is good"}
@@ -2208,7 +2363,9 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
                   </div>
                 )}
                 {confirmPw.length > 0 && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", borderRadius: 8, background: newPw !== confirmPw ? "var(--red-l)" : "var(--green-l)", border: `1px solid ${newPw !== confirmPw ? "var(--red-d)" : "var(--green-d)"}` }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", borderRadius: 8,
+                    background: newPw !== confirmPw ? "var(--red-l)" : "var(--green-l)",
+                    border: `1px solid ${newPw !== confirmPw ? "var(--red-d)" : "var(--green-d)"}` }}>
                     <Icon name={newPw !== confirmPw ? "x" : "check"} size={13} color={newPw !== confirmPw ? "var(--red)" : "var(--green)"} />
                     <span style={{ fontSize: 12, fontWeight: 600, color: newPw !== confirmPw ? "var(--red-d)" : "var(--green-d)" }}>
                       {newPw !== confirmPw ? "Passwords do not match" : "Passwords match"}
@@ -2221,7 +2378,9 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
               </div>
             )}
             <div className="sec-row">
-              <div className="sec-row-icon" style={{ background: "var(--teal-xl)" }}><Icon name="user" size={16} color="var(--teal)" /></div>
+              <div className="sec-row-icon" style={{ background: "var(--teal-xl)" }}>
+                <Icon name="user" size={16} color="var(--teal)" />
+              </div>
               <div className="sec-row-body">
                 <div className="sec-row-label">Email Address</div>
                 <div className="sec-row-hint">{user?.email || "—"}</div>
@@ -2230,12 +2389,15 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
             </div>
           </div>
         </div>
+
         <div className="sec-section">
           <div className="sec-section-title">Your Privacy</div>
           <div className="card card-p">
             {privacyPoints.map((pt, i) => (
               <div key={pt.label} className="sec-row" style={{ paddingTop: i === 0 ? 0 : 14 }}>
-                <div className="sec-row-icon" style={{ background: pt.bg }}><Icon name={pt.icon} size={16} color={pt.color} /></div>
+                <div className="sec-row-icon" style={{ background: pt.bg }}>
+                  <Icon name={pt.icon} size={16} color={pt.color} />
+                </div>
                 <div className="sec-row-body">
                   <div className="sec-row-label">{pt.label}</div>
                   <div className="sec-row-hint">{pt.desc}</div>
@@ -2244,11 +2406,14 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
             ))}
           </div>
         </div>
+
         <div className="sec-section">
           <div className="sec-section-title">Danger Zone</div>
           <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
             <div style={{ fontWeight: 700, color: "var(--red)", marginBottom: 4, fontSize: 14 }}>Delete Account</div>
-            <div className="t-subtitle mb-3" style={{ fontSize: 13 }}>Permanently removes your account and all health records. This cannot be undone.</div>
+            <div className="t-subtitle mb-3" style={{ fontSize: 13 }}>
+              Permanently removes your account and all health records. This cannot be undone.
+            </div>
             {deleteConfirm && (
               <div className="disclaimer mb-3">
                 <Icon name="alert" size={13} color="var(--amber)" />
@@ -2287,9 +2452,11 @@ function AboutScreen({ onBack }) {
     { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                         color: "var(--purple)", bg: "var(--purple-l)" },
   ];
   const versionInfo = [
-    { key: "Version", val: "1.0.0" }, { key: "Release", val: "May 2026" },
-    { key: "Platform", val: "Web · Mobile" }, { key: "Institution", val: "KNUST, Ghana" },
-    { key: "License", val: "Academic use only" },
+    { key: "Version",     val: "1.0.0" },
+    { key: "Release",     val: "May 2026" },
+    { key: "Platform",    val: "Web · Mobile" },
+    { key: "Institution", val: "KNUST, Ghana" },
+    { key: "License",     val: "Academic use only" },
   ];
   return (
     <div>
@@ -2304,11 +2471,18 @@ function AboutScreen({ onBack }) {
           <div className="about-hero-bg"><Icon name="heart" size={160} color="#fff" /></div>
           <div className="about-hero-eyebrow">Project · KNUST 2026</div>
           <div className="about-hero-title">TropiCare</div>
-          <div className="about-hero-sub">An AI-guided symptom checker built to help patients and clinicians identify tropical diseases faster with clear risk levels and personalised recommendations.</div>
+          <div className="about-hero-sub">
+            An AI-guided symptom checker built to help patients and clinicians identify tropical diseases
+            faster with clear risk levels and personalised recommendations.
+          </div>
         </div>
         <div className="about-mission mb-4">
           <div className="about-mission-label">Our Mission</div>
-          <div className="about-mission-text">TropiCare bridges the gap between symptom onset and clinical attention in resource-constrained settings. By combining machine learning with adaptive questioning, it provides structured, risk-stratified guidance to patients and triage staff before a doctor is available.</div>
+          <div className="about-mission-text">
+            TropiCare bridges the gap between symptom onset and clinical attention in resource-constrained settings.
+            By combining machine learning with adaptive questioning, it provides structured, risk-stratified guidance
+            to patients and triage staff before a doctor is available.
+          </div>
         </div>
         <div className="about-fact-grid mb-4">
           {[{val:"22",lbl:"Diseases covered"},{val:"76",lbl:"Tracked symptoms"},{val:"15",lbl:"Max questions"},{val:"3",lbl:"ML models"}].map((f) => (
@@ -2322,8 +2496,13 @@ function AboutScreen({ onBack }) {
         <div className="card card-p mb-4">
           {features.map((f) => (
             <div key={f.title} className="about-feature-row">
-              <div className="about-feature-icon" style={{ background: f.bg }}><Icon name={f.icon} size={17} color={f.color} /></div>
-              <div><div className="about-feature-title">{f.title}</div><div className="about-feature-desc">{f.desc}</div></div>
+              <div className="about-feature-icon" style={{ background: f.bg }}>
+                <Icon name={f.icon} size={17} color={f.color} />
+              </div>
+              <div>
+                <div className="about-feature-title">{f.title}</div>
+                <div className="about-feature-desc">{f.desc}</div>
+              </div>
             </div>
           ))}
         </div>
@@ -2335,7 +2514,10 @@ function AboutScreen({ onBack }) {
         {team.map((t) => (
           <div key={t.name} className="about-team-card">
             <div className="about-team-avatar" style={{ background: t.bg, color: t.color }}>{t.initials}</div>
-            <div><div className="about-team-name">{t.name}</div><div className="about-team-role">{t.role}</div></div>
+            <div>
+              <div className="about-team-name">{t.name}</div>
+              <div className="about-team-role">{t.role}</div>
+            </div>
           </div>
         ))}
         <div className="section-ttl mt-4 mb-2">Version Info</div>
@@ -2348,7 +2530,8 @@ function AboutScreen({ onBack }) {
           ))}
         </div>
         <div className="text-c" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.8 }}>
-          TropiCare · Symptom Checker for Tropical Diseases<br />Kwame Nkrumah University of Science and Technology
+          TropiCare · Symptom Checker for Tropical Diseases<br />
+          Kwame Nkrumah University of Science and Technology
         </div>
         <div style={{ height: 24 }} />
       </div>
@@ -2365,6 +2548,8 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
   const [lang,     setLang]     = useState("en");
   const [fontSize, setFontSize] = useState("medium");
 
+  // Sync local state if the parent-supplied currentTheme changes
+  // (e.g. navigating away and back while the OS flipped system preference).
   useEffect(() => {
     if (currentTheme && currentTheme !== theme) setTheme(currentTheme);
   }, [currentTheme]);
@@ -2379,7 +2564,11 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
     }
   }, []);
 
-  const applyTheme = (val) => { setTheme(val); if (onThemeChange) onThemeChange(val); };
+  const applyTheme = (val) => {
+    setTheme(val);
+    if (onThemeChange) onThemeChange(val);
+  };
+
   const save = () => {
     Store.set("tc_settings", { theme, notifications: notifs, language: lang, fontSize });
     if (onThemeChange) onThemeChange(theme);
@@ -2395,7 +2584,9 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
   const ChipGroup = ({ options, value, onChange }) => (
     <div className="chip-row">
       {options.map((o) => (
-        <button key={o.val} className={`chip${value === o.val ? " on" : ""}`} onClick={() => onChange(o.val)}>{o.label}</button>
+        <button key={o.val} className={`chip${value === o.val ? " on" : ""}`} onClick={() => onChange(o.val)}>
+          {o.label}
+        </button>
       ))}
     </div>
   );
@@ -2416,30 +2607,52 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
         <div className="t-display">Settings</div>
       </div>
       <div className="page-body">
+
+        {/* Appearance */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Appearance</div>
           <div className="card card-p">
+
             <div className="t-label mb-2">Theme</div>
+            {/* Compact, fully rounded theme switcher — works cleanly on all screen sizes */}
             <div className="theme-preview-strip">
               {THEME_OPTIONS.map((o) => (
-                <button key={o.val} className={`theme-preview-swatch ${o.val}-sw${theme === o.val ? " selected" : ""}`}
-                  onClick={() => applyTheme(o.val)} aria-pressed={theme === o.val} aria-label={`${o.label} theme`}>
-                  <Icon name={o.icon} size={14} color={o.val === "dark" ? "#e8eef3" : o.val === "system" ? "var(--teal)" : "#0b1726"} />
+                <button
+                  key={o.val}
+                  className={`theme-preview-swatch ${o.val}-sw${theme === o.val ? " selected" : ""}`}
+                  onClick={() => applyTheme(o.val)}
+                  aria-pressed={theme === o.val}
+                  aria-label={`${o.label} theme`}
+                  title={`${o.label} theme`}
+                >
+                  <Icon
+                    name={o.icon}
+                    size={14}
+                    color={o.val === "dark" ? "#e8eef3" : o.val === "system" ? "var(--teal)" : "#0b1726"}
+                  />
                   <span>{o.label}</span>
                 </button>
               ))}
             </div>
             {theme === "system" && (
               <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
-                <Icon name="monitor" size={13} color="var(--muted)" />Follows your device display settings and updates live.
+                <Icon name="monitor" size={13} color="var(--muted)" />
+                Follows your device display settings and updates live.
               </div>
             )}
+
             <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
               <div className="t-label mb-2">Text Size</div>
-              <ChipGroup options={[{val:"small",label:"Small"},{val:"medium",label:"Medium"},{val:"large",label:"Large"}]} value={fontSize} onChange={setFontSize} />
+              <ChipGroup
+                options={[{val:"small",label:"Small"},{val:"medium",label:"Medium"},{val:"large",label:"Large"}]}
+                value={fontSize}
+                onChange={setFontSize}
+              />
             </div>
           </div>
         </div>
+
+        {/* Notifications */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Notifications</div>
           <div className="card card-p">
@@ -2452,25 +2665,40 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
             </div>
           </div>
         </div>
+
+        {/* Language */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Language</div>
           <div className="card card-p">
-            <ChipGroup options={[{val:"en",label:"English"},{val:"tw",label:"Twi"},{val:"fr",label:"French"},{val:"ha",label:"Hausa"}]} value={lang} onChange={setLang} />
+            <ChipGroup
+              options={[{val:"en",label:"English"},{val:"tw",label:"Twi"},{val:"fr",label:"French"},{val:"ha",label:"Hausa"}]}
+              value={lang}
+              onChange={setLang}
+            />
           </div>
         </div>
+
+        {/* Privacy */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Privacy</div>
           <div className="card card-p">
             <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
               <Icon name="shield" size={16} color="var(--green)" />
-              <div><div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>Encrypted Storage</div><div className="t-subtitle" style={{ fontSize: 12 }}>All data is secured in transit and at rest</div></div>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>Encrypted Storage</div>
+                <div className="t-subtitle" style={{ fontSize: 12 }}>All data is secured in transit and at rest</div>
+              </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 10 }}>
               <Icon name="check" size={16} color="var(--green)" />
-              <div><div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>No Third-Party Sharing</div><div className="t-subtitle" style={{ fontSize: 12 }}>Your health data is never shared</div></div>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>No Third-Party Sharing</div>
+                <div className="t-subtitle" style={{ fontSize: 12 }}>Your health data is never shared</div>
+              </div>
             </div>
           </div>
         </div>
+
         <button className="btn btn-primary btn-full" onClick={save}>Save Settings</button>
       </div>
     </div>
@@ -2482,7 +2710,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
 // ─────────────────────────────────────────────
 function getGreeting() {
   const hour = new Date().getHours();
-  if (hour >= 5  && hour < 12) return "Good morning,";
+  if (hour >= 5 && hour < 12)  return "Good morning,";
   if (hour >= 12 && hour < 17) return "Good afternoon,";
   if (hour >= 17 && hour < 21) return "Good evening,";
   return "Good night,";
