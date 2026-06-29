@@ -280,21 +280,22 @@ class UserModel(Base):
 class DiagnosisModel(Base):
     __tablename__ = "diagnoses"
 
-    id              = Column(Integer, primary_key=True, index=True)
-    user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
-    session_id      = Column(String(64), index=True)
-    disease         = Column(String(100))
-    risk            = Column(String(20))
-    confidence      = Column(Float)
-    answers         = Column(Text)
-    active_symptoms = Column(Text)
-    rec_home_care   = Column(Text, nullable=True)
-    rec_test        = Column(Text, nullable=True)
-    rec_doctor      = Column(Text, nullable=True)
-    rec_safety      = Column(Text, nullable=True)
-    ai_explanation  = Column(Text, nullable=True)
-    ml_scores       = Column(Text, nullable=True)
-    created_at      = Column(DateTime, default=datetime.utcnow)
+    id                     = Column(Integer, primary_key=True, index=True)
+    user_id                = Column(Integer, ForeignKey("users.id"), nullable=False)
+    session_id             = Column(String(64), index=True)
+    disease                = Column(String(100))
+    risk                   = Column(String(20))
+    confidence             = Column(Float)
+    answers                = Column(Text)
+    active_symptoms        = Column(Text)
+    rec_home_care          = Column(Text, nullable=True)
+    rec_test               = Column(Text, nullable=True)
+    rec_doctor             = Column(Text, nullable=True)
+    rec_safety             = Column(Text, nullable=True)
+    ai_explanation         = Column(Text, nullable=True)
+    ml_scores              = Column(Text, nullable=True)
+    confidence_trajectory  = Column(Text, nullable=True)
+    created_at             = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
         Index("ix_diagnoses_user_created", "user_id", "created_at"),
@@ -310,6 +311,7 @@ class SessionModel(Base):
     user_id         = Column(Integer, ForeignKey("users.id"), nullable=False)
     answers         = Column(Text, default="{}")
     asked_questions = Column(Text, default="[]")
+    trajectory      = Column(Text, default="[]")
     completed       = Column(Boolean, default=False)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
@@ -613,6 +615,46 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
 
 
 # -----------------------------------------------------------------
+# CONFIDENCE SNAPSHOT (used for the confidence-evolution chart)
+#
+# This is intentionally separate from predict_with_ml. predict_with_ml
+# decides whether a FINAL diagnosis should be returned to the patient,
+# and withholds a result when evidence is too thin (yes_count < 2,
+# confidence < 0.15, best_score <= 0). The confidence-evolution chart
+# in the PDF report needs the opposite: a continuous, ungated readout
+# of what the model believes after every single answer, including the
+# early low-confidence steps. compute_score_snapshot always reflects
+# the model's current state and never withholds a value.
+# -----------------------------------------------------------------
+
+def compute_score_snapshot(answers: dict) -> Dict[str, float]:
+    ensemble = LOADED_MODELS.get("sctd_ensemble")
+    le       = LOADED_MODELS.get("sctd_label_encoder")
+    cols     = LOADED_MODELS.get("sctd_feature_columns")
+
+    if ensemble and le and cols:
+        try:
+            feature_cols = list(cols)
+            vec = np.array(
+                [1.0 if answers.get(c, False) else 0.0 for c in feature_cols]
+            ).reshape(1, -1)
+            proba = ensemble.predict_proba(vec)[0]
+            return {
+                le.inverse_transform([i])[0]: round(float(p), 4)
+                for i, p in enumerate(proba)
+            }
+        except Exception as e:
+            logger.warning({"event": "snapshot_ml_failed", "error": str(e)})
+
+    snapshot: Dict[str, float] = {}
+    for d, syms in DISEASE_SYMPTOM_MAP.items():
+        yc = sum(1 for s in syms if answers.get(s) is True)
+        tc = max(len(syms), 1)
+        snapshot[d] = round(min(0.95, yc / tc), 4) if yc else 0.0
+    return snapshot
+
+
+# -----------------------------------------------------------------
 # FIX: predict_with_ml
 #
 # Previous behaviour: always returned a prediction. When all answers
@@ -635,7 +677,7 @@ def predict_with_ml(answers: dict) -> dict:
     cols     = LOADED_MODELS.get("sctd_feature_columns")
     risk_map = LOADED_MODELS.get("sctd_risk_classification") or RISK_MAP
 
-    # Count confirmed symptoms first — this gates every path below.
+    # Count confirmed symptoms first - this gates every path below.
     yes_count = sum(1 for v in answers.values() if v is True)
 
     # Fewer than 2 confirmed symptoms cannot support any meaningful prediction.
@@ -690,7 +732,7 @@ def predict_with_ml(answers: dict) -> dict:
     best_disease, best_score = sorted_scores[0]
 
     # If the best score is still zero or negative, no disease is positively
-    # supported by the answers — do not force a prediction.
+    # supported by the answers - do not force a prediction.
     if best_score <= 0:
         return {
             "disease":    None,
@@ -1340,6 +1382,7 @@ async def start_assessment(
         user_id=user_id,
         answers=_dump_json({}),
         asked_questions=_dump_json([]),
+        trajectory=_dump_json([]),
     )
     db.add(session)
     db.commit()
@@ -1380,6 +1423,20 @@ async def next_question(
     answers[req.question_id] = req.answer
     if req.question_id not in asked:
         asked.append(req.question_id)
+
+    # Record a confidence-evolution step using the real model. This snapshot
+    # is ungated (see compute_score_snapshot) so the trajectory always shows
+    # the model's true probability at this point, even with few answers.
+    trajectory = _load_json(s.trajectory, [])
+    snapshot   = compute_score_snapshot(answers)
+    top_scores = dict(sorted(snapshot.items(), key=lambda x: x[1], reverse=True)[:6])
+    trajectory.append({
+        "step":    len(asked),
+        "symptom": req.question_id,
+        "answer":  req.answer,
+        "scores":  top_scores,
+    })
+    s.trajectory = _dump_json(trajectory)
 
     s.answers         = _dump_json(answers)
     s.asked_questions = _dump_json(asked)
@@ -1431,12 +1488,14 @@ async def analyze(
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    answers = _load_json(s.answers, {})
-    pred    = predict_with_ml(answers)
+    answers    = _load_json(s.answers, {})
+    trajectory = _load_json(s.trajectory, [])
+    pred       = predict_with_ml(answers)
 
     # FIX: if predict_with_ml determined there is insufficient evidence, return
     # a clean no-disease response immediately without saving a null record or
-    # calling OpenRouter.
+    # calling OpenRouter. The trajectory is still included so the PDF report
+    # can show how confidence evolved even when no final diagnosis was made.
     if pred["disease"] is None:
         response_body = {
             "id":          None,
@@ -1454,8 +1513,9 @@ async def analyze(
                 "doctor":    "See a doctor if you develop symptoms or feel unwell.",
                 "safety":    "",
             },
-            "method":  pred["method"],
-            "ai_used": False,
+            "method":                 pred["method"],
+            "ai_used":                False,
+            "confidence_trajectory":  trajectory,
         }
         if idem_key:
             await cache_set(f"idem:{idem_key}", json.dumps(response_body), ttl=86400)
@@ -1478,19 +1538,20 @@ async def analyze(
     rec = build_recommendation(pred["disease"], pred["risk"], ai_result)
 
     diag = DiagnosisModel(
-        user_id         = user_id,
-        session_id      = session_id,
-        disease         = pred["disease"],
-        risk            = pred["risk"],
-        confidence      = pred["confidence"],
-        answers         = _dump_json(answers),
-        active_symptoms = _dump_json(active_syms),
-        rec_home_care   = rec["home_care"],
-        rec_test        = rec["test"],
-        rec_doctor      = rec["doctor"],
-        rec_safety      = rec.get("safety", ""),
-        ai_explanation  = rec.get("explanation", ""),
-        ml_scores       = _dump_json(pred.get("all_scores", {})),
+        user_id                = user_id,
+        session_id             = session_id,
+        disease                = pred["disease"],
+        risk                   = pred["risk"],
+        confidence              = pred["confidence"],
+        answers                = _dump_json(answers),
+        active_symptoms        = _dump_json(active_syms),
+        rec_home_care           = rec["home_care"],
+        rec_test                = rec["test"],
+        rec_doctor               = rec["doctor"],
+        rec_safety               = rec.get("safety", ""),
+        ai_explanation           = rec.get("explanation", ""),
+        ml_scores                = _dump_json(pred.get("all_scores", {})),
+        confidence_trajectory    = _dump_json(trajectory),
     )
     db.add(diag)
     db.commit()
@@ -1511,8 +1572,9 @@ async def analyze(
             "doctor":    rec["doctor"],
             "safety":    rec.get("safety", ""),
         },
-        "method":  pred["method"],
-        "ai_used": ai_result is not None,
+        "method":                 pred["method"],
+        "ai_used":                ai_result is not None,
+        "confidence_trajectory":  trajectory,
     }
 
     if idem_key:
@@ -1596,8 +1658,9 @@ async def get_diagnosis(
             "doctor":    d.rec_doctor,
             "safety":    d.rec_safety,
         },
-        "explanation": d.ai_explanation,
-        "ml_scores":   _load_json(d.ml_scores, {}),
+        "explanation":            d.ai_explanation,
+        "ml_scores":              _load_json(d.ml_scores, {}),
+        "confidence_trajectory":  _load_json(d.confidence_trajectory, []),
     }
 
 
