@@ -19,5 +19,5 @@ prometheus-fastapi-instrumentator
 prometheus-client
 aioredis
 redis[hiredis]
-scikit-learn
-xgboost
+scikit-learn==1.8.0
+xgboost==2.1.4
