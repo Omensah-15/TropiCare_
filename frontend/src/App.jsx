@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
+import { generateTropiCareReport } from "./pdfReport.js";
 
 // ─────────────────────────────────────────────
 // BACKEND CONFIG
@@ -224,6 +225,24 @@ function getNextQuestionOffline(answers, asked) {
     }
   }
   return ALL_QUESTIONS.find((q) => !asked.includes(q.id)) || null;
+}
+
+// ─────────────────────────────────────────────
+// OFFLINE CONFIDENCE SNAPSHOT
+//
+// Mirrors the backend's compute_score_snapshot: an ungated readout of
+// the model's current belief after every answered question. Used only
+// when the device cannot reach the API, so the confidence-evolution
+// chart in the PDF report never ends up empty.
+// ─────────────────────────────────────────────
+function computeOfflineSnapshot(answers) {
+  const snapshot = {};
+  Object.keys(DISEASE_SYMPTOM_MAP).forEach((d) => {
+    const syms = DISEASE_SYMPTOM_MAP[d];
+    const yes  = syms.filter((s) => answers[s] === true).length;
+    snapshot[d] = yes ? Math.round(Math.min(0.95, yes / Math.max(syms.length, 1)) * 10000) / 10000 : 0;
+  });
+  return snapshot;
 }
 
 // ─────────────────────────────────────────────
@@ -1080,6 +1099,12 @@ export default function App() {
   const [analyzing,  setAnalyzing]  = useState(false);
   const [result,     setResult]     = useState(null);
 
+  // Confidence-evolution trajectory built locally as a fallback for the PDF
+  // report whenever the backend cannot be reached. When the backend is
+  // reachable, its own trajectory (built from the real ML model) takes
+  // priority and this local copy is discarded.
+  const [trajectory, setTrajectory] = useState([]);
+
   // ── Theme state ─────────────────────────────────────────────────────
   const [theme, setTheme] = useState(() => {
     const saved = Store.get("tc_settings");
@@ -1159,6 +1184,7 @@ export default function App() {
     setCurrentQ(null);
     setQIdx(0);
     setSessionId(null);
+    setTrajectory([]);
     setDetailRec(null);
     setPage("home");
     setUser(null);
@@ -1178,6 +1204,7 @@ export default function App() {
   const startAssessment = async () => {
     setAnswers({}); setAsked([]); setQIdx(0);
     setResult(null); setAnalyzing(false); setSessionId(null);
+    setTrajectory([]);
     let firstQ = ALL_QUESTIONS[0];
     let sid    = null;
     try {
@@ -1198,6 +1225,19 @@ export default function App() {
     const newAsked   = [...asked, currentQ.id];
     setAnswers(newAnswers);
     setAsked(newAsked);
+
+    // Record a local confidence snapshot for every answer. This is the
+    // fallback trajectory used by the PDF report if the backend session
+    // could not be reached for this assessment.
+    const snapshotScores = computeOfflineSnapshot(newAnswers);
+    const top6 = Object.fromEntries(
+      Object.entries(snapshotScores).sort((a, b) => b[1] - a[1]).slice(0, 6)
+    );
+    setTrajectory((prev) => [
+      ...prev,
+      { step: prev.length + 1, symptom: currentQ.id, answer: val, scores: top6 },
+    ]);
+
     if (newAsked.length >= MAX_Q) { finishAssessment(newAnswers); return; }
     let next = null;
     if (sessionId) {
@@ -1233,7 +1273,15 @@ export default function App() {
     if (!pred) pred = predictOffline(finalAnswers);
 
     if (_loggingOut) return;
-    setResult(pred);
+
+    // The backend returns a real, model-derived confidence_trajectory.
+    // If that is unavailable (offline mode, or an empty array), fall back
+    // to the locally tracked trajectory so the PDF report always has data.
+    const finalTrajectory = (pred.confidence_trajectory && pred.confidence_trajectory.length > 0)
+      ? pred.confidence_trajectory
+      : trajectory;
+
+    setResult({ ...pred, confidence_trajectory: finalTrajectory });
     setAnalyzing(false);
     setPage("result");
   };
@@ -1241,6 +1289,7 @@ export default function App() {
   const resetAssessment = () => {
     setAssActive(false); setResult(null); setAnalyzing(false);
     setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0); setSessionId(null);
+    setTrajectory([]);
     setPage("home");
   };
 
@@ -1259,7 +1308,7 @@ export default function App() {
 
   if (!user) return <AuthScreen onLogin={login} toast={toast} />;
   if (analyzing) return <AnalyzingScreen />;
-  if (page === "result" && result) return <ResultScreen result={result} onReset={resetAssessment} onNewCheck={startAssessment} />;
+  if (page === "result" && result) return <ResultScreen result={result} user={user} onReset={resetAssessment} onNewCheck={startAssessment} toast={toast} />;
   if (assActive && currentQ) return <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />;
 
   const navItems = [
@@ -1640,7 +1689,19 @@ function AnalyzingScreen() {
 // ─────────────────────────────────────────────
 // RESULT SCREEN
 // ─────────────────────────────────────────────
-function ResultScreen({ result, onReset, onNewCheck }) {
+function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
+  const [downloading, setDownloading] = useState(false);
+
+  const handleDownload = () => {
+    setDownloading(true);
+    try {
+      generateTropiCareReport({ patient: user, diagnosis: result });
+    } catch (e) {
+      if (toast) toast("Could not generate the PDF report. Please try again.");
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   if (!result.disease) {
     return (
@@ -1667,6 +1728,9 @@ function ResultScreen({ result, onReset, onNewCheck }) {
             <RecBubble icon="info"      label="Good to know"     text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition." accent="var(--purple-d)" bg="var(--purple-l)" />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+            <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
+              <Icon name="clipboard" size={15} /> {downloading ? "Preparing PDF..." : "Download PDF Report"}
+            </button>
             <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Retake Assessment</button>
             <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
           </div>
@@ -1743,6 +1807,9 @@ function ResultScreen({ result, onReset, onNewCheck }) {
           <p>This result is for informational purposes only. It does not replace a clinical diagnosis. Consult a qualified healthcare professional before making any medical decisions.</p>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
+            <Icon name="clipboard" size={15} /> {downloading ? "Preparing PDF..." : "Download PDF Report"}
+          </button>
           <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Start New Assessment</button>
           <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
         </div>
@@ -1775,7 +1842,7 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
     }
   };
 
-  if (detail) return <RecordDetail record={detail} onBack={onClearDetail} />;
+  if (detail) return <RecordDetail record={detail} onBack={onClearDetail} toast={toast} />;
 
   const filtered = records.filter((r) => {
     const ms = (r.disease || "").toLowerCase().includes(search.toLowerCase())
@@ -1830,11 +1897,41 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
   );
 }
 
-function RecordDetail({ record, onBack }) {
-  const color = RISK_COLOR[record.risk] || "var(--teal)";
-  const bg    = RISK_BG[record.risk]   || "var(--green-l)";
-  const rec   = record.recommendation  || {};
-  const syms  = (record.active_symptoms || []).map((s) => s.replace(/_/g, " "));
+function RecordDetail({ record, onBack, toast }) {
+  const [full,        setFull]        = useState(record);
+  const [downloading, setDownloading] = useState(false);
+
+  // The list endpoint does not include ml_scores or confidence_trajectory.
+  // Fetch the full diagnosis record so the PDF report can show the
+  // differential diagnosis and the confidence-evolution chart correctly.
+  useEffect(() => {
+    let cancelled = false;
+    if (!record?.id) return;
+    api.get(`/patient/history/${record.id}`)
+      .then((d) => { if (!cancelled && !_loggingOut) setFull({ ...record, ...d }); })
+      .catch(() => { /* keep the summary record as a fallback */ });
+    return () => { cancelled = true; };
+  }, [record?.id]);
+
+  const color = RISK_COLOR[full.risk] || "var(--teal)";
+  const bg    = RISK_BG[full.risk]   || "var(--green-l)";
+  const rec   = full.recommendation  || {};
+  const syms  = (full.active_symptoms || []).map((s) => s.replace(/_/g, " "));
+
+  const handleDownload = () => {
+    setDownloading(true);
+    try {
+      generateTropiCareReport({
+        patient: { name: full.patient_name },
+        diagnosis: full,
+      });
+    } catch (e) {
+      if (toast) toast("Could not generate the PDF report. Please try again.");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
@@ -1845,19 +1942,19 @@ function RecordDetail({ record, onBack }) {
       </div>
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
         <div className="card card-p text-c mb-3">
-          <div className={`result-ring result-ring-${record.risk}`} style={{ width: 90, height: 90 }}>
-            <Icon name={record.risk === "High" ? "alert" : record.risk === "Medium" ? "info" : "check"} size={36} color={color} />
+          <div className={`result-ring result-ring-${full.risk}`} style={{ width: 90, height: 90 }}>
+            <Icon name={full.risk === "High" ? "alert" : full.risk === "Medium" ? "info" : "check"} size={36} color={color} />
           </div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px", color: "var(--ink)" }}>{record.disease}</div>
-          <span className={`badge badge-${record.risk}`}>{record.risk} Risk</span>
+          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px", color: "var(--ink)" }}>{full.disease}</div>
+          <span className={`badge badge-${full.risk}`}>{full.risk} Risk</span>
           <div className="t-subtitle mt-2" style={{ fontSize: 12 }}>
-            {record.patient_name} · {new Date(record.created_at).toLocaleString("en-GB")}
+            {full.patient_name} · {new Date(full.created_at).toLocaleString("en-GB")}
           </div>
           <div style={{ fontSize: 13, fontWeight: 700, color, marginTop: 6 }}>
-            {Math.round((record.confidence || 0) * 100)}% match
+            {Math.round((full.confidence || 0) * 100)}% match
           </div>
-          {record.explanation && (
-            <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>{record.explanation}</div>
+          {full.explanation && (
+            <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>{full.explanation}</div>
           )}
         </div>
         <div className="section-ttl mb-2">Recommendations</div>
@@ -1879,6 +1976,9 @@ function RecordDetail({ record, onBack }) {
             </div>
           </div>
         )}
+        <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
+          <Icon name="clipboard" size={15} /> {downloading ? "Preparing PDF..." : "Download PDF Report"}
+        </button>
       </div>
     </div>
   );
@@ -2340,7 +2440,7 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
 function AboutScreen({ onBack }) {
   const features = [
     { icon: "activity",  color: "var(--teal)",   bg: "var(--teal-xl)",  title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers — no irrelevant questions, no wasted time." },
-    { icon: "database",  color: "var(--blue)",   bg: "var(--blue-l)",   title: "Machine Learning Diagnosis",   desc: "A Decision Tree and Naive Bayes ensemble trained on a curated dataset of 22 tropical and common diseases." },
+    { icon: "database",  color: "var(--blue)",   bg: "var(--blue-l)",   title: "Machine Learning Diagnosis",   desc: "A calibrated ensemble of Random Forest, XGBoost, and Logistic Regression trained on a curated dataset of 22 tropical and common diseases." },
     { icon: "shield",    color: "var(--purple)", bg: "var(--purple-l)", title: "Risk Stratification",          desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
     { icon: "heart",     color: "var(--red)",    bg: "var(--red-l)",    title: "AI-Powered Recommendations",   desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
     { icon: "clipboard", color: "var(--amber)",  bg: "var(--amber-l)",  title: "Assessment History",           desc: "All past results are stored securely so you and your care provider can track changes over time." },
@@ -2385,7 +2485,7 @@ function AboutScreen({ onBack }) {
           </div>
         </div>
         <div className="about-fact-grid mb-4">
-          {[{val:"22",lbl:"Diseases covered"},{val:"76",lbl:"Tracked symptoms"},{val:"15",lbl:"Max questions"},{val:"2",lbl:"ML algorithms"}].map((f) => (
+          {[{val:"22",lbl:"Diseases covered"},{val:"76",lbl:"Tracked symptoms"},{val:"15",lbl:"Max questions"},{val:"3",lbl:"ML models"}].map((f) => (
             <div key={f.lbl} className="about-fact">
               <div className="about-fact-val">{f.val}</div>
               <div className="about-fact-lbl">{f.lbl}</div>
