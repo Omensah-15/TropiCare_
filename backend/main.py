@@ -124,7 +124,10 @@ class Settings(BaseSettings):
 
     @property
     def origins_list(self) -> list[str]:
-        return self.allowed_origins.split(",")
+        raw = self.allowed_origins.strip()
+        if raw == "*":
+            return ["*"]
+        return [o.strip() for o in raw.split(",") if o.strip()]
 
 
 settings = Settings()
@@ -241,8 +244,8 @@ _connect_args = {"check_same_thread": False} if settings.database_url.startswith
 _pool_kwargs: dict = {}
 if not settings.database_url.startswith("sqlite"):
     _pool_kwargs = {
-        "pool_size": settings.db_pool_min,
-        "max_overflow": settings.db_pool_max - settings.db_pool_min,
+        "pool_size":     settings.db_pool_min,
+        "max_overflow":  settings.db_pool_max - settings.db_pool_min,
         "pool_pre_ping": True,
     }
 
@@ -280,22 +283,22 @@ class UserModel(Base):
 class DiagnosisModel(Base):
     __tablename__ = "diagnoses"
 
-    id                     = Column(Integer, primary_key=True, index=True)
-    user_id                = Column(Integer, ForeignKey("users.id"), nullable=False)
-    session_id             = Column(String(64), index=True)
-    disease                = Column(String(100))
-    risk                   = Column(String(20))
-    confidence             = Column(Float)
-    answers                = Column(Text)
-    active_symptoms        = Column(Text)
-    rec_home_care          = Column(Text, nullable=True)
-    rec_test               = Column(Text, nullable=True)
-    rec_doctor             = Column(Text, nullable=True)
-    rec_safety             = Column(Text, nullable=True)
-    ai_explanation         = Column(Text, nullable=True)
-    ml_scores              = Column(Text, nullable=True)
-    confidence_trajectory  = Column(Text, nullable=True)
-    created_at             = Column(DateTime, default=datetime.utcnow)
+    id                    = Column(Integer, primary_key=True, index=True)
+    user_id               = Column(Integer, ForeignKey("users.id"), nullable=False)
+    session_id            = Column(String(64), index=True)
+    disease               = Column(String(100))
+    risk                  = Column(String(20))
+    confidence            = Column(Float)
+    answers               = Column(Text)
+    active_symptoms       = Column(Text)
+    rec_home_care         = Column(Text, nullable=True)
+    rec_test              = Column(Text, nullable=True)
+    rec_doctor            = Column(Text, nullable=True)
+    rec_safety            = Column(Text, nullable=True)
+    ai_explanation        = Column(Text, nullable=True)
+    ml_scores             = Column(Text, nullable=True)
+    confidence_trajectory = Column(Text, nullable=True)
+    created_at            = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
         Index("ix_diagnoses_user_created", "user_id", "created_at"),
@@ -360,12 +363,12 @@ ML_STARTUP_COMPLETE: asyncio.Event = asyncio.Event()
 
 
 def _load_single_model(fname: str) -> None:
-    key = fname.replace(".pkl", "")
+    key  = fname.replace(".pkl", "")
     path = os.path.join(MODELS_DIR, fname)
     try:
-        candidate = joblib.load(path)
-        PREVIOUS_MODELS[key] = LOADED_MODELS.get(key)
-        LOADED_MODELS[key] = candidate
+        candidate              = joblib.load(path)
+        PREVIOUS_MODELS[key]   = LOADED_MODELS.get(key)
+        LOADED_MODELS[key]     = candidate
         logger.info({"event": "model_loaded", "file": fname})
     except Exception as e:
         logger.error({"event": "model_load_failed", "file": fname, "error": str(e)})
@@ -614,19 +617,6 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
     return None
 
 
-# -----------------------------------------------------------------
-# CONFIDENCE SNAPSHOT (used for the confidence-evolution chart)
-#
-# This is intentionally separate from predict_with_ml. predict_with_ml
-# decides whether a FINAL diagnosis should be returned to the patient,
-# and withholds a result when evidence is too thin (yes_count < 2,
-# confidence < 0.15, best_score <= 0). The confidence-evolution chart
-# in the PDF report needs the opposite: a continuous, ungated readout
-# of what the model believes after every single answer, including the
-# early low-confidence steps. compute_score_snapshot always reflects
-# the model's current state and never withholds a value.
-# -----------------------------------------------------------------
-
 def compute_score_snapshot(answers: dict) -> Dict[str, float]:
     ensemble = LOADED_MODELS.get("sctd_ensemble")
     le       = LOADED_MODELS.get("sctd_label_encoder")
@@ -654,33 +644,14 @@ def compute_score_snapshot(answers: dict) -> Dict[str, float]:
     return snapshot
 
 
-# -----------------------------------------------------------------
-# FIX: predict_with_ml
-#
-# Previous behaviour: always returned a prediction. When all answers
-# were No, the scoring fallback picked the least-penalised disease
-# (Allergy, with only 9 symptoms) and clamped confidence to 0.35.
-#
-# Fixed behaviour:
-#   1. Count yes_count before doing anything.
-#   2. If yes_count < 2, return disease=None immediately.
-#   3. After ML predict_proba, if confidence < 0.15, return disease=None.
-#   4. After scoring fallback, if best_score <= 0 or yes_count < 2,
-#      return disease=None.
-#   5. Confidence floor of 0.35 replaced with 0.10 and only applied
-#      when a real prediction is being made.
-# -----------------------------------------------------------------
-
 def predict_with_ml(answers: dict) -> dict:
     ensemble = LOADED_MODELS.get("sctd_ensemble")
     le       = LOADED_MODELS.get("sctd_label_encoder")
     cols     = LOADED_MODELS.get("sctd_feature_columns")
     risk_map = LOADED_MODELS.get("sctd_risk_classification") or RISK_MAP
 
-    # Count confirmed symptoms first - this gates every path below.
     yes_count = sum(1 for v in answers.values() if v is True)
 
-    # Fewer than 2 confirmed symptoms cannot support any meaningful prediction.
     if yes_count < 2:
         return {
             "disease":    None,
@@ -690,7 +661,6 @@ def predict_with_ml(answers: dict) -> dict:
             "method":     "insufficient_evidence",
         }
 
-    # --- ML path ---
     if ensemble and le and cols:
         try:
             feature_cols = list(cols)
@@ -701,7 +671,6 @@ def predict_with_ml(answers: dict) -> dict:
             idx        = int(np.argmax(proba))
             confidence = float(proba[idx])
 
-            # If the model is not confident enough, do not force a prediction.
             if confidence < 0.15:
                 return {
                     "disease":    None,
@@ -726,13 +695,10 @@ def predict_with_ml(answers: dict) -> dict:
         except Exception as e:
             logger.warning({"event": "ml_predict_failed", "error": str(e)})
 
-    # --- Scoring fallback ---
     scores        = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     best_disease, best_score = sorted_scores[0]
 
-    # If the best score is still zero or negative, no disease is positively
-    # supported by the answers - do not force a prediction.
     if best_score <= 0:
         return {
             "disease":    None,
@@ -744,7 +710,6 @@ def predict_with_ml(answers: dict) -> dict:
 
     syms         = DISEASE_SYMPTOM_MAP.get(best_disease, [])
     yes_for_best = sum(1 for s in syms if answers.get(s) is True)
-    # Use the actual ratio; floor of 0.10 only applies when a real prediction exists.
     confidence   = min(0.95, max(0.10, yes_for_best / max(len(syms), 1)))
 
     all_scores: Dict[str, float] = {}
@@ -772,11 +737,6 @@ _RETRY_TIMES = 2
 
 
 async def _do_openrouter_request(headers: dict, payload: dict) -> Optional[dict]:
-    """
-    FIX: use a single aiohttp.ClientSession for the POST. The previous
-    implementation created two sessions (one in call_openrouter and one
-    here), which left the outer session open and leaked connections.
-    """
     async with aiohttp.ClientSession() as session:
         async with session.post(
             settings.openrouter_url,
@@ -876,7 +836,7 @@ Rules:
     last_error: Optional[Exception] = None
     for attempt in range(_RETRY_TIMES + 1):
         try:
-            t0 = time.monotonic()
+            t0     = time.monotonic()
             result = await _do_openrouter_request(headers, payload)
             OPENROUTER_LATENCY.observe(time.monotonic() - t0)
             if result and settings.enable_ai_cache:
@@ -1005,39 +965,19 @@ def hash_pw(pw: str) -> str:
 
 
 def verify_pw(pw: str, stored: str) -> bool:
-    """
-    FIX: The previous implementation detected legacy SHA-256 hashes by checking
-    if len(hashed) == 64, but PBKDF2-SHA-256 also produces a 64-character hex
-    string, so every PBKDF2 hash was being treated as legacy SHA-256 and failing.
-
-    Correct detection: PBKDF2 hex output of sha256 with 260,000 iterations is
-    64 hex chars (32 bytes). Legacy SHA-256 of (salt+password) is also 64 hex
-    chars. The only reliable way to distinguish them is to attempt PBKDF2 first
-    and then fall back to legacy SHA-256, or to store a format tag.
-
-    We use a try-both approach: attempt PBKDF2 first (the current format), and
-    only fall back to legacy if we have evidence the stored hash was created with
-    the old scheme. Since both produce 64-char hex strings, we attempt PBKDF2
-    and also check the legacy formula, accepting whichever matches.
-    """
     try:
         parts = stored.split(":", 1)
         if len(parts) != 2:
             return False
         salt, hashed = parts
-
-        # Attempt PBKDF2 (current format produced by hash_pw).
         pbkdf2_result = hashlib.pbkdf2_hmac(
             "sha256", pw.encode(), salt.encode(), 260_000
         ).hex()
         if pbkdf2_result == hashed:
             return True
-
-        # Attempt legacy SHA-256 (salt + password concatenated).
         legacy_result = hashlib.sha256((salt + pw).encode()).hexdigest()
         if legacy_result == hashed:
             return True
-
         return False
     except Exception:
         return False
@@ -1132,13 +1072,30 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(GZipMiddleware, minimum_size=1024)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# -----------------------------------------------------------------
+# FIX: CORS — allow_credentials=True is incompatible with origins=["*"].
+# When a specific origin list is provided via ALLOWED_ORIGINS env var,
+# use it with credentials. When it is literally "*", switch to
+# allow_credentials=False so browsers do not reject the preflight.
+# -----------------------------------------------------------------
+_origins = settings.origins_list
+if _origins == ["*"]:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+else:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
 
@@ -1207,11 +1164,25 @@ async def request_middleware(request: Request, call_next):
 
     duration_ms = round((time.monotonic() - start) * 1000, 2)
 
-    response.headers["X-Request-ID"]             = req_id
-    response.headers["X-Content-Type-Options"]   = "nosniff"
-    response.headers["X-Frame-Options"]           = "DENY"
+    response.headers["X-Request-ID"]           = req_id
+    response.headers["X-Content-Type-Options"]  = "nosniff"
+    response.headers["X-Frame-Options"]         = "DENY"
     response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-    response.headers["Content-Security-Policy"]   = "default-src 'none'"
+
+    # FIX: replaced "default-src 'none'" which blocked every browser request
+    # from the Vercel frontend. The policy now allows:
+    #   - API calls back to this server and the Vercel frontend origin
+    #   - Inline scripts/styles that React injects
+    #   - Google Fonts used by the frontend
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "connect-src 'self' https://tropicare.onrender.com https://*.vercel.app; "
+        "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data: blob:; "
+        "frame-ancestors 'none';"
+    )
 
     if user_id_log:
         response.headers["Cache-Control"] = "no-store"
@@ -1424,9 +1395,6 @@ async def next_question(
     if req.question_id not in asked:
         asked.append(req.question_id)
 
-    # Record a confidence-evolution step using the real model. This snapshot
-    # is ungated (see compute_score_snapshot) so the trajectory always shows
-    # the model's true probability at this point, even with few answers.
     trajectory = _load_json(s.trajectory, [])
     snapshot   = compute_score_snapshot(answers)
     top_scores = dict(sorted(snapshot.items(), key=lambda x: x[1], reverse=True)[:6])
@@ -1436,8 +1404,7 @@ async def next_question(
         "answer":  req.answer,
         "scores":  top_scores,
     })
-    s.trajectory = _dump_json(trajectory)
-
+    s.trajectory      = _dump_json(trajectory)
     s.answers         = _dump_json(answers)
     s.asked_questions = _dump_json(asked)
     db.commit()
@@ -1492,10 +1459,6 @@ async def analyze(
     trajectory = _load_json(s.trajectory, [])
     pred       = predict_with_ml(answers)
 
-    # FIX: if predict_with_ml determined there is insufficient evidence, return
-    # a clean no-disease response immediately without saving a null record or
-    # calling OpenRouter. The trajectory is still included so the PDF report
-    # can show how confidence evolved even when no final diagnosis was made.
     if pred["disease"] is None:
         response_body = {
             "id":          None,
@@ -1513,15 +1476,14 @@ async def analyze(
                 "doctor":    "See a doctor if you develop symptoms or feel unwell.",
                 "safety":    "",
             },
-            "method":                 pred["method"],
-            "ai_used":                False,
-            "confidence_trajectory":  trajectory,
+            "method":                pred["method"],
+            "ai_used":               False,
+            "confidence_trajectory": trajectory,
         }
         if idem_key:
             await cache_set(f"idem:{idem_key}", json.dumps(response_body), ttl=86400)
         return response_body
 
-    # Normal path: a disease was predicted with sufficient confidence.
     active_syms = [k for k, v in answers.items() if v is True]
 
     ai_result: Optional[dict] = None
@@ -1538,20 +1500,20 @@ async def analyze(
     rec = build_recommendation(pred["disease"], pred["risk"], ai_result)
 
     diag = DiagnosisModel(
-        user_id                = user_id,
-        session_id             = session_id,
-        disease                = pred["disease"],
-        risk                   = pred["risk"],
-        confidence              = pred["confidence"],
-        answers                = _dump_json(answers),
-        active_symptoms        = _dump_json(active_syms),
-        rec_home_care           = rec["home_care"],
-        rec_test                = rec["test"],
-        rec_doctor               = rec["doctor"],
-        rec_safety               = rec.get("safety", ""),
-        ai_explanation           = rec.get("explanation", ""),
-        ml_scores                = _dump_json(pred.get("all_scores", {})),
-        confidence_trajectory    = _dump_json(trajectory),
+        user_id               = user_id,
+        session_id            = session_id,
+        disease               = pred["disease"],
+        risk                  = pred["risk"],
+        confidence            = pred["confidence"],
+        answers               = _dump_json(answers),
+        active_symptoms       = _dump_json(active_syms),
+        rec_home_care         = rec["home_care"],
+        rec_test              = rec["test"],
+        rec_doctor            = rec["doctor"],
+        rec_safety            = rec.get("safety", ""),
+        ai_explanation        = rec.get("explanation", ""),
+        ml_scores             = _dump_json(pred.get("all_scores", {})),
+        confidence_trajectory = _dump_json(trajectory),
     )
     db.add(diag)
     db.commit()
@@ -1572,9 +1534,9 @@ async def analyze(
             "doctor":    rec["doctor"],
             "safety":    rec.get("safety", ""),
         },
-        "method":                 pred["method"],
-        "ai_used":                ai_result is not None,
-        "confidence_trajectory":  trajectory,
+        "method":                pred["method"],
+        "ai_used":               ai_result is not None,
+        "confidence_trajectory": trajectory,
     }
 
     if idem_key:
@@ -1585,27 +1547,27 @@ async def analyze(
 
 # -----------------------------------------------------------------
 # ROUTES - Patient History
+# FIX: removed `request: Request` parameter — it was unused and caused
+# FastAPI to bind it incorrectly on some versions. The rate-limiter
+# decorator is also removed from GET history routes since they are
+# already protected by JWT and do not need per-IP throttling.
 # -----------------------------------------------------------------
 
 @app.get("/api/v1/patient/history")
 async def get_history(
-    request: Request,
     cursor: Optional[int] = None,
     limit: int = 20,
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
     limit = min(limit, 100)
-    query = (
-        db.query(DiagnosisModel)
-        .filter(DiagnosisModel.user_id == user_id)
-    )
+    query = db.query(DiagnosisModel).filter(DiagnosisModel.user_id == user_id)
     if cursor is not None:
         query = query.filter(DiagnosisModel.id < cursor)
 
     rows = query.order_by(DiagnosisModel.id.desc()).limit(limit).all()
 
-    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    user         = db.query(UserModel).filter(UserModel.id == user_id).first()
     patient_name = user.name if user else "Unknown"
 
     return [
@@ -1644,13 +1606,13 @@ async def get_diagnosis(
 
     user = db.query(UserModel).filter(UserModel.id == user_id).first()
     return {
-        "id":           d.id,
-        "disease":      d.disease,
-        "risk":         d.risk,
-        "confidence":   d.confidence,
-        "created_at":   d.created_at.isoformat(),
-        "patient_name": user.name if user else "Unknown",
-        "answers":      _load_json(d.answers, {}),
+        "id":              d.id,
+        "disease":         d.disease,
+        "risk":            d.risk,
+        "confidence":      d.confidence,
+        "created_at":      d.created_at.isoformat(),
+        "patient_name":    user.name if user else "Unknown",
+        "answers":         _load_json(d.answers, {}),
         "active_symptoms": _load_json(d.active_symptoms, []),
         "recommendation": {
             "home_care": d.rec_home_care,
@@ -1692,18 +1654,20 @@ async def get_profile(
     db: Session = Depends(get_db),
 ):
     cache_key = f"profile:{user_id}"
-    cached = await cache_get(cache_key, key_type="profile")
+    cached    = await cache_get(cache_key, key_type="profile")
     if cached:
         return json.loads(cached)
 
     u = db.query(UserModel).filter(UserModel.id == user_id).first()
     if not u:
         raise HTTPException(status_code=404, detail="User not found")
+
     count = db.query(DiagnosisModel).filter(DiagnosisModel.user_id == user_id).count()
     high  = db.query(DiagnosisModel).filter(
         DiagnosisModel.user_id == user_id,
         DiagnosisModel.risk == "High",
     ).count()
+
     result = {
         "id":               u.id,
         "email":            u.email,
@@ -1776,7 +1740,7 @@ async def admin_stats(
     db: Session = Depends(get_db),
 ):
     cache_key = "admin:stats"
-    cached = await cache_get(cache_key, key_type="admin_stats")
+    cached    = await cache_get(cache_key, key_type="admin_stats")
     if cached:
         return json.loads(cached)
     result = {
