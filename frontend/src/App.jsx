@@ -1530,7 +1530,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
 
     Promise.all([
       api.get("/user/profile").catch(() => null),
-      api.get("/patient/history?limit=10").catch(() => null),
+      api.get("/patient/history?limit=3").catch(() => null),
     ]).then(([profileData, historyData]) => {
       if (cancelled || _loggingOut) return;
       setProfile(profileData);
