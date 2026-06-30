@@ -9,7 +9,7 @@ An AI symptom checker that delivers early tropical disease risk assessment, pers
 ## Demo
 
 <div align="center">
-  <img src="https://github.com/Omensah-15/TropiCare_/blob/0da92a1ffa95ba40db5893c59436add42eb2ba05/assets/demo_.gif" alt="Demo" width="800">
+  <img src="https://github.com/Omensah-15/TropiCare_/blob/ff7db26f79df2122a79a1f1cc54e2e9bd108abcf/assets/demovid.gif" alt="Demo" width="800">
 </div> 
 
 ---
