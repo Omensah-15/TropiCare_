@@ -1605,7 +1605,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
 
         {loading ? (
           <div style={{ textAlign: "center", padding: "24px 0", color: "var(--muted)", fontSize: 13 }}>
-            Loading your history...
+            Loading recent assessments...
           </div>
         ) : error ? (
           <div style={{ textAlign: "center", padding: "24px 0" }}>
