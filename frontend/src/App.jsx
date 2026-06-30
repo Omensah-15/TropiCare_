@@ -1,6 +1,6 @@
 /*
- * TropiCare
- * Backend: FastAPI (tropicare.onrender.com) 
+ * TropiCare — App.jsx
+ * Backend: FastAPI (tropicare.onrender.com)
  */
 
 import { useState, useEffect, useCallback, useRef } from "react";
@@ -19,9 +19,8 @@ const TOKEN_KEY = "tc_token";
 const USER_KEY  = "tc_user";
 
 /*
- * Module-level flag: set to true the moment logout() fires.
- * Any in-flight .then() callbacks check this before calling setState.
- * Reset to false when a new login completes.
+ * Module-level logout flag. Any in-flight .then() callbacks check this before
+ * calling setState so we never update state on an unmounted / logged-out tree.
  */
 let _loggingOut = false;
 
@@ -229,11 +228,6 @@ function getNextQuestionOffline(answers, asked) {
 
 // ─────────────────────────────────────────────
 // OFFLINE CONFIDENCE SNAPSHOT
-//
-// Mirrors the backend's compute_score_snapshot: an ungated readout of
-// the model's current belief after every answered question. Used only
-// when the device cannot reach the API, so the confidence-evolution
-// chart in the PDF report never ends up empty.
 // ─────────────────────────────────────────────
 function computeOfflineSnapshot(answers) {
   const snapshot = {};
@@ -253,9 +247,7 @@ function predictOffline(answers) {
 
   if (yesCount < 2) {
     return {
-      disease:     null,
-      confidence:  0.0,
-      risk:        "None",
+      disease:     null, confidence: 0.0, risk: "None",
       explanation: "No significant symptoms were reported.",
       recommendation: {
         home_care: "You appear to be in good health based on your responses.",
@@ -263,8 +255,7 @@ function predictOffline(answers) {
         doctor:    "See a doctor if you develop any symptoms or feel unwell.",
         safety:    "",
       },
-      all_scores: {},
-      method:     "insufficient_evidence",
+      all_scores: {}, method: "insufficient_evidence",
     };
   }
 
@@ -280,9 +271,7 @@ function predictOffline(answers) {
 
   if (sorted[0].sc <= 0) {
     return {
-      disease:     null,
-      confidence:  0.0,
-      risk:        "None",
+      disease: null, confidence: 0.0, risk: "None",
       explanation: "No significant symptoms were reported.",
       recommendation: {
         home_care: "You appear to be in good health based on your responses.",
@@ -290,8 +279,7 @@ function predictOffline(answers) {
         doctor:    "See a doctor if you develop any symptoms or feel unwell.",
         safety:    "",
       },
-      all_scores: {},
-      method:     "insufficient_evidence",
+      all_scores: {}, method: "insufficient_evidence",
     };
   }
 
@@ -352,177 +340,98 @@ const injectStyles = () => {
       --focus-ring:0 0 0 3px rgba(12,138,126,0.28);
     }
 
-    /* ── Dark theme — clean, professional clinical palette ───────────── */
+    /* ── Dark theme ───────────────────────── */
     :root[data-theme="dark"] {
-      --ink:      #e8eef3;
-      --ink-2:    #c3ced9;
-      --ink-3:    #94a3b3;
-      --muted:    #7c8a99;
-      --muted-l:  #4f5d6c;
-      --border:   #263241;
-      --border-l: #1c2733;
-      --surface:  #161f29;
-      --bg:       #0f161e;
-      --teal:     #14b8a6;
-      --teal-d:   #2dd4bf;
-      --teal-dd:  #0e8f80;
-      --teal-l:   #1b3d35;
-      --teal-xl:  #102621;
-      --teal-rgb: 20,184,166;
-      --red:      #f25656;
-      --red-d:    #f87171;
-      --red-l:    #2c1618;
-      --amber:    #e8a838;
-      --amber-d:  #fbbf24;
-      --amber-l:  #2a2013;
-      --green:    #34c77f;
-      --green-d:  #4ade80;
-      --green-l:  #102420;
-      --blue:     #5b8def;
-      --blue-d:   #7ea8f5;
-      --blue-l:   #142233;
-      --purple:   #9b86f3;
-      --purple-d: #b3a2f7;
-      --purple-l: #1d1a33;
+      --ink:#e8eef3;--ink-2:#c3ced9;--ink-3:#94a3b3;
+      --muted:#7c8a99;--muted-l:#4f5d6c;
+      --border:#263241;--border-l:#1c2733;
+      --surface:#161f29;--bg:#0f161e;
+      --teal:#14b8a6;--teal-d:#2dd4bf;--teal-dd:#0e8f80;
+      --teal-l:#1b3d35;--teal-xl:#102621;--teal-rgb:20,184,166;
+      --red:#f25656;--red-d:#f87171;--red-l:#2c1618;
+      --amber:#e8a838;--amber-d:#fbbf24;--amber-l:#2a2013;
+      --green:#34c77f;--green-d:#4ade80;--green-l:#102420;
+      --blue:#5b8def;--blue-d:#7ea8f5;--blue-l:#142233;
+      --purple:#9b86f3;--purple-d:#b3a2f7;--purple-l:#1d1a33;
       --shadow-xs:0 1px 2px rgba(0,0,0,0.30);
-      --shadow-s: 0 1px 4px rgba(0,0,0,0.35),0 1px 2px rgba(0,0,0,0.24);
-      --shadow:   0 6px 24px rgba(0,0,0,0.42),0 2px 6px rgba(0,0,0,0.26);
-      --shadow-l: 0 14px 48px rgba(0,0,0,0.52),0 4px 12px rgba(0,0,0,0.30);
-      --focus-ring: 0 0 0 3px rgba(20,184,166,0.30);
+      --shadow-s:0 1px 4px rgba(0,0,0,0.35),0 1px 2px rgba(0,0,0,0.24);
+      --shadow:0 6px 24px rgba(0,0,0,0.42),0 2px 6px rgba(0,0,0,0.26);
+      --shadow-l:0 14px 48px rgba(0,0,0,0.52),0 4px 12px rgba(0,0,0,0.30);
+      --focus-ring:0 0 0 3px rgba(20,184,166,0.30);
     }
-
-    /* Risk badges — dark mode */
     :root[data-theme="dark"] .badge-High   { background:var(--red-l); color:var(--red-d); }
     :root[data-theme="dark"] .badge-Medium { background:var(--amber-l); color:var(--amber-d); }
     :root[data-theme="dark"] .badge-Low    { background:var(--green-l); color:var(--green-d); }
     :root[data-theme="dark"] .badge-teal   { background:var(--teal-xl); color:var(--teal-d); }
-
-    /* Structural surfaces — dark mode */
-    :root[data-theme="dark"] .shell         { background:var(--bg); }
-    :root[data-theme="dark"] .sidebar       { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .bottom-nav    { background:var(--surface); border-color:var(--border); box-shadow:0 -6px 24px rgba(0,0,0,0.3); }
+    :root[data-theme="dark"] .shell        { background:var(--bg); }
+    :root[data-theme="dark"] .sidebar      { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .bottom-nav   { background:var(--surface); border-color:var(--border); box-shadow:0 -6px 24px rgba(0,0,0,0.3); }
     :root[data-theme="dark"] .nav-item:hover,
     :root[data-theme="dark"] .nav-item.active { background:var(--teal-xl); color:var(--teal-d); }
     :root[data-theme="dark"] .card { box-shadow:var(--shadow-s); }
-
-    /* Auth */
-    :root[data-theme="dark"] .auth-wrap {
-      background:linear-gradient(165deg,#102621 0%,#0f161e 60%);
-    }
+    :root[data-theme="dark"] .auth-wrap { background:linear-gradient(165deg,#102621 0%,#0f161e 60%); }
     :root[data-theme="dark"] .auth-box .card { box-shadow:0 12px 40px rgba(0,0,0,0.45); }
-
-    /* Inputs */
-    :root[data-theme="dark"] .field-input {
-      background:#0c1218; color:var(--ink); border-color:var(--border);
-    }
+    :root[data-theme="dark"] .field-input { background:#0c1218; color:var(--ink); border-color:var(--border); }
     :root[data-theme="dark"] .field-input:hover { border-color:var(--muted-l); }
     :root[data-theme="dark"] .field-input:focus { border-color:var(--teal-d); }
     :root[data-theme="dark"] .field-input::placeholder { color:var(--muted-l); }
-    :root[data-theme="dark"] .field-select {
-      background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c8a99' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
-    }
-
-    /* Search */
-    :root[data-theme="dark"] .search-input {
-      background:var(--surface); color:var(--ink); border-color:var(--border);
-    }
+    :root[data-theme="dark"] .field-select { background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%237c8a99' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E"); }
+    :root[data-theme="dark"] .search-input { background:var(--surface); color:var(--ink); border-color:var(--border); }
     :root[data-theme="dark"] .search-input:focus { border-color:var(--teal-d); }
-
-    /* Chips */
     :root[data-theme="dark"] .chip { background:var(--surface); border-color:var(--border); color:var(--muted); }
     :root[data-theme="dark"] .chip:hover { border-color:var(--muted-l); }
-    :root[data-theme="dark"] .chip.on {
-      background:var(--teal-xl); border-color:var(--teal-d); color:var(--teal-d);
-    }
-
-    /* Tabs */
-    :root[data-theme="dark"] .tabs      { background:var(--border-l); }
-    :root[data-theme="dark"] .tab       { color:var(--muted); }
-    :root[data-theme="dark"] .tab.active{ background:var(--surface); color:var(--ink); }
-
-    /* Disclaimer */
-    :root[data-theme="dark"] .disclaimer            { background:var(--amber-l); border-color:#4a3a1a; }
-    :root[data-theme="dark"] .disclaimer p          { color:var(--amber-d); }
-
-    /* Rec bubbles */
-    :root[data-theme="dark"] .rec-bubble            { background:var(--surface); }
-    :root[data-theme="dark"] .rec-bubble-text       { color:var(--ink-2); }
-
-    /* Score bars */
-    :root[data-theme="dark"] .score-bar-fill {
-      background:linear-gradient(90deg,var(--muted-l),var(--muted));
-    }
+    :root[data-theme="dark"] .chip.on { background:var(--teal-xl); border-color:var(--teal-d); color:var(--teal-d); }
+    :root[data-theme="dark"] .tabs { background:var(--border-l); }
+    :root[data-theme="dark"] .tab { color:var(--muted); }
+    :root[data-theme="dark"] .tab.active { background:var(--surface); color:var(--ink); }
+    :root[data-theme="dark"] .disclaimer { background:var(--amber-l); border-color:#4a3a1a; }
+    :root[data-theme="dark"] .disclaimer p { color:var(--amber-d); }
+    :root[data-theme="dark"] .rec-bubble { background:var(--surface); }
+    :root[data-theme="dark"] .rec-bubble-text { color:var(--ink-2); }
+    :root[data-theme="dark"] .score-bar-fill { background:linear-gradient(90deg,var(--muted-l),var(--muted)); }
     :root[data-theme="dark"] .score-bar-track { background:var(--border-l); }
-
-    /* Result rings */
     :root[data-theme="dark"] .result-ring-High   { background:linear-gradient(155deg,#241417,#33181c); box-shadow:0 0 0 10px rgba(242,86,86,0.08); }
     :root[data-theme="dark"] .result-ring-Medium { background:linear-gradient(155deg,#241c10,#332514); box-shadow:0 0 0 10px rgba(232,168,56,0.08); }
     :root[data-theme="dark"] .result-ring-Low    { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
     :root[data-theme="dark"] .result-ring-None   { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
     :root[data-theme="dark"] .no-symptoms-ring   { background:linear-gradient(155deg,#0e2018,#152d22); box-shadow:0 0 0 10px rgba(52,199,127,0.08); }
-
-    /* Assessment landing hero */
     :root[data-theme="dark"] .al-hero { background:linear-gradient(150deg,var(--teal-xl) 0%,var(--blue-l) 100%); border-color:var(--teal-l); }
-
-    /* About mission */
-    :root[data-theme="dark"] .about-mission       { background:var(--teal-xl); border-color:var(--teal-l); }
+    :root[data-theme="dark"] .about-mission { background:var(--teal-xl); border-color:var(--teal-l); }
     :root[data-theme="dark"] .about-mission-label { color:var(--teal-d); }
-    :root[data-theme="dark"] .about-mission-text  { color:var(--ink-2); }
-    :root[data-theme="dark"] .about-fact          { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .about-team-card     { background:var(--surface); border-color:var(--border); }
-
-    /* Edit / security panels */
-    :root[data-theme="dark"] .edit-panel    { background:var(--border-l); border-color:var(--border); }
-    :root[data-theme="dark"] .sec-field-wrap{ background:var(--border-l); border-color:var(--border); }
-
-    /* Question screen */
-    :root[data-theme="dark"] .q-screen       { background:var(--bg); }
-    :root[data-theme="dark"] .q-topbar       { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .q-close        { background:var(--border-l); }
-    :root[data-theme="dark"] .q-close:hover  { background:var(--border); }
-    :root[data-theme="dark"] .q-cat-pill     { background:var(--teal-xl); color:var(--teal-d); border-color:var(--teal-l); }
-    :root[data-theme="dark"] .prog-track     { background:var(--border-l); }
-
-    /* Answer buttons */
-    :root[data-theme="dark"] .ans-btn           { background:var(--surface); border-color:var(--border); color:var(--ink); }
-    :root[data-theme="dark"] .ans-btn.yes       { background:var(--teal-xl); border-color:var(--teal-l); color:var(--teal-d); }
-    :root[data-theme="dark"] .ans-btn.no        { background:var(--border-l); border-color:var(--border); color:var(--ink-3); }
-    :root[data-theme="dark"] .ans-yes-icon      { background:var(--teal-l); }
-    :root[data-theme="dark"] .ans-no-icon       { background:var(--border); }
-
-    /* Analyzing */
+    :root[data-theme="dark"] .about-mission-text { color:var(--ink-2); }
+    :root[data-theme="dark"] .about-fact { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .about-team-card { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .edit-panel { background:var(--border-l); border-color:var(--border); }
+    :root[data-theme="dark"] .sec-field-wrap { background:var(--border-l); border-color:var(--border); }
+    :root[data-theme="dark"] .q-screen { background:var(--bg); }
+    :root[data-theme="dark"] .q-topbar { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .q-close { background:var(--border-l); }
+    :root[data-theme="dark"] .q-close:hover { background:var(--border); }
+    :root[data-theme="dark"] .q-cat-pill { background:var(--teal-xl); color:var(--teal-d); border-color:var(--teal-l); }
+    :root[data-theme="dark"] .prog-track { background:var(--border-l); }
+    :root[data-theme="dark"] .ans-btn { background:var(--surface); border-color:var(--border); color:var(--ink); }
+    :root[data-theme="dark"] .ans-btn.yes { background:var(--teal-xl); border-color:var(--teal-l); color:var(--teal-d); }
+    :root[data-theme="dark"] .ans-btn.no { background:var(--border-l); border-color:var(--border); color:var(--ink-3); }
+    :root[data-theme="dark"] .ans-yes-icon { background:var(--teal-l); }
+    :root[data-theme="dark"] .ans-no-icon { background:var(--border); }
     :root[data-theme="dark"] .analyzing { background:var(--bg); }
-
-    /* Toggle slider */
     :root[data-theme="dark"] .toggle-slider { background:var(--border); }
-
-    /* Menu & feat icons */
-    :root[data-theme="dark"] .menu-ico   { background:var(--border-l); }
-    :root[data-theme="dark"] .feat-icon  { background:var(--border-l); }
-
-    /* Icon button hover */
+    :root[data-theme="dark"] .menu-ico { background:var(--border-l); }
+    :root[data-theme="dark"] .feat-icon { background:var(--border-l); }
     :root[data-theme="dark"] .icon-btn { background:var(--border-l) !important; }
     :root[data-theme="dark"] .icon-btn:hover { background:var(--border) !important; }
-
-    /* Password toggle */
-    :root[data-theme="dark"] .pw-toggle        { color:var(--muted-l); }
-    :root[data-theme="dark"] .pw-toggle:hover  { color:var(--teal-d); background:var(--teal-xl); }
-
-    /* Toast */
+    :root[data-theme="dark"] .pw-toggle { color:var(--muted-l); }
+    :root[data-theme="dark"] .pw-toggle:hover { color:var(--teal-d); background:var(--teal-xl); }
     :root[data-theme="dark"] .notif { background:#e8eef3; color:#0f161e; box-shadow:var(--shadow-l); }
-
-    /* Bottom nav active */
     :root[data-theme="dark"] .bnav-item.active { color:var(--teal-d); }
-
-    /* Hero / about hero gradients stay legible on dark */
-    :root[data-theme="dark"] .hero-card  { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
+    :root[data-theme="dark"] .hero-card { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
     :root[data-theme="dark"] .about-hero { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
-
-    /* Settings theme preview swatches */
     :root[data-theme="dark"] .theme-preview-swatch { border-color:var(--border); }
     :root[data-theme="dark"] .theme-preview-swatch.selected { border-color:var(--teal-d); box-shadow:0 0 0 2px rgba(20,184,166,0.2); }
+    :root[data-theme="dark"] .stat-card { background:var(--surface); border-color:var(--border); }
+    :root[data-theme="dark"] .empty-state-card { background:var(--surface); border-color:var(--border); }
 
-    /* ── Base styles ───────────────────────────────────────────────── */
+    /* ── Base styles ─────────────────────── */
     html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;}
     body{font-size:15px;}
     #root{height:100%;}
@@ -754,7 +663,6 @@ const injectStyles = () => {
     .toggle input:focus-visible+.toggle-slider{box-shadow:var(--focus-ring);}
     .toggle-slider::before{content:'';position:absolute;height:19px;width:19px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:transform var(--t-fast);box-shadow:var(--shadow-s);}
     .toggle input:checked+.toggle-slider::before{transform:translateX(19px);}
-    .danger-zone{border:1.5px solid var(--red);border-radius:var(--radius);padding:18px;margin-bottom:20px;}
     .icon-btn{transition:background var(--t-fast),transform var(--t-fast);min-width:36px;min-height:36px;align-items:center;justify-content:center;}
     .icon-btn:hover{background:var(--border)!important;}
     .icon-btn:active{transform:scale(0.92);}
@@ -792,7 +700,6 @@ const injectStyles = () => {
     .about-mission-label{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.1em;color:var(--teal-d);margin-bottom:8px;}
     .about-mission-text{font-size:14px;color:var(--ink-2);line-height:1.65;font-weight:500;}
     .about-fact-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
-    @media(max-width:380px){.about-fact-grid{grid-template-columns:1fr 1fr;gap:8px;}}
     .about-fact{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:16px;text-align:center;transition:box-shadow var(--t-med);}
     .about-fact:hover{box-shadow:var(--shadow-s);}
     .about-fact-val{font-family:var(--display);font-size:26px;font-weight:700;color:var(--teal-d);line-height:1;margin-bottom:4px;}
@@ -812,16 +719,6 @@ const injectStyles = () => {
     .about-version-key{font-size:13px;color:var(--muted);}
     .about-version-val{font-size:13px;font-weight:700;color:var(--ink);text-align:right;}
     .no-symptoms-ring{width:110px;height:110px;border-radius:99px;background:linear-gradient(155deg,#d6f3e1,#aee8c4);box-shadow:0 0 0 10px rgba(31,157,85,0.09);display:flex;align-items:center;justify-content:center;margin:0 auto 20px;animation:ring-in 0.45s var(--ease-spring);}
-    @media(max-width:359px){
-      .stats-row{grid-template-columns:1fr 1fr 1fr;}
-      .q-answers{max-width:100%;}
-      .hero-card{padding:20px 16px;}
-    }
-    @media(min-width:1280px){
-      .page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}
-    }
-
-    /* Settings theme preview strip — compact, clean, fully rounded pills */
     .theme-preview-strip{display:flex;gap:6px;margin-top:10px;}
     .theme-preview-swatch{flex:1;height:40px;border-radius:999px;border:1.5px solid var(--border);cursor:pointer;transition:border-color var(--t-fast),transform var(--t-fast),box-shadow var(--t-fast);display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;font-weight:700;letter-spacing:0.03em;background:var(--surface);padding:0 10px;}
     .theme-preview-swatch:hover{transform:translateY(-1px);box-shadow:var(--shadow-s);}
@@ -829,14 +726,74 @@ const injectStyles = () => {
     .theme-preview-swatch.light-sw{background:#f4f7f9;color:#0b1726;}
     .theme-preview-swatch.dark-sw{background:#0f161e;color:#e8eef3;}
     .theme-preview-swatch.system-sw{background:linear-gradient(135deg,#f4f7f9 50%,#0f161e 50%);color:var(--ink);}
-    @media(max-width:480px){
-      .theme-preview-strip{gap:5px;}
-      .theme-preview-swatch{height:38px;font-size:10px;padding:0 6px;gap:4px;}
-    }
-    @media(max-width:360px){
-      .theme-preview-swatch{height:36px;font-size:0;gap:0;}
-      .theme-preview-swatch svg{margin:0;}
-    }
+    @media(max-width:480px){.theme-preview-strip{gap:5px;}.theme-preview-swatch{height:38px;font-size:10px;padding:0 6px;gap:4px;}}
+    @media(max-width:360px){.theme-preview-swatch{height:36px;font-size:0;gap:0;}.theme-preview-swatch svg{margin:0;}}
+    .fs-strip{display:flex;gap:6px;margin-top:10px;}
+    .fs-btn{flex:1;height:40px;border-radius:999px;border:1.5px solid var(--border);cursor:pointer;transition:border-color var(--t-fast),transform var(--t-fast),box-shadow var(--t-fast);display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:0.03em;background:var(--surface);color:var(--muted);padding:0 10px;}
+    .fs-btn:hover{transform:translateY(-1px);box-shadow:var(--shadow-s);border-color:var(--muted-l);}
+    .fs-btn.selected{border-color:var(--teal);color:var(--teal-d);box-shadow:0 0 0 2px rgba(var(--teal-rgb),0.15);}
+    .fs-btn.fs-small{font-size:11px;}
+    .fs-btn.fs-medium{font-size:13px;}
+    .fs-btn.fs-large{font-size:16px;}
+    @media(max-width:359px){.stats-row{grid-template-columns:1fr 1fr 1fr;}.q-answers{max-width:100%;}.hero-card{padding:20px 16px;}}
+    @media(min-width:1280px){.page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}}
+
+    /* ── Font size scaling ────────────────── */
+    html[data-fontsize="small"] body { font-size: 13px; }
+    html[data-fontsize="small"] .t-display { font-size: 20px; }
+    html[data-fontsize="small"] .t-title { font-size: 15px; }
+    html[data-fontsize="small"] .t-subtitle { font-size: 12px; }
+    html[data-fontsize="small"] .t-label { font-size: 9px; }
+    html[data-fontsize="small"] .btn { font-size: 12px; }
+    html[data-fontsize="small"] .tab { font-size: 11px; }
+    html[data-fontsize="small"] .field-input { font-size: 13px; }
+    html[data-fontsize="small"] .field-label { font-size: 9px; }
+    html[data-fontsize="small"] .badge { font-size: 9px; }
+    html[data-fontsize="small"] .nav-item { font-size: 12px; }
+    html[data-fontsize="small"] .bnav-item { font-size: 9px; }
+    html[data-fontsize="small"] .rec-name { font-size: 12px; }
+    html[data-fontsize="small"] .rec-meta { font-size: 10px; }
+    html[data-fontsize="small"] .stat-val { font-size: 17px; }
+    html[data-fontsize="small"] .stat-lbl { font-size: 9px; }
+    html[data-fontsize="small"] .feat-title { font-size: 11px; }
+    html[data-fontsize="small"] .feat-desc { font-size: 10px; }
+    html[data-fontsize="small"] .rec-bubble-text { font-size: 11px; }
+    html[data-fontsize="small"] .rec-bubble-label { font-size: 9px; }
+    html[data-fontsize="small"] .chip { font-size: 10px; }
+    html[data-fontsize="small"] .search-input { font-size: 12px; }
+    html[data-fontsize="small"] .section-ttl { font-size: 9px; }
+    html[data-fontsize="small"] .score-bar-name { font-size: 10px; }
+    html[data-fontsize="small"] .score-bar-pct { font-size: 10px; }
+    html[data-fontsize="small"] .ans-btn { font-size: 13px; }
+    html[data-fontsize="small"] .q-text { font-size: 18px; }
+
+    html[data-fontsize="large"] body { font-size: 17px; }
+    html[data-fontsize="large"] .t-display { font-size: 30px; }
+    html[data-fontsize="large"] .t-title { font-size: 21px; }
+    html[data-fontsize="large"] .t-subtitle { font-size: 16px; }
+    html[data-fontsize="large"] .t-label { font-size: 13px; }
+    html[data-fontsize="large"] .btn { font-size: 16px; }
+    html[data-fontsize="large"] .tab { font-size: 15px; }
+    html[data-fontsize="large"] .field-input { font-size: 17px; }
+    html[data-fontsize="large"] .field-label { font-size: 13px; }
+    html[data-fontsize="large"] .badge { font-size: 13px; }
+    html[data-fontsize="large"] .nav-item { font-size: 16px; }
+    html[data-fontsize="large"] .bnav-item { font-size: 12px; }
+    html[data-fontsize="large"] .rec-name { font-size: 16px; }
+    html[data-fontsize="large"] .rec-meta { font-size: 14px; }
+    html[data-fontsize="large"] .stat-val { font-size: 24px; }
+    html[data-fontsize="large"] .stat-lbl { font-size: 12px; }
+    html[data-fontsize="large"] .feat-title { font-size: 15px; }
+    html[data-fontsize="large"] .feat-desc { font-size: 14px; }
+    html[data-fontsize="large"] .rec-bubble-text { font-size: 15px; }
+    html[data-fontsize="large"] .rec-bubble-label { font-size: 12px; }
+    html[data-fontsize="large"] .chip { font-size: 14px; }
+    html[data-fontsize="large"] .search-input { font-size: 16px; }
+    html[data-fontsize="large"] .section-ttl { font-size: 13px; }
+    html[data-fontsize="large"] .score-bar-name { font-size: 14px; }
+    html[data-fontsize="large"] .score-bar-pct { font-size: 14px; }
+    html[data-fontsize="large"] .ans-btn { font-size: 17px; }
+    html[data-fontsize="large"] .q-text { font-size: 25px; }
   `;
   document.head.appendChild(el);
 };
@@ -852,6 +809,7 @@ function MedicalHeartMark({ size = 22, color = "#fff" }) {
     </svg>
   );
 }
+
 function MedicalHeartLarge({ size = 32, color = "#fff" }) {
   return (
     <svg width={size} height={size} viewBox="0 0 32 32" fill="none">
@@ -860,6 +818,7 @@ function MedicalHeartLarge({ size = 32, color = "#fff" }) {
     </svg>
   );
 }
+
 function MedicalHeartSplash() {
   return (
     <svg width="44" height="44" viewBox="0 0 44 44" fill="none">
@@ -868,6 +827,7 @@ function MedicalHeartSplash() {
     </svg>
   );
 }
+
 function HealthProfessionalIllus({ width = 120, height = 140 }) {
   return (
     <svg width={width} height={height} viewBox="0 0 120 140" fill="none">
@@ -912,6 +872,7 @@ const IllusGeneral = () => (
     <circle cx="141" cy="68" r="8" fill="#e8930f"/>
   </svg>
 );
+
 const IllusRespiratory = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#eaf1ff"/>
@@ -922,6 +883,7 @@ const IllusRespiratory = () => (
     <ellipse cx="128" cy="146" rx="15" ry="13" fill="#60a5fa"/>
   </svg>
 );
+
 const IllusDigestive = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#e9f9ee"/>
@@ -930,6 +892,7 @@ const IllusDigestive = () => (
     <circle cx="120" cy="100" r="7" fill="#4ade80"/>
   </svg>
 );
+
 const IllusLiver = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#fef3e0"/>
@@ -937,6 +900,7 @@ const IllusLiver = () => (
     <path d="M55 80 Q50 112 65 136 Q80 159 112 156 Q147 151 151 121 Q155 91 136 76 Q116 60 90 65 Q64 68 55 80Z" stroke="#e8930f" strokeWidth="2.5" fill="none"/>
   </svg>
 );
+
 const IllusSkin = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#fef9f0"/>
@@ -946,6 +910,7 @@ const IllusSkin = () => (
     <circle cx="119" cy="117" r="7" fill="#f87171" opacity="0.68"/>
   </svg>
 );
+
 const IllusUrinary = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#eaf1ff"/>
@@ -953,6 +918,7 @@ const IllusUrinary = () => (
     <ellipse cx="100" cy="151" rx="20" ry="10" fill="#60a5fa" opacity="0.4"/>
   </svg>
 );
+
 const IllusEyes = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#eaf1ff"/>
@@ -962,6 +928,7 @@ const IllusEyes = () => (
     <circle cx="108" cy="94" r="5" fill="#fff" opacity="0.8"/>
   </svg>
 );
+
 const IllusAnalysis = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#eefcfa"/>
@@ -975,6 +942,7 @@ const IllusAnalysis = () => (
     <circle cx="152" cy="100" r="7" fill="#0c8a7e"/>
   </svg>
 );
+
 const IllusDoctor = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#eefcfa"/>
@@ -998,20 +966,20 @@ const CATEGORY_ILLUS = {
 };
 
 function QuestionIllus({ question }) {
-  const imgPath = question ? SYMPTOM_IMAGES[question.id] : null;
-  const catPath = question ? getCategoryImage(question.category) : null;
-  const src = imgPath || catPath;
-  if (src) {
-    return (
-      <div className="q-illus">
-        <img
-          src={src}
-          alt={question?.category || "symptom"}
-          style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }}
-        />
-      </div>
-    );
-  }
+  try {
+    const imgPath = question ? SYMPTOM_IMAGES[question.id] : null;
+    const catPath = question ? getCategoryImage(question.category) : null;
+    const src = imgPath || catPath;
+    if (src) {
+      return (
+        <div className="q-illus">
+          <img src={src} alt={question?.category || "symptom"}
+            style={{ width: "100%", height: "100%", objectFit: "contain", borderRadius: 16 }}
+          />
+        </div>
+      );
+    }
+  } catch (_) { /* symptomImages.js not available, fall through to SVG */ }
   const Comp = question ? (CATEGORY_ILLUS[question.category] || IllusDoctor) : IllusDoctor;
   return <div className="q-illus"><Comp /></div>;
 }
@@ -1021,7 +989,8 @@ function QuestionIllus({ question }) {
 // ─────────────────────────────────────────────
 function Icon({ name, size = 18, color = "currentColor", className = "" }) {
   const s = { width: size, height: size, flexShrink: 0 };
-  const p = { viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round", style: s, className };
+  const p = { viewBox: "0 0 24 24", fill: "none", stroke: color, strokeWidth: "2",
+              strokeLinecap: "round", strokeLinejoin: "round", style: s, className };
   switch (name) {
     case "home":      return <svg {...p}><path d="M3 9.5L12 3l9 6.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V9.5z"/><path d="M9 21V12h6v9"/></svg>;
     case "activity":  return <svg {...p}><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
@@ -1047,12 +1016,14 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "sun":       return <svg {...p}><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>;
     case "moon":      return <svg {...p}><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>;
     case "monitor":   return <svg {...p}><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>;
+    case "refresh":   return <svg {...p}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>;
+    case "download":  return <svg {...p}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
     default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
 
 // ─────────────────────────────────────────────
-// TOAST
+// TOAST NOTIFICATION
 // ─────────────────────────────────────────────
 let _notifTimer;
 function Notif({ msg }) {
@@ -1063,14 +1034,14 @@ function Notif({ msg }) {
 // ─────────────────────────────────────────────
 // RECOMMENDATION BUBBLE
 // ─────────────────────────────────────────────
-function RecBubble({ icon, label, text, accent, bg }) {
+function RecBubble({ icon, label, text, accent }) {
   if (!text) return null;
   return (
     <div className="rec-bubble" style={{ borderLeftColor: accent }}>
       <div className="rec-bubble-icon" style={{ background: `${accent}18` }}>
         <Icon name={icon} size={16} color={accent} />
       </div>
-      <div>
+      <div style={{ flex: 1, minWidth: 0 }}>
         <div className="rec-bubble-label" style={{ color: accent }}>{label}</div>
         <div className="rec-bubble-text">{text}</div>
       </div>
@@ -1098,60 +1069,60 @@ export default function App() {
   const [sessionId,  setSessionId]  = useState(null);
   const [analyzing,  setAnalyzing]  = useState(false);
   const [result,     setResult]     = useState(null);
-
-  // Confidence-evolution trajectory built locally as a fallback for the PDF
-  // report whenever the backend cannot be reached. When the backend is
-  // reachable, its own trajectory (built from the real ML model) takes
-  // priority and this local copy is discarded.
   const [trajectory, setTrajectory] = useState([]);
 
-  // ── Theme state ─────────────────────────────────────────────────────
+  // ── Theme ──────────────────────────────────
   const [theme, setTheme] = useState(() => {
     const saved = Store.get("tc_settings");
     return saved?.theme || "light";
   });
 
-  // Apply data-theme to <html> whenever theme changes.
-  // "system" resolves via matchMedia and re-applies live if the OS preference
-  // changes while the app is open. The event listener is cleaned up on unmount.
   useEffect(() => {
     const root = document.documentElement;
-
-    const applyResolved = (resolved) => {
-      root.setAttribute("data-theme", resolved);
-    };
-
     if (theme === "system") {
       const mq = window.matchMedia("(prefers-color-scheme: dark)");
-      applyResolved(mq.matches ? "dark" : "light");
-      const handler = (e) => applyResolved(e.matches ? "dark" : "light");
+      root.setAttribute("data-theme", mq.matches ? "dark" : "light");
+      const handler = (e) => root.setAttribute("data-theme", e.matches ? "dark" : "light");
       mq.addEventListener("change", handler);
       return () => mq.removeEventListener("change", handler);
     }
-
-    applyResolved(theme);
+    root.setAttribute("data-theme", theme);
   }, [theme]);
 
-  // Stable callback handed down to SettingsScreen for instant live preview.
-  const handleThemeChange = useCallback((newTheme) => {
-    setTheme(newTheme);
-  }, []);
+  const handleThemeChange = useCallback((t) => setTheme(t), []);
+
+  // ── Font size ──────────────────────────────
+  const [fontSize, setFontSize] = useState(() => {
+    const saved = Store.get("tc_settings");
+    return saved?.fontSize || "medium";
+  });
+
+  useEffect(() => {
+    const root = document.documentElement;
+    if (fontSize === "medium") {
+      root.removeAttribute("data-fontsize");
+    } else {
+      root.setAttribute("data-fontsize", fontSize);
+    }
+  }, [fontSize]);
+
+  const handleFontSizeChange = useCallback((fs) => setFontSize(fs), []);
 
   const MAX_Q = 15;
 
   const toast = useCallback((msg) => {
     setNotif(msg);
     clearTimeout(_notifTimer);
-    _notifTimer = setTimeout(() => setNotif(""), 2600);
+    _notifTimer = setTimeout(() => setNotif(""), 3000);
   }, []);
 
-  // Restore session on mount
+  // ── Restore session ──────────────────────
   useEffect(() => {
     const t1 = setTimeout(() => setSplashFade(true), 1900);
     const t2 = setTimeout(() => {
       setSplash(false);
-      const saved  = Store.get(USER_KEY);
-      const token  = localStorage.getItem(TOKEN_KEY);
+      const saved = Store.get(USER_KEY);
+      const token = localStorage.getItem(TOKEN_KEY);
       if (saved && token && saved.token === token) {
         _loggingOut = false;
         setUser(saved);
@@ -1189,31 +1160,43 @@ export default function App() {
     setPage("home");
     setUser(null);
     setNotif("");
-    toast("Signed out successfully.");
+    setTimeout(() => toast("Signed out successfully."), 50);
   }, [toast]);
 
   useEffect(() => {
     api.onUnauthorized = () => {
       if (_loggingOut || !user) return;
       logout();
-      toast("Your session expired. Please sign in again.");
+      toast("Your session has expired. Please sign in again.");
     };
     return () => { api.onUnauthorized = null; };
   }, [logout, toast, user]);
 
+  // ── Assessment flow ────────────────────────
   const startAssessment = async () => {
-    setAnswers({}); setAsked([]); setQIdx(0);
-    setResult(null); setAnalyzing(false); setSessionId(null);
+    setAnswers({});
+    setAsked([]);
+    setQIdx(0);
+    setResult(null);
+    setAnalyzing(false);
+    setSessionId(null);
     setTrajectory([]);
+
     let firstQ = ALL_QUESTIONS[0];
     let sid    = null;
+
     try {
       const data = await api.post("/symptoms/start", {});
       if (_loggingOut) return;
       sid    = data.session_id;
       firstQ = data.first_question || ALL_QUESTIONS[0];
       setSessionId(sid);
-    } catch { /* offline fallback */ }
+    } catch (e) {
+      if (_loggingOut) return;
+      // Backend unreachable — continue in offline mode without blocking the user
+      toast("Running in offline mode. Your result will not be saved to history.");
+    }
+
     if (_loggingOut) return;
     setCurrentQ(firstQ);
     setAssActive(true);
@@ -1226,9 +1209,7 @@ export default function App() {
     setAnswers(newAnswers);
     setAsked(newAsked);
 
-    // Record a local confidence snapshot for every answer. This is the
-    // fallback trajectory used by the PDF report if the backend session
-    // could not be reached for this assessment.
+    // Build a local trajectory snapshot for every answer (PDF report fallback)
     const snapshotScores = computeOfflineSnapshot(newAnswers);
     const top6 = Object.fromEntries(
       Object.entries(snapshotScores).sort((a, b) => b[1] - a[1]).slice(0, 6)
@@ -1239,17 +1220,23 @@ export default function App() {
     ]);
 
     if (newAsked.length >= MAX_Q) { finishAssessment(newAnswers); return; }
+
     let next = null;
     if (sessionId) {
       try {
-        const res = await api.post(`/symptoms/next?session_id=${sessionId}`, { question_id: currentQ.id, answer: val });
+        const res = await api.post(`/symptoms/next?session_id=${sessionId}`, {
+          question_id: currentQ.id, answer: val,
+        });
         if (_loggingOut) return;
         if (res.completed) { finishAssessment(newAnswers); return; }
         next = res.next_question;
-      } catch { next = getNextQuestionOffline(newAnswers, newAsked); }
+      } catch {
+        next = getNextQuestionOffline(newAnswers, newAsked);
+      }
     } else {
       next = getNextQuestionOffline(newAnswers, newAsked);
     }
+
     if (_loggingOut) return;
     if (!next) { finishAssessment(newAnswers); return; }
     setCurrentQ(next);
@@ -1263,36 +1250,47 @@ export default function App() {
     if (_loggingOut) return;
 
     let pred = null;
+    let savedToHistory = false;
+
     if (sessionId) {
       try {
         pred = await api.post(`/diagnosis/analyze?session_id=${sessionId}`, {});
         if (_loggingOut) return;
-      } catch {}
+        savedToHistory = true;
+      } catch (e) {
+        if (_loggingOut) return;
+        toast("Could not save to your history. Showing offline result.");
+      }
     }
 
     if (!pred) pred = predictOffline(finalAnswers);
-
     if (_loggingOut) return;
 
-    // The backend returns a real, model-derived confidence_trajectory.
-    // If that is unavailable (offline mode, or an empty array), fall back
-    // to the locally tracked trajectory so the PDF report always has data.
-    const finalTrajectory = (pred.confidence_trajectory && pred.confidence_trajectory.length > 0)
-      ? pred.confidence_trajectory
-      : trajectory;
+    // Backend trajectory takes priority over local snapshot
+    const finalTrajectory =
+      pred.confidence_trajectory && pred.confidence_trajectory.length > 0
+        ? pred.confidence_trajectory
+        : trajectory;
 
-    setResult({ ...pred, confidence_trajectory: finalTrajectory });
+    setResult({ ...pred, confidence_trajectory: finalTrajectory, saved: savedToHistory });
     setAnalyzing(false);
     setPage("result");
   };
 
   const resetAssessment = () => {
-    setAssActive(false); setResult(null); setAnalyzing(false);
-    setAnswers({}); setAsked([]); setCurrentQ(null); setQIdx(0); setSessionId(null);
+    setAssActive(false);
+    setResult(null);
+    setAnalyzing(false);
+    setAnswers({});
+    setAsked([]);
+    setCurrentQ(null);
+    setQIdx(0);
+    setSessionId(null);
     setTrajectory([]);
     setPage("home");
   };
 
+  // ── Splash ─────────────────────────────────
   if (splash) {
     return (
       <div className={`splash${splashFade ? " fading" : ""}`}>
@@ -1306,35 +1304,57 @@ export default function App() {
     );
   }
 
-  if (!user) return <AuthScreen onLogin={login} toast={toast} />;
+  if (!user)     return <AuthScreen onLogin={login} toast={toast} />;
   if (analyzing) return <AnalyzingScreen />;
-  if (page === "result" && result) return <ResultScreen result={result} user={user} onReset={resetAssessment} onNewCheck={startAssessment} toast={toast} />;
-  if (assActive && currentQ) return <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />;
+  if (page === "result" && result)
+    return <ResultScreen result={result} user={user} onReset={resetAssessment} onNewCheck={startAssessment} toast={toast} />;
+  if (assActive && currentQ)
+    return <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />;
 
   const navItems = [
-    { id: "home",       label: "Home",    icon: "home" },
-    { id: "assessment", label: "Check",   icon: "activity" },
+    { id: "home",       label: "Home",    icon: "home"      },
+    { id: "assessment", label: "Check",   icon: "activity"  },
     { id: "records",    label: "Records", icon: "clipboard" },
-    { id: "profile",    label: "Profile", icon: "user" },
+    { id: "profile",    label: "Profile", icon: "user"      },
   ];
 
   const renderPage = () => {
     switch (page) {
-      case "home":       return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
-      case "assessment": return <AssessmentLanding onStart={startAssessment} />;
-      case "records":    return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
-      case "profile":    return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
-      case "settings":   return <SettingsScreen onBack={() => setPage("profile")} toast={toast} onThemeChange={handleThemeChange} currentTheme={theme} />;
-      case "privacy":    return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} onLogout={logout} />;
-      case "about":      return <AboutScreen onBack={() => setPage("profile")} />;
-      case "mydata":     return <MyDataScreen onBack={() => setPage("profile")} toast={toast} />;
-      default:           return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
+      case "home":
+        return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
+      case "assessment":
+        return <AssessmentLanding onStart={startAssessment} />;
+      case "records":
+        return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
+      case "profile":
+        return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
+      case "settings":
+        return (
+          <SettingsScreen
+            onBack={() => setPage("profile")}
+            toast={toast}
+            onThemeChange={handleThemeChange}
+            currentTheme={theme}
+            onFontSizeChange={handleFontSizeChange}
+            currentFontSize={fontSize}
+          />
+        );
+      case "privacy":
+        return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} onLogout={logout} />;
+      case "about":
+        return <AboutScreen onBack={() => setPage("profile")} />;
+      case "mydata":
+        return <MyDataScreen onBack={() => setPage("profile")} toast={toast} />;
+      default:
+        return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
     }
   };
 
   return (
     <div className="shell">
       <Notif msg={notif} />
+
+      {/* Sidebar — desktop */}
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="brand-mark"><MedicalHeartMark size={20} color="#fff" /></div>
@@ -1345,7 +1365,9 @@ export default function App() {
         </div>
         <nav className="sidebar-nav">
           {[...navItems, { id: "settings", label: "Settings", icon: "settings" }].map((n) => (
-            <button key={n.id} className={`nav-item${page === n.id ? " active" : ""}`} onClick={() => setPage(n.id)}>
+            <button key={n.id}
+              className={`nav-item${page === n.id ? " active" : ""}`}
+              onClick={() => setPage(n.id)}>
               <Icon name={n.icon} size={17} />
               {n.label}
             </button>
@@ -1358,13 +1380,21 @@ export default function App() {
           </button>
         </div>
       </aside>
+
+      {/* Main content */}
       <main className="main">
         <div className="page">{renderPage()}</div>
       </main>
+
+      {/* Bottom nav — mobile */}
       <nav className="bottom-nav">
         {navItems.map((n) => (
-          <button key={n.id} className={`bnav-item${page === n.id ? " active" : ""}`}
-            onClick={() => { setPage(n.id); if (n.id !== "assessment") setAssActive(false); }}>
+          <button key={n.id}
+            className={`bnav-item${page === n.id ? " active" : ""}`}
+            onClick={() => {
+              setPage(n.id);
+              if (n.id !== "assessment") setAssActive(false);
+            }}>
             <Icon name={n.icon} size={20} />
             <span>{n.label}</span>
           </button>
@@ -1395,11 +1425,14 @@ function AuthScreen({ onLogin, toast }) {
   const submit = async () => {
     if (!email.trim() || !pw.trim()) { toast("Please fill in all required fields."); return; }
     if (mode === "register" && !name.trim()) { toast("Please enter your full name."); return; }
+    if (pw.length < 8 && mode === "register") { toast("Password must be at least 8 characters."); return; }
     setLoading(true);
     try {
       let data;
       if (mode === "register") {
-        data = await api.post("/auth/register", { email: email.trim(), password: pw, name: name.trim(), age, gender });
+        data = await api.post("/auth/register", {
+          email: email.trim(), password: pw, name: name.trim(), age, gender,
+        });
       } else {
         data = await api.post("/auth/login", { email: email.trim(), password: pw });
       }
@@ -1420,8 +1453,8 @@ function AuthScreen({ onLogin, toast }) {
           <div className="auth-hint">Guided symptom assessment for tropical diseases</div>
         </div>
         <div className="card card-p" style={{ boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
-          <div className="tabs mb-3">
-            {["login","register"].map((m) => (
+          <div className="tabs">
+            {["login", "register"].map((m) => (
               <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => switchMode(m)}>
                 {m === "login" ? "Sign In" : "Create Account"}
               </button>
@@ -1430,24 +1463,30 @@ function AuthScreen({ onLogin, toast }) {
           {mode === "register" && (
             <div className="field">
               <label className="field-label">Full Name</label>
-              <input className="field-input" placeholder="e.g. Kofi Mensah" value={name} onChange={(e) => setName(e.target.value)} />
+              <input className="field-input" placeholder="e.g. Kofi Mensah" value={name}
+                onChange={(e) => setName(e.target.value)} />
             </div>
           )}
           <div className="field">
             <label className="field-label">Email Address</label>
-            <input className="field-input" type="email" placeholder="you@email.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input className="field-input" type="email" placeholder="you@email.com" value={email}
+              onChange={(e) => setEmail(e.target.value)} />
           </div>
           {mode === "register" && (
             <div className="grid-2">
               <div className="field">
                 <label className="field-label">Age</label>
-                <input className="field-input" type="number" placeholder="25" value={age} onChange={(e) => setAge(e.target.value)} />
+                <input className="field-input" type="number" placeholder="25" value={age}
+                  onChange={(e) => setAge(e.target.value)} />
               </div>
               <div className="field">
                 <label className="field-label">Gender</label>
-                <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
+                <select className="field-input field-select" value={gender}
+                  onChange={(e) => setGender(e.target.value)}>
                   <option value="">Select</option>
-                  <option>Male</option><option>Female</option><option>Other</option>
+                  <option>Male</option>
+                  <option>Female</option>
+                  <option>Other</option>
                 </select>
               </div>
             </div>
@@ -1455,9 +1494,11 @@ function AuthScreen({ onLogin, toast }) {
           <div className="field">
             <label className="field-label">Password</label>
             <div className="pw-wrap">
-              <input className="field-input" type={showPw ? "text" : "password"} placeholder="Enter password"
+              <input className="field-input" type={showPw ? "text" : "password"}
+                placeholder={mode === "register" ? "Min. 8 characters" : "Enter password"}
                 value={pw} onChange={(e) => setPw(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && submit()} style={{ paddingRight: 46 }} />
+                onKeyDown={(e) => e.key === "Enter" && submit()}
+                style={{ paddingRight: 46 }} />
               <button className="pw-toggle" type="button" onClick={() => setShowPw(!showPw)}>
                 <Icon name={showPw ? "eyeOff" : "eye"} size={17} />
               </button>
@@ -1477,24 +1518,44 @@ function AuthScreen({ onLogin, toast }) {
 // HOME SCREEN
 // ─────────────────────────────────────────────
 function HomeScreen({ userId, user, onStart, onNav }) {
-  const [records, setRecords] = useState([]);
+  const [records,  setRecords]  = useState([]);
+  const [profile,  setProfile]  = useState(null);
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState(false);
 
   useEffect(() => {
     let cancelled = false;
-    api.get("/patient/history")
-      .then((d) => { if (cancelled || _loggingOut) return; setRecords(d.slice(0, 3)); })
-      .catch(() => { if (cancelled || _loggingOut) return; setRecords([]); });
+    setLoading(true);
+    setError(false);
+
+    Promise.all([
+      api.get("/user/profile").catch(() => null),
+      api.get("/patient/history?limit=10").catch(() => null),
+    ]).then(([profileData, historyData]) => {
+      if (cancelled || _loggingOut) return;
+      setProfile(profileData);
+      setRecords(Array.isArray(historyData) ? historyData : []);
+      setLoading(false);
+      if (!profileData && !historyData) setError(true);
+    });
+
     return () => { cancelled = true; };
   }, [userId]);
 
+  // Use profile API counts for accuracy (never limited by fetch page size)
+  const totalAssessments = profile?.assessment_count ?? records.length;
+  const highRiskCount    = profile?.high_risk_count  ?? records.filter((r) => r.risk === "High").length;
+  const lastCheck        = records[0] ? fmtDate(records[0].created_at) : "None";
+
   const stats = [
-    { label: "Assessments", val: records.length,                                        icon: "activity", color: "var(--teal)" },
-    { label: "High Risk",   val: records.filter((r) => r.risk === "High").length,       icon: "alert",    color: "var(--red)"  },
-    { label: "Last Check",  val: records[0] ? fmtDate(records[0].created_at) : "None", icon: "calendar", color: "var(--blue)" },
+    { label: "Assessments", val: loading ? "..." : totalAssessments, icon: "activity", color: "var(--teal)"  },
+    { label: "High Risk",   val: loading ? "..." : highRiskCount,    icon: "alert",    color: "var(--red)"   },
+    { label: "Last Check",  val: loading ? "..." : lastCheck,        icon: "calendar", color: "var(--blue)"  },
   ];
 
   return (
     <div>
+      {/* Header */}
       <div className="home-header">
         <div>
           <div className="greeting">{getGreeting()}</div>
@@ -1505,6 +1566,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
         <div className="avatar">{(user?.name || "P")[0].toUpperCase()}</div>
       </div>
 
+      {/* Hero */}
       <div className="hero-card">
         <div className="hero-bg-icon"><Icon name="heart" size={110} color="#fff" /></div>
         <div className="hero-eyebrow">Guided Clinical Assessment</div>
@@ -1514,6 +1576,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
         </button>
       </div>
 
+      {/* Stats */}
       <div className="stats-row">
         {stats.map((s) => (
           <div key={s.label} className="stat-card">
@@ -1526,26 +1589,63 @@ function HomeScreen({ userId, user, onStart, onNav }) {
         ))}
       </div>
 
-      {records.length > 0 && (
-        <div className="section">
-          <div className="section-ttl">Recent Assessments</div>
+      {/* Recent Assessments */}
+      <div className="section">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div className="section-ttl" style={{ margin: 0 }}>Recent Assessments</div>
+          {records.length > 0 && (
+            <button onClick={() => onNav("records")} style={{
+              fontSize: 12, color: "var(--teal-d)", background: "none", border: "none",
+              cursor: "pointer", fontWeight: 700, fontFamily: "var(--font)", padding: "4px 0",
+            }}>
+              View All
+            </button>
+          )}
+        </div>
+
+        {loading ? (
+          <div style={{ textAlign: "center", padding: "24px 0", color: "var(--muted)", fontSize: 13 }}>
+            Loading your history...
+          </div>
+        ) : error ? (
+          <div style={{ textAlign: "center", padding: "24px 0" }}>
+            <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 10 }}>
+              Could not load history. Check your connection.
+            </div>
+          </div>
+        ) : records.length === 0 ? (
+          <div className="card card-p" style={{ textAlign: "center", padding: "32px 20px" }}>
+            <div style={{ width: 56, height: 56, margin: "0 auto 14px" }}><IllusDoctor /></div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--ink)", marginBottom: 6 }}>
+              No assessments yet
+            </div>
+            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 18, lineHeight: 1.55 }}>
+              Complete your first assessment to see your health history here.
+            </div>
+            <button className="btn btn-primary" onClick={onStart}>
+              <Icon name="activity" size={15} color="#fff" />
+              Start Assessment
+            </button>
+          </div>
+        ) : (
           <div className="rec-list">
             {records.map((r) => (
-              <div key={r.id} className="rec-card">
-                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk]}18` }}>
-                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk]} />
+              <div key={r.id} className="rec-card" onClick={() => onNav("records")}>
+                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk] || "var(--teal)"}18` }}>
+                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk] || "var(--teal)"} />
                 </div>
                 <div className="rec-info">
-                  <div className="rec-name">{r.disease}</div>
-                  <div className="rec-meta">{fmtDate(r.created_at)}</div>
+                  <div className="rec-name">{r.disease || "No diagnosis"}</div>
+                  <div className="rec-meta">{fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}% match</div>
                 </div>
                 <span className={`badge badge-${r.risk}`}>{r.risk}</span>
               </div>
             ))}
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
+      {/* Disease Coverage */}
       <div className="section">
         <div className="section-ttl">Disease Coverage</div>
         <div className="card card-p">
@@ -1573,26 +1673,28 @@ function AssessmentLanding({ onStart }) {
   ];
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
-      <div className="al-hero">
-        <div className="al-hero-text">
-          <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--teal)", marginBottom: 6 }}>
-            Symptom Assessment
+      <div className="page-head">
+        <div className="al-hero">
+          <div className="al-hero-text">
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--teal)", marginBottom: 6 }}>
+              Symptom Assessment
+            </div>
+            <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, color: "var(--ink)", lineHeight: 1.3, marginBottom: 8 }}>
+              Talk to our AI clinician
+            </div>
+            <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
+              Answer a short set of questions and receive a detailed assessment with personalised recommendations.
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {["Free", "Under 2 min", "22 diseases"].map((t) => (
+                <span key={t} className="badge badge-teal">
+                  <Icon name="check" size={10} color="var(--teal)" />&nbsp;{t}
+                </span>
+              ))}
+            </div>
           </div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, color: "var(--ink)", lineHeight: 1.3, marginBottom: 8 }}>
-            Talk to our AI clinician
-          </div>
-          <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
-            Answer a short set of questions and receive a detailed assessment with personalised recommendations.
-          </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-            {["Free", "Under 2 min", "22 diseases"].map((t) => (
-              <span key={t} className="badge badge-teal">
-                <Icon name="check" size={10} color="var(--teal)" />&nbsp;{t}
-              </span>
-            ))}
-          </div>
+          <div className="al-hero-illus"><HealthProfessionalIllus width={120} height={140} /></div>
         </div>
-        <div className="al-hero-illus"><HealthProfessionalIllus width={120} height={140} /></div>
       </div>
       <div className="page-body" style={{ flex: 1 }}>
         <div className="card card-p mb-4">
@@ -1634,9 +1736,13 @@ function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
   return (
     <div className="q-screen">
       <div className="q-topbar">
-        <button className="q-close" onClick={onQuit}><Icon name="x" size={16} color="var(--muted)" /></button>
+        <button className="q-close" onClick={onQuit} aria-label="Exit assessment">
+          <Icon name="x" size={16} color="var(--muted)" />
+        </button>
         <div style={{ flex: 1 }}>
-          <div className="prog-track"><div className="prog-fill" style={{ width: `${progress}%` }} /></div>
+          <div className="prog-track">
+            <div className="prog-fill" style={{ width: `${progress}%` }} />
+          </div>
         </div>
         <div className="q-counter">{qIdx + 1}/{total}</div>
       </div>
@@ -1646,11 +1752,15 @@ function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
         <div className="q-text">{question.question}</div>
         <div className="q-answers">
           <button className="ans-btn yes" onClick={() => answer(true)}>
-            <div className="ans-btn-icon ans-yes-icon"><Icon name="check" size={14} color="var(--teal-d)" /></div>
+            <div className="ans-btn-icon ans-yes-icon">
+              <Icon name="check" size={14} color="var(--teal-d)" />
+            </div>
             Yes
           </button>
           <button className="ans-btn no" onClick={() => answer(false)}>
-            <div className="ans-btn-icon ans-no-icon"><Icon name="x" size={14} color="var(--muted)" /></div>
+            <div className="ans-btn-icon ans-no-icon">
+              <Icon name="x" size={14} color="var(--muted)" />
+            </div>
             No
           </button>
         </div>
@@ -1681,7 +1791,9 @@ function AnalyzingScreen() {
         Analysing Results
       </div>
       <div className="t-subtitle mt-2 text-c" style={{ minHeight: 22 }}>{steps[step]}</div>
-      <div className="loading-dots"><div className="ldot" /><div className="ldot" /><div className="ldot" /></div>
+      <div className="loading-dots">
+        <div className="ldot" /><div className="ldot" /><div className="ldot" />
+      </div>
     </div>
   );
 }
@@ -1698,19 +1810,37 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
       generateTropiCareReport({ patient: user, diagnosis: result });
     } catch (e) {
       if (toast) toast("Could not generate the PDF report. Please try again.");
+      console.error("PDF error:", e);
     } finally {
       setDownloading(false);
     }
   };
 
+  const topBarStyle = {
+    background: "var(--surface)",
+    borderBottom: "1px solid var(--border)",
+    padding: "16px 20px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    position: "sticky",
+    top: 0,
+    zIndex: 10,
+  };
+
+  const CloseBtn = () => (
+    <button onClick={onReset} className="icon-btn" aria-label="Close"
+      style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+      <Icon name="x" size={16} color="var(--muted)" />
+    </button>
+  );
+
   if (!result.disease) {
     return (
       <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
-        <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={topBarStyle}>
           <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Your Result</div>
-          <button onClick={onReset} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
-            <Icon name="x" size={16} color="var(--muted)" />
-          </button>
+          <CloseBtn />
         </div>
         <div style={{ maxWidth: 600, margin: "0 auto", padding: "48px 16px 64px", textAlign: "center" }}>
           <div className="no-symptoms-ring">
@@ -1720,16 +1850,17 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
             No Symptoms Detected
           </div>
           <div style={{ fontSize: 15, color: "var(--muted)", lineHeight: 1.65, marginBottom: 32, maxWidth: 380, margin: "0 auto 32px" }}>
-            Based on your responses, you did not report any significant symptoms. There are no indicators of the conditions this system screens for.
+            Based on your responses, no significant symptoms were detected. There are no indicators of the conditions this system screens for.
           </div>
           <div className="rec-bubbles mb-4" style={{ textAlign: "left" }}>
-            <RecBubble icon="heart"     label="What this means"  text="Your answers did not match the symptom patterns for any of the 22 conditions in our database." accent="var(--green-d)"  bg="var(--green-l)"  />
-            <RecBubble icon="user"      label="Recommendation"   text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic." accent="var(--blue-d)"  bg="var(--blue-l)"   />
-            <RecBubble icon="info"      label="Good to know"     text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition." accent="var(--purple-d)" bg="var(--purple-l)" />
+            <RecBubble icon="heart"  label="What this means" text="Your answers did not match the symptom patterns for any of the 22 conditions in our database." accent="var(--green-d)" />
+            <RecBubble icon="user"   label="Recommendation"  text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic." accent="var(--blue-d)" />
+            <RecBubble icon="info"   label="Good to know"    text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition." accent="var(--purple-d)" />
           </div>
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
-              <Icon name="clipboard" size={15} /> {downloading ? "Preparing PDF..." : "Download PDF Report"}
+              <Icon name="download" size={15} />
+              {downloading ? "Preparing PDF..." : "Download PDF Report"}
             </button>
             <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Retake Assessment</button>
             <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
@@ -1740,36 +1871,40 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
   }
 
   const risk   = result.risk || "Medium";
-  const color  = RISK_COLOR[risk];
-  const bg     = RISK_BG[risk];
+  const color  = RISK_COLOR[risk] || "var(--teal)";
+  const bg     = RISK_BG[risk]    || "var(--green-l)";
   const rec    = result.recommendation || {};
   const scores = result.all_scores
-    ? Object.entries(result.all_scores).filter(([d]) => d !== result.disease).slice(0, 4)
+    ? Object.entries(result.all_scores).filter(([d]) => d !== result.disease).slice(0, 5)
     : [];
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
-      <div style={{ background: "var(--surface)", borderBottom: "1px solid var(--border)", padding: "16px 20px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={topBarStyle}>
         <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Your Result</div>
-        <button onClick={onReset} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
-          <Icon name="x" size={16} color="var(--muted)" />
-        </button>
+        <CloseBtn />
       </div>
+
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "24px 16px 64px" }}>
+        {/* Result ring */}
         <div className="text-c mb-4">
           <div className={`result-ring result-ring-${risk}`}>
             <Icon name={risk === "High" ? "alert" : risk === "Medium" ? "info" : "check"} size={44} color={color} />
           </div>
           <span className={`badge badge-${risk}`} style={{ fontSize: 12, padding: "4px 14px" }}>{risk} Risk</span>
         </div>
+
+        {/* Diagnosis card */}
         <div className="card card-p mb-3 text-c">
           <div className="t-label mb-2">Predicted Condition</div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12, color: "var(--ink)" }}>{result.disease}</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 26, fontWeight: 700, marginBottom: 12, color: "var(--ink)" }}>
+            {result.disease}
+          </div>
           <div style={{ height: 6, background: "var(--border-l)", borderRadius: 99, overflow: "hidden", marginBottom: 6 }}>
             <div style={{
               height: "100%",
               width: `${Math.round(result.confidence * 100)}%`,
-              background: `linear-gradient(90deg, ${color}80, ${color})`,
+              background: `linear-gradient(90deg,${color}80,${color})`,
               borderRadius: 99,
               transition: "width 0.8s cubic-bezier(0.4,0,0.2,1)",
             }} />
@@ -1781,13 +1916,17 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
             </div>
           )}
         </div>
+
+        {/* Recommendations */}
         <div className="section-ttl mb-2">What to Do</div>
         <div className="rec-bubbles mb-4">
-          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  bg="var(--green-l)"  />
-          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)"   />
-          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}           bg={bg}              />
-          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" bg="var(--red-l)" />}
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"   />
+          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}            />
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" />}
         </div>
+
+        {/* Other possibilities */}
         {scores.length > 0 && (
           <div className="card card-p mb-4">
             <div className="section-ttl mb-3">Other Possibilities</div>
@@ -1802,15 +1941,30 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
             ))}
           </div>
         )}
+
+        {/* Offline notice */}
+        {result.method === "offline-scoring" && (
+          <div className="disclaimer mb-4">
+            <Icon name="info" size={14} color="var(--amber)" />
+            <p>This result was calculated offline and has not been saved to your history. Check your connection and retake the assessment if you need a saved record.</p>
+          </div>
+        )}
+
+        {/* Medical disclaimer */}
         <div className="disclaimer mb-4">
           <Icon name="alert" size={14} color="var(--amber)" />
           <p>This result is for informational purposes only. It does not replace a clinical diagnosis. Consult a qualified healthcare professional before making any medical decisions.</p>
         </div>
+
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
-            <Icon name="clipboard" size={15} /> {downloading ? "Preparing PDF..." : "Download PDF Report"}
+            <Icon name="download" size={15} />
+            {downloading ? "Preparing PDF..." : "Download PDF Report"}
           </button>
-          <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>Start New Assessment</button>
+          <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>
+            <Icon name="activity" size={16} color="#fff" />
+            Start New Assessment
+          </button>
           <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
         </div>
       </div>
@@ -1826,17 +1980,19 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
   const [search,  setSearch]  = useState("");
   const [filter,  setFilter]  = useState("All");
   const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(false);
 
   useEffect(() => { load(); }, []);
 
   const load = async () => {
     setLoading(true);
+    setError(false);
     try {
-      const data = await api.get("/patient/history");
+      const data = await api.get("/patient/history?limit=100");
       if (_loggingOut) return;
-      setRecords(data);
+      setRecords(Array.isArray(data) ? data : []);
     } catch {
-      if (!_loggingOut) setRecords([]);
+      if (!_loggingOut) { setRecords([]); setError(true); }
     } finally {
       if (!_loggingOut) setLoading(false);
     }
@@ -1854,37 +2010,60 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
   return (
     <div>
       <div className="page-head">
-        <div className="t-display">My Records</div>
-        <div className="t-subtitle mt-1">{records.length} total assessment{records.length !== 1 ? "s" : ""}</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div className="t-display">My Records</div>
+            <div className="t-subtitle mt-1">{records.length} total assessment{records.length !== 1 ? "s" : ""}</div>
+          </div>
+          <button onClick={load} className="icon-btn"
+            style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+            <Icon name="refresh" size={16} color="var(--muted)" />
+          </button>
+        </div>
       </div>
       <div className="page-body">
         <div className="search-wrap">
           <span className="search-icon"><Icon name="search" size={15} /></span>
-          <input className="search-input" placeholder="Search records..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input className="search-input" placeholder="Search by condition or name..."
+            value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
         <div className="chip-row">
-          {["All","High","Medium","Low"].map((f) => (
+          {["All", "High", "Medium", "Low"].map((f) => (
             <button key={f} className={`chip${filter === f ? " on" : ""}`} onClick={() => setFilter(f)}>{f}</button>
           ))}
         </div>
+
         {loading ? (
           <div className="empty-state"><div className="t-subtitle">Loading records...</div></div>
+        ) : error ? (
+          <div className="empty-state">
+            <Icon name="alert" size={36} color="var(--muted-l)" />
+            <div className="t-title">Could not load records</div>
+            <div className="t-subtitle">Check your connection and try again.</div>
+            <button className="btn btn-primary mt-3" onClick={load}>Retry</button>
+          </div>
         ) : filtered.length === 0 ? (
           <div className="empty-state">
             <div style={{ width: 80, height: 80 }}><IllusDoctor /></div>
-            <div className="t-title">No records found</div>
-            <div className="t-subtitle">Complete an assessment to see your results here.</div>
+            <div className="t-title">{search || filter !== "All" ? "No matching records" : "No records yet"}</div>
+            <div className="t-subtitle">
+              {search || filter !== "All"
+                ? "Try a different search or filter."
+                : "Complete an assessment to see your results here."}
+            </div>
           </div>
         ) : (
           <div className="rec-list">
             {filtered.map((r) => (
               <div key={r.id} className="rec-card" onClick={() => onDetail(r)}>
-                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk]}18` }}>
-                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk]} />
+                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[r.risk] || "var(--teal)"}18` }}>
+                  <Icon name="heart" size={18} color={RISK_COLOR[r.risk] || "var(--teal)"} />
                 </div>
                 <div className="rec-info">
-                  <div className="rec-name">{r.disease}</div>
-                  <div className="rec-meta">{r.patient_name} · {fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}%</div>
+                  <div className="rec-name">{r.disease || "No diagnosis"}</div>
+                  <div className="rec-meta">
+                    {r.patient_name} · {fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}% match
+                  </div>
                 </div>
                 <span className={`badge badge-${r.risk}`}>{r.risk}</span>
                 <Icon name="chevR" size={14} color="var(--muted-l)" />
@@ -1897,55 +2076,94 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
   );
 }
 
+// ─────────────────────────────────────────────
+// RECORD DETAIL
+// ─────────────────────────────────────────────
 function RecordDetail({ record, onBack, toast }) {
   const [full,        setFull]        = useState(record);
   const [downloading, setDownloading] = useState(false);
+  const [delConfirm,  setDelConfirm]  = useState(false);
+  const [deleting,    setDeleting]    = useState(false);
+  const [deleted,     setDeleted]     = useState(false);
 
-  // The list endpoint does not include ml_scores or confidence_trajectory.
-  // Fetch the full diagnosis record so the PDF report can show the
-  // differential diagnosis and the confidence-evolution chart correctly.
+  // Fetch full record (includes ml_scores + confidence_trajectory)
   useEffect(() => {
     let cancelled = false;
     if (!record?.id) return;
     api.get(`/patient/history/${record.id}`)
       .then((d) => { if (!cancelled && !_loggingOut) setFull({ ...record, ...d }); })
-      .catch(() => { /* keep the summary record as a fallback */ });
+      .catch(() => { /* keep summary record as fallback */ });
     return () => { cancelled = true; };
   }, [record?.id]);
-
-  const color = RISK_COLOR[full.risk] || "var(--teal)";
-  const bg    = RISK_BG[full.risk]   || "var(--green-l)";
-  const rec   = full.recommendation  || {};
-  const syms  = (full.active_symptoms || []).map((s) => s.replace(/_/g, " "));
 
   const handleDownload = () => {
     setDownloading(true);
     try {
-      generateTropiCareReport({
-        patient: { name: full.patient_name },
-        diagnosis: full,
-      });
+      generateTropiCareReport({ patient: { name: full.patient_name }, diagnosis: full });
     } catch (e) {
-      if (toast) toast("Could not generate the PDF report. Please try again.");
+      if (toast) toast("Could not generate the PDF report.");
+      console.error("PDF error:", e);
     } finally {
       setDownloading(false);
     }
   };
 
+  const handleDelete = async () => {
+    if (!delConfirm) {
+      setDelConfirm(true);
+      setTimeout(() => setDelConfirm(false), 6000);
+      return;
+    }
+    setDeleting(true);
+    try {
+      await api.delete(`/patient/history/${full.id}`);
+      if (toast) toast("Record deleted.");
+      setDeleted(true);
+      setTimeout(() => onBack(), 600);
+    } catch {
+      if (toast) toast("Could not delete. Please try again.");
+      setDeleting(false);
+      setDelConfirm(false);
+    }
+  };
+
+  if (deleted) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh" }}>
+        <div style={{ color: "var(--muted)", fontSize: 14 }}>Record deleted.</div>
+      </div>
+    );
+  }
+
+  const color = RISK_COLOR[full.risk] || "var(--teal)";
+  const bg    = RISK_BG[full.risk]    || "var(--green-l)";
+  const rec   = full.recommendation   || {};
+  const syms  = (full.active_symptoms || []).map((s) => s.replace(/_/g, " "));
+  const mlScores = full.ml_scores
+    ? Object.entries(full.ml_scores).filter(([d]) => d !== full.disease).slice(0, 5)
+    : [];
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onBack} className="icon-btn"
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
-        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Assessment Detail</div>
+        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>
+          Assessment Detail
+        </div>
       </div>
+
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
+        {/* Result summary */}
         <div className="card card-p text-c mb-3">
           <div className={`result-ring result-ring-${full.risk}`} style={{ width: 90, height: 90 }}>
             <Icon name={full.risk === "High" ? "alert" : full.risk === "Medium" ? "info" : "check"} size={36} color={color} />
           </div>
-          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px", color: "var(--ink)" }}>{full.disease}</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px", color: "var(--ink)" }}>
+            {full.disease || "No diagnosis"}
+          </div>
           <span className={`badge badge-${full.risk}`}>{full.risk} Risk</span>
           <div className="t-subtitle mt-2" style={{ fontSize: 12 }}>
             {full.patient_name} · {new Date(full.created_at).toLocaleString("en-GB")}
@@ -1954,31 +2172,74 @@ function RecordDetail({ record, onBack, toast }) {
             {Math.round((full.confidence || 0) * 100)}% match
           </div>
           {full.explanation && (
-            <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>{full.explanation}</div>
+            <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              {full.explanation}
+            </div>
           )}
         </div>
+
+        {/* Recommendations */}
         <div className="section-ttl mb-2">Recommendations</div>
         <div className="rec-bubbles mb-4">
-          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  bg="var(--green-l)"  />
-          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"  bg="var(--blue-l)"   />
-          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}           bg={bg}              />
-          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" bg="var(--red-l)" />}
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"   />
+          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}            />
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" />}
         </div>
+
+        {/* Reported symptoms */}
         {syms.length > 0 && (
           <div className="card card-p mb-4">
             <div className="section-ttl mb-2">Reported Symptoms ({syms.length})</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {syms.map((s) => (
-                <span key={s} style={{ padding: "5px 12px", background: "var(--teal-xl)", borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal-d)" }}>
+                <span key={s} style={{
+                  padding: "5px 12px", background: "var(--teal-xl)",
+                  borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal-d)",
+                }}>
                   {s}
                 </span>
               ))}
             </div>
           </div>
         )}
-        <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
-          <Icon name="clipboard" size={15} /> {downloading ? "Preparing PDF..." : "Download PDF Report"}
-        </button>
+
+        {/* ML scores */}
+        {mlScores.length > 0 && (
+          <div className="card card-p mb-4">
+            <div className="section-ttl mb-3">Differential Diagnosis</div>
+            {mlScores.map(([d, conf]) => (
+              <div key={d} className="score-bar-row">
+                <span className="score-bar-name">{d}</span>
+                <div className="score-bar-track">
+                  <div className="score-bar-fill" style={{ width: `${Math.round(conf * 100)}%` }} />
+                </div>
+                <span className="score-bar-pct">{Math.round(conf * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
+            <Icon name="download" size={15} />
+            {downloading ? "Preparing PDF..." : "Download PDF Report"}
+          </button>
+          {delConfirm && (
+            <div className="disclaimer">
+              <Icon name="alert" size={13} color="var(--amber)" />
+              <p>Tap delete again to permanently remove this record. This cannot be undone.</p>
+            </div>
+          )}
+          <button className="btn btn-danger btn-full" onClick={handleDelete} disabled={deleting}>
+            <Icon name="trash" size={14} color="#fff" />
+            {deleting ? "Deleting..." : delConfirm ? "Confirm Delete" : "Delete Record"}
+          </button>
+          {delConfirm && (
+            <button className="btn btn-secondary btn-full" onClick={() => setDelConfirm(false)}>Cancel</button>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1993,7 +2254,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
   const [age,     setAge]     = useState(user?.age    || "");
   const [gender,  setGender]  = useState(user?.gender || "");
   const [profile, setProfile] = useState({});
-  const [loading, setLoading] = useState(false);
+  const [saving,  setSaving]  = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -2004,24 +2265,27 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
   }, []);
 
   const saveProfile = async () => {
-    setLoading(true);
+    if (!name.trim()) { toast("Name cannot be empty."); return; }
+    setSaving(true);
     try {
-      const data = await api.put("/user/profile", { name, age, gender });
+      const data = await api.put("/user/profile", { name: name.trim(), age, gender });
       if (_loggingOut) return;
       setProfile((prev) => ({ ...prev, ...data }));
       const existing = Store.get(USER_KEY) || {};
-      Store.set(USER_KEY, { ...existing, name, age, gender });
+      Store.set(USER_KEY, { ...existing, name: name.trim(), age, gender });
       toast("Profile updated.");
       setEditing(false);
-    } catch {
-      toast("Could not save. Check your connection.");
+    } catch (e) {
+      toast(e.message || "Could not save. Check your connection.");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   };
 
   const cancelEdit = () => {
-    setName(user?.name || ""); setAge(user?.age || ""); setGender(user?.gender || "");
+    setName(user?.name || "");
+    setAge(user?.age || "");
+    setGender(user?.gender || "");
     setEditing(false);
   };
 
@@ -2045,6 +2309,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
         )}
       </div>
       <div className="page-body">
+        {/* Profile card */}
         {!editing && (
           <div className="card card-p text-c mb-3">
             <div className="avatar avatar-lg mx-auto mb-3">{(p.name || "P")[0].toUpperCase()}</div>
@@ -2060,6 +2325,8 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             </div>
           </div>
         )}
+
+        {/* Edit form */}
         {editing && (
           <div className="edit-panel mb-3">
             <div className="edit-panel-title">Edit Profile</div>
@@ -2081,13 +2348,15 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
               </div>
             </div>
             <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-primary" style={{ flex: 1 }} onClick={saveProfile} disabled={loading}>
-                {loading ? "Saving..." : "Save Changes"}
+              <button className="btn btn-primary" style={{ flex: 1 }} onClick={saveProfile} disabled={saving}>
+                {saving ? "Saving..." : "Save Changes"}
               </button>
               <button className="btn btn-secondary" onClick={cancelEdit}>Cancel</button>
             </div>
           </div>
         )}
+
+        {/* Stats */}
         <div className="profile-stat-grid">
           <div className="ps-card">
             <div className="ps-val" style={{ color: "var(--teal)" }}>{p.assessment_count || 0}</div>
@@ -2098,6 +2367,8 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             <div className="ps-lbl">High Risk</div>
           </div>
         </div>
+
+        {/* Menu */}
         <div className="card card-p mb-3">
           <div className="menu-list">
             {menuItems.map((item) => (
@@ -2109,6 +2380,7 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
             ))}
           </div>
         </div>
+
         <button className="btn btn-danger btn-full" onClick={onLogout}>
           <Icon name="logout" size={15} color="#fff" /> Sign Out
         </button>
@@ -2134,8 +2406,8 @@ function MyDataScreen({ onBack, toast }) {
   const load = async () => {
     setLoading(true);
     try {
-      const data = await api.get("/patient/history");
-      if (!_loggingOut) setRecords(data);
+      const data = await api.get("/patient/history?limit=100");
+      if (!_loggingOut) setRecords(Array.isArray(data) ? data : []);
     } catch {
       if (!_loggingOut) setRecords([]);
     } finally {
@@ -2146,7 +2418,7 @@ function MyDataScreen({ onBack, toast }) {
   const deleteRecord = async (id) => {
     if (delId !== id) {
       setDelId(id);
-      setTimeout(() => setDelId((cur) => cur === id ? null : cur), 5000);
+      setTimeout(() => setDelId((cur) => (cur === id ? null : cur)), 5000);
       return;
     }
     try {
@@ -2169,14 +2441,15 @@ function MyDataScreen({ onBack, toast }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onBack} className="icon-btn"
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">My Data</div>
       </div>
       <div className="page-body">
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
-          {[["High","var(--red)"],["Medium","var(--amber)"],["Low","var(--green)"]].map(([r,c]) => (
+          {[["High", "var(--red)"], ["Medium", "var(--amber)"], ["Low", "var(--green)"]].map(([r, c]) => (
             <div key={r} className="stat-card">
               <div className="stat-val" style={{ color: c }}>{counts[r]}</div>
               <div className="stat-lbl">{r}</div>
@@ -2187,14 +2460,22 @@ function MyDataScreen({ onBack, toast }) {
         <div style={{ background: "var(--teal-xl)", border: "1px solid var(--teal-l)", borderRadius: "var(--radius)", padding: 16, marginBottom: 20, display: "flex", gap: 10, alignItems: "flex-start" }}>
           <Icon name="shield" size={16} color="var(--teal)" />
           <p style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.55, margin: 0 }}>
-            This screen shows your assessments only.
+            Your assessment data is stored securely and visible only to you.
           </p>
         </div>
 
-        <div className="section-ttl mb-2">My Assessments ({records.length})</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div className="section-ttl" style={{ margin: 0 }}>All Assessments ({records.length})</div>
+          <button onClick={load} className="icon-btn"
+            style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+            <Icon name="refresh" size={14} color="var(--muted)" />
+          </button>
+        </div>
+
         <div className="search-wrap mb-3">
           <span className="search-icon"><Icon name="search" size={15} /></span>
-          <input className="search-input" placeholder="Search by disease..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          <input className="search-input" placeholder="Search by condition..."
+            value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
 
         {loading ? (
@@ -2202,15 +2483,17 @@ function MyDataScreen({ onBack, toast }) {
         ) : shown.length === 0 ? (
           <div className="empty-state">
             <Icon name="database" size={36} color="var(--muted-l)" />
-            <div className="t-subtitle">No assessments yet</div>
+            <div className="t-subtitle">{search ? "No matching records" : "No assessments yet"}</div>
           </div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {shown.map((r) => (
               <div key={r.id} className="card" style={{ padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>{r.disease}</div>
-                  <div className="t-subtitle" style={{ fontSize: 11 }}>{fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}% match</div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>{r.disease || "No diagnosis"}</div>
+                  <div className="t-subtitle" style={{ fontSize: 11 }}>
+                    {fmtDate(r.created_at)} · {Math.round((r.confidence || 0) * 100)}% match
+                  </div>
                 </div>
                 <span className={`badge badge-${r.risk}`}>{r.risk}</span>
                 {delId === r.id ? (
@@ -2258,7 +2541,7 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
     if (!currentPw || !newPw || !confirmPw) { toast("Please fill in all password fields."); return; }
     if (newPw.length < 8) { toast("New password must be at least 8 characters."); return; }
     if (newPw !== confirmPw) { toast("New passwords do not match."); return; }
-    if (currentPw === newPw) { toast("New password must be different from your current one."); return; }
+    if (currentPw === newPw) { toast("New password must differ from your current one."); return; }
     setPwLoading(true);
     try {
       await api.put("/user/change-password", { current_password: currentPw, new_password: newPw });
@@ -2288,24 +2571,28 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
   };
 
   const privacyPoints = [
-    { icon: "database", color: "var(--teal)",   bg: "var(--teal-xl)",  label: "Data stays yours",        desc: "Your assessment history is stored in a secured database tied to your account only." },
-    { icon: "user",     color: "var(--blue)",   bg: "var(--blue-l)",   label: "No third-party sharing",  desc: "Your personal health data is never sold or shared with advertisers or third parties." },
-    { icon: "shield",   color: "var(--purple)", bg: "var(--purple-l)", label: "Encrypted in transit",    desc: "All data between your device and our servers is protected using HTTPS encryption." },
-    { icon: "trash",    color: "var(--red)",    bg: "var(--red-l)",    label: "Right to delete",         desc: "You can permanently delete your account and all associated data at any time." },
+    { icon: "database", color: "var(--teal)",   bg: "var(--teal-xl)",  label: "Data stays yours",       desc: "Your assessment history is stored in a secured database tied to your account only." },
+    { icon: "user",     color: "var(--blue)",   bg: "var(--blue-l)",   label: "No third-party sharing", desc: "Your personal health data is never sold or shared with advertisers or third parties." },
+    { icon: "shield",   color: "var(--purple)", bg: "var(--purple-l)", label: "Encrypted in transit",   desc: "All data between your device and our servers is protected using HTTPS encryption." },
+    { icon: "trash",    color: "var(--red)",    bg: "var(--red-l)",    label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
   ];
 
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onBack} className="icon-btn"
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Privacy & Security</div>
       </div>
       <div className="page-body">
+
+        {/* Account Security */}
         <div className="sec-section">
           <div className="sec-section-title">Account Security</div>
           <div className="card card-p">
+            {/* Change password row */}
             <div className="sec-row" style={{ paddingTop: 0 }}>
               <div className="sec-row-icon" style={{ background: "var(--blue-l)" }}>
                 <Icon name="edit" size={16} color="var(--blue)" />
@@ -2314,18 +2601,24 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
                 <div className="sec-row-label">Change Password</div>
                 <div className="sec-row-hint">Update your account password</div>
               </div>
-              <button className={`btn btn-sm ${pwExpanded ? "btn-secondary" : "btn-outline"}`}
-                onClick={() => { setPwExpanded(!pwExpanded); if (pwExpanded) { setCurrentPw(""); setNewPw(""); setConfirmPw(""); } }}>
+              <button
+                className={`btn btn-sm ${pwExpanded ? "btn-secondary" : "btn-outline"}`}
+                onClick={() => {
+                  setPwExpanded(!pwExpanded);
+                  if (pwExpanded) { setCurrentPw(""); setNewPw(""); setConfirmPw(""); }
+                }}>
                 {pwExpanded ? "Cancel" : "Change"}
               </button>
             </div>
+
             {pwExpanded && (
               <div className="sec-field-wrap">
                 <div className="field">
                   <label className="field-label">Current Password</label>
                   <div className="pw-wrap">
-                    <input className="field-input" type={showCur ? "text" : "password"} placeholder="Enter current password"
-                      value={currentPw} onChange={(e) => setCurrentPw(e.target.value)} style={{ paddingRight: 46 }} />
+                    <input className="field-input" type={showCur ? "text" : "password"}
+                      placeholder="Enter current password" value={currentPw}
+                      onChange={(e) => setCurrentPw(e.target.value)} style={{ paddingRight: 46 }} />
                     <button className="pw-toggle" type="button" onClick={() => setShowCur(!showCur)}>
                       <Icon name={showCur ? "eyeOff" : "eye"} size={16} />
                     </button>
@@ -2334,8 +2627,9 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
                 <div className="field">
                   <label className="field-label">New Password</label>
                   <div className="pw-wrap">
-                    <input className="field-input" type={showNew ? "text" : "password"} placeholder="Min. 8 characters"
-                      value={newPw} onChange={(e) => setNewPw(e.target.value)} style={{ paddingRight: 46 }} />
+                    <input className="field-input" type={showNew ? "text" : "password"}
+                      placeholder="Min. 8 characters" value={newPw}
+                      onChange={(e) => setNewPw(e.target.value)} style={{ paddingRight: 46 }} />
                     <button className="pw-toggle" type="button" onClick={() => setShowNew(!showNew)}>
                       <Icon name={showNew ? "eyeOff" : "eye"} size={16} />
                     </button>
@@ -2344,39 +2638,55 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
                 <div className="field">
                   <label className="field-label">Confirm New Password</label>
                   <div className="pw-wrap">
-                    <input className="field-input" type={showCon ? "text" : "password"} placeholder="Repeat new password"
-                      value={confirmPw} onChange={(e) => setConfirmPw(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && changePassword()} style={{ paddingRight: 46 }} />
+                    <input className="field-input" type={showCon ? "text" : "password"}
+                      placeholder="Repeat new password" value={confirmPw}
+                      onChange={(e) => setConfirmPw(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && changePassword()}
+                      style={{ paddingRight: 46 }} />
                     <button className="pw-toggle" type="button" onClick={() => setShowCon(!showCon)}>
                       <Icon name={showCon ? "eyeOff" : "eye"} size={16} />
                     </button>
                   </div>
                 </div>
+
                 {newPw.length > 0 && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, padding: "8px 12px", borderRadius: 8,
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8, marginBottom: 10,
+                    padding: "8px 12px", borderRadius: 8,
                     background: newPw.length < 8 ? "var(--red-l)" : "var(--green-l)",
-                    border: `1px solid ${newPw.length < 8 ? "var(--red-d)" : "var(--green-d)"}` }}>
-                    <Icon name={newPw.length < 8 ? "alert" : "check"} size={13} color={newPw.length < 8 ? "var(--red)" : "var(--green)"} />
+                    border: `1px solid ${newPw.length < 8 ? "var(--red-d)" : "var(--green-d)"}`,
+                  }}>
+                    <Icon name={newPw.length < 8 ? "alert" : "check"} size={13}
+                      color={newPw.length < 8 ? "var(--red)" : "var(--green)"} />
                     <span style={{ fontSize: 12, fontWeight: 600, color: newPw.length < 8 ? "var(--red-d)" : "var(--green-d)" }}>
-                      {newPw.length < 8 ? `${8 - newPw.length} more character${8 - newPw.length !== 1 ? "s" : ""} needed` : "Password length is good"}
+                      {newPw.length < 8
+                        ? `${8 - newPw.length} more character${8 - newPw.length !== 1 ? "s" : ""} needed`
+                        : "Password length is good"}
                     </span>
                   </div>
                 )}
                 {confirmPw.length > 0 && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14, padding: "8px 12px", borderRadius: 8,
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
+                    padding: "8px 12px", borderRadius: 8,
                     background: newPw !== confirmPw ? "var(--red-l)" : "var(--green-l)",
-                    border: `1px solid ${newPw !== confirmPw ? "var(--red-d)" : "var(--green-d)"}` }}>
-                    <Icon name={newPw !== confirmPw ? "x" : "check"} size={13} color={newPw !== confirmPw ? "var(--red)" : "var(--green)"} />
+                    border: `1px solid ${newPw !== confirmPw ? "var(--red-d)" : "var(--green-d)"}`,
+                  }}>
+                    <Icon name={newPw !== confirmPw ? "x" : "check"} size={13}
+                      color={newPw !== confirmPw ? "var(--red)" : "var(--green)"} />
                     <span style={{ fontSize: 12, fontWeight: 600, color: newPw !== confirmPw ? "var(--red-d)" : "var(--green-d)" }}>
                       {newPw !== confirmPw ? "Passwords do not match" : "Passwords match"}
                     </span>
                   </div>
                 )}
+
                 <button className="btn btn-primary btn-full" onClick={changePassword} disabled={pwLoading}>
                   {pwLoading ? "Updating..." : "Update Password"}
                 </button>
               </div>
             )}
+
+            {/* Email row */}
             <div className="sec-row">
               <div className="sec-row-icon" style={{ background: "var(--teal-xl)" }}>
                 <Icon name="user" size={16} color="var(--teal)" />
@@ -2390,6 +2700,7 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
           </div>
         </div>
 
+        {/* Privacy */}
         <div className="sec-section">
           <div className="sec-section-title">Your Privacy</div>
           <div className="card card-p">
@@ -2407,17 +2718,20 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
           </div>
         </div>
 
+        {/* Danger Zone */}
         <div className="sec-section">
           <div className="sec-section-title">Danger Zone</div>
           <div style={{ border: "1.5px solid var(--red)", borderRadius: "var(--radius)", padding: 18 }}>
-            <div style={{ fontWeight: 700, color: "var(--red)", marginBottom: 4, fontSize: 14 }}>Delete Account</div>
+            <div style={{ fontWeight: 700, color: "var(--red)", marginBottom: 4, fontSize: 14 }}>
+              Delete Account
+            </div>
             <div className="t-subtitle mb-3" style={{ fontSize: 13 }}>
               Permanently removes your account and all health records. This cannot be undone.
             </div>
             {deleteConfirm && (
               <div className="disclaimer mb-3">
                 <Icon name="alert" size={13} color="var(--amber)" />
-                <p>Tap again to confirm. All your data will be deleted permanently.</p>
+                <p>Tap again to confirm. All your data will be permanently deleted.</p>
               </div>
             )}
             <button className="btn btn-danger btn-full" onClick={deleteAccount} disabled={deleteLoading}>
@@ -2425,7 +2739,9 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
               {deleteLoading ? "Deleting..." : deleteConfirm ? "Confirm Delete Account" : "Delete My Account"}
             </button>
             {deleteConfirm && (
-              <button className="btn btn-secondary btn-full mt-2" onClick={() => setDeleteConfirm(false)}>Cancel</button>
+              <button className="btn btn-secondary btn-full mt-2" onClick={() => setDeleteConfirm(false)}>
+                Cancel
+              </button>
             )}
           </div>
         </div>
@@ -2446,11 +2762,13 @@ function AboutScreen({ onBack }) {
     { icon: "clipboard", color: "var(--amber)",  bg: "var(--amber-l)",  title: "Assessment History",           desc: "All past results are stored securely so you and your care provider can track changes over time." },
     { icon: "user",      color: "var(--green)",  bg: "var(--green-l)",  title: "Built for West Africa",        desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
   ];
+
   const team = [
     { initials: "OA", name: "Obed Mensah",          role: "Full-Stack Developer · Frontend, Backend & ML",      color: "var(--teal)",   bg: "var(--teal-xl)"  },
     { initials: "AK", name: "Afrique-Ahali Kekeli", role: "Research Lead · Dataset Curation & Disease Mapping", color: "var(--blue)",   bg: "var(--blue-l)"   },
     { initials: "JK", name: "Prof. J.J. Kponyo",    role: "Project Supervisor · KNUST",                         color: "var(--purple)", bg: "var(--purple-l)" },
   ];
+
   const versionInfo = [
     { key: "Version",     val: "1.0.0" },
     { key: "Release",     val: "May 2026" },
@@ -2458,10 +2776,12 @@ function AboutScreen({ onBack }) {
     { key: "Institution", val: "KNUST, Ghana" },
     { key: "License",     val: "Academic use only" },
   ];
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onBack} className="icon-btn"
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">About TropiCare</div>
@@ -2472,26 +2792,34 @@ function AboutScreen({ onBack }) {
           <div className="about-hero-eyebrow">Project · KNUST 2026</div>
           <div className="about-hero-title">TropiCare</div>
           <div className="about-hero-sub">
-            An AI-guided symptom checker built to help patients and clinicians identify tropical diseases
-            faster with clear risk levels and personalised recommendations.
+            An AI-guided symptom checker built to help patients and clinicians identify tropical
+            diseases faster with clear risk levels and personalised recommendations.
           </div>
         </div>
+
         <div className="about-mission mb-4">
           <div className="about-mission-label">Our Mission</div>
           <div className="about-mission-text">
-            TropiCare bridges the gap between symptom onset and clinical attention in resource-constrained settings.
-            By combining machine learning with adaptive questioning, it provides structured, risk-stratified guidance
-            to patients and triage staff before a doctor is available.
+            TropiCare bridges the gap between symptom onset and clinical attention in resource-constrained
+            settings. By combining machine learning with adaptive questioning, it provides structured,
+            risk-stratified guidance to patients and triage staff before a doctor is available.
           </div>
         </div>
+
         <div className="about-fact-grid mb-4">
-          {[{val:"22",lbl:"Diseases covered"},{val:"76",lbl:"Tracked symptoms"},{val:"15",lbl:"Max questions"},{val:"3",lbl:"ML models"}].map((f) => (
+          {[
+            { val: "22", lbl: "Diseases covered"  },
+            { val: "76", lbl: "Tracked symptoms"  },
+            { val: "15", lbl: "Max questions"      },
+            { val: "3",  lbl: "ML models"          },
+          ].map((f) => (
             <div key={f.lbl} className="about-fact">
               <div className="about-fact-val">{f.val}</div>
               <div className="about-fact-lbl">{f.lbl}</div>
             </div>
           ))}
         </div>
+
         <div className="section-ttl mb-2">What TropiCare Does</div>
         <div className="card card-p mb-4">
           {features.map((f) => (
@@ -2506,20 +2834,28 @@ function AboutScreen({ onBack }) {
             </div>
           ))}
         </div>
+
         <div className="disclaimer mb-4">
           <Icon name="alert" size={14} color="var(--amber)" />
-          <p>TropiCare is an informational tool only. It does not replace a clinical examination or a qualified healthcare professional. Always consult a doctor for a definitive diagnosis.</p>
+          <p>
+            TropiCare is an informational tool only. It does not replace a clinical examination or a
+            qualified healthcare professional. Always consult a doctor for a definitive diagnosis.
+          </p>
         </div>
+
         <div className="section-ttl mb-2">The Team</div>
         {team.map((t) => (
           <div key={t.name} className="about-team-card">
-            <div className="about-team-avatar" style={{ background: t.bg, color: t.color }}>{t.initials}</div>
+            <div className="about-team-avatar" style={{ background: t.bg, color: t.color }}>
+              {t.initials}
+            </div>
             <div>
               <div className="about-team-name">{t.name}</div>
               <div className="about-team-role">{t.role}</div>
             </div>
           </div>
         ))}
+
         <div className="section-ttl mt-4 mb-2">Version Info</div>
         <div className="card card-p mb-4">
           {versionInfo.map((v) => (
@@ -2529,6 +2865,7 @@ function AboutScreen({ onBack }) {
             </div>
           ))}
         </div>
+
         <div className="text-c" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.8 }}>
           TropiCare · Symptom Checker for Tropical Diseases<br />
           Kwame Nkrumah University of Science and Technology
@@ -2542,36 +2879,54 @@ function AboutScreen({ onBack }) {
 // ─────────────────────────────────────────────
 // SETTINGS SCREEN
 // ─────────────────────────────────────────────
-function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
-  const [theme,    setTheme]    = useState(currentTheme || "light");
+function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSizeChange, currentFontSize }) {
+  const [theme,    setTheme]    = useState(currentTheme    || "light");
+  const [fontSize, setFontSize] = useState(currentFontSize || "medium");
   const [notifs,   setNotifs]   = useState(true);
   const [lang,     setLang]     = useState("en");
-  const [fontSize, setFontSize] = useState("medium");
+  const [saved,    setSaved]    = useState(false);
 
-  // Sync local state if the parent-supplied currentTheme changes
-  // (e.g. navigating away and back while the OS flipped system preference).
+  // Sync if parent-supplied values change
   useEffect(() => {
-    if (currentTheme && currentTheme !== theme) setTheme(currentTheme);
-  }, [currentTheme]);
+    if (currentTheme    && currentTheme    !== theme)    setTheme(currentTheme);
+    if (currentFontSize && currentFontSize !== fontSize) setFontSize(currentFontSize);
+  }, [currentTheme, currentFontSize]);
 
+  // Load persisted settings on mount
   useEffect(() => {
     const s = Store.get("tc_settings");
     if (s) {
-      setTheme(s.theme || currentTheme || "light");
-      setNotifs(s.notifications !== false);
-      setLang(s.language || "en");
-      setFontSize(s.fontSize || "medium");
+      if (s.theme)         setTheme(s.theme);
+      if (s.fontSize)      setFontSize(s.fontSize);
+      if (s.notifications !== undefined) setNotifs(s.notifications !== false);
+      if (s.language)      setLang(s.language);
     }
   }, []);
 
   const applyTheme = (val) => {
     setTheme(val);
+    setSaved(false);
     if (onThemeChange) onThemeChange(val);
   };
 
+  const applyFontSize = (val) => {
+    setFontSize(val);
+    setSaved(false);
+    // Apply immediately for live preview
+    const root = document.documentElement;
+    if (val === "medium") {
+      root.removeAttribute("data-fontsize");
+    } else {
+      root.setAttribute("data-fontsize", val);
+    }
+    if (onFontSizeChange) onFontSizeChange(val);
+  };
+
   const save = () => {
-    Store.set("tc_settings", { theme, notifications: notifs, language: lang, fontSize });
-    if (onThemeChange) onThemeChange(theme);
+    Store.set("tc_settings", { theme, fontSize, notifications: notifs, language: lang });
+    if (onThemeChange)    onThemeChange(theme);
+    if (onFontSizeChange) onFontSizeChange(fontSize);
+    setSaved(true);
     toast("Settings saved.");
   };
 
@@ -2581,15 +2936,18 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
     { val: "system", label: "System", icon: "monitor" },
   ];
 
-  const ChipGroup = ({ options, value, onChange }) => (
-    <div className="chip-row">
-      {options.map((o) => (
-        <button key={o.val} className={`chip${value === o.val ? " on" : ""}`} onClick={() => onChange(o.val)}>
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
+  const FONT_OPTIONS = [
+    { val: "small",  label: "Small"  },
+    { val: "medium", label: "Medium" },
+    { val: "large",  label: "Large"  },
+  ];
+
+  const LANG_OPTIONS = [
+    { val: "en", label: "English" },
+    { val: "tw", label: "Twi"     },
+    { val: "fr", label: "French"  },
+    { val: "ha", label: "Hausa"   },
+  ];
 
   const Toggle = ({ checked, onChange }) => (
     <label className="toggle">
@@ -2601,7 +2959,8 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
-        <button onClick={onBack} className="icon-btn" style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+        <button onClick={onBack} className="icon-btn"
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
         </button>
         <div className="t-display">Settings</div>
@@ -2613,8 +2972,8 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
           <div className="section-ttl mb-2">Appearance</div>
           <div className="card card-p">
 
+            {/* Theme */}
             <div className="t-label mb-2">Theme</div>
-            {/* Compact, fully rounded theme switcher — works cleanly on all screen sizes */}
             <div className="theme-preview-strip">
               {THEME_OPTIONS.map((o) => (
                 <button
@@ -2622,13 +2981,15 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
                   className={`theme-preview-swatch ${o.val}-sw${theme === o.val ? " selected" : ""}`}
                   onClick={() => applyTheme(o.val)}
                   aria-pressed={theme === o.val}
-                  aria-label={`${o.label} theme`}
-                  title={`${o.label} theme`}
-                >
+                  title={`${o.label} theme`}>
                   <Icon
                     name={o.icon}
                     size={14}
-                    color={o.val === "dark" ? "#e8eef3" : o.val === "system" ? "var(--teal)" : "#0b1726"}
+                    color={
+                      o.val === "dark" ? "#e8eef3"
+                      : o.val === "system" ? "var(--teal)"
+                      : "#0b1726"
+                    }
                   />
                   <span>{o.label}</span>
                 </button>
@@ -2641,13 +3002,23 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
               </div>
             )}
 
-            <div style={{ borderTop: "1px solid var(--border)", marginTop: 14, paddingTop: 14 }}>
+            {/* Font size */}
+            <div style={{ borderTop: "1px solid var(--border)", marginTop: 16, paddingTop: 16 }}>
               <div className="t-label mb-2">Text Size</div>
-              <ChipGroup
-                options={[{val:"small",label:"Small"},{val:"medium",label:"Medium"},{val:"large",label:"Large"}]}
-                value={fontSize}
-                onChange={setFontSize}
-              />
+              <div className="fs-strip">
+                {FONT_OPTIONS.map((o) => (
+                  <button
+                    key={o.val}
+                    className={`fs-btn fs-${o.val}${fontSize === o.val ? " selected" : ""}`}
+                    onClick={() => applyFontSize(o.val)}
+                    aria-pressed={fontSize === o.val}>
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
+                Medium is the default. Changes apply immediately across the app.
+              </div>
             </div>
           </div>
         </div>
@@ -2661,7 +3032,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
                 <div style={{ fontWeight: 600, fontSize: 14, color: "var(--ink)" }}>Push Notifications</div>
                 <div className="t-subtitle" style={{ fontSize: 12 }}>Health reminders and updates</div>
               </div>
-              <Toggle checked={notifs} onChange={setNotifs} />
+              <Toggle checked={notifs} onChange={(v) => { setNotifs(v); setSaved(false); }} />
             </div>
           </div>
         </div>
@@ -2670,26 +3041,31 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Language</div>
           <div className="card card-p">
-            <ChipGroup
-              options={[{val:"en",label:"English"},{val:"tw",label:"Twi"},{val:"fr",label:"French"},{val:"ha",label:"Hausa"}]}
-              value={lang}
-              onChange={setLang}
-            />
+            <div className="chip-row" style={{ marginBottom: 0 }}>
+              {LANG_OPTIONS.map((o) => (
+                <button
+                  key={o.val}
+                  className={`chip${lang === o.val ? " on" : ""}`}
+                  onClick={() => { setLang(o.val); setSaved(false); }}>
+                  {o.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
 
-        {/* Privacy */}
+        {/* Privacy summary */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Privacy</div>
           <div className="card card-p">
-            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 12, borderBottom: "1px solid var(--border)" }}>
               <Icon name="shield" size={16} color="var(--green)" />
               <div>
                 <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>Encrypted Storage</div>
                 <div className="t-subtitle" style={{ fontSize: 12 }}>All data is secured in transit and at rest</div>
               </div>
             </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 10 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 12 }}>
               <Icon name="check" size={16} color="var(--green)" />
               <div>
                 <div style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>No Third-Party Sharing</div>
@@ -2699,7 +3075,16 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
           </div>
         </div>
 
-        <button className="btn btn-primary btn-full" onClick={save}>Save Settings</button>
+        <button className="btn btn-primary btn-full" onClick={save}>
+          <Icon name="check" size={15} color="#fff" />
+          Save Settings
+        </button>
+
+        {saved && (
+          <div style={{ marginTop: 10, textAlign: "center", fontSize: 12, color: "var(--green-d)", fontWeight: 600 }}>
+            Settings saved successfully.
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2709,14 +3094,16 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme }) {
 // HELPERS
 // ─────────────────────────────────────────────
 function getGreeting() {
-  const hour = new Date().getHours();
-  if (hour >= 5 && hour < 12)  return "Good morning,";
-  if (hour >= 12 && hour < 17) return "Good afternoon,";
-  if (hour >= 17 && hour < 21) return "Good evening,";
+  const h = new Date().getHours();
+  if (h >= 5  && h < 12) return "Good morning,";
+  if (h >= 12 && h < 17) return "Good afternoon,";
+  if (h >= 17 && h < 21) return "Good evening,";
   return "Good night,";
 }
 
 function fmtDate(iso) {
   if (!iso) return "";
-  return new Date(iso).toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" });
+  return new Date(iso).toLocaleDateString("en-GB", {
+    day: "2-digit", month: "short", year: "numeric",
+  });
 }
