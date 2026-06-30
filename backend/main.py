@@ -36,7 +36,6 @@ from fastapi import (
     HTTPException,
     Request,
     Response,
-    status,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -58,6 +57,8 @@ from sqlalchemy import (
     Text,
     create_engine,
     event,
+    inspect,
+    text,
 )
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
 
@@ -173,6 +174,11 @@ CB_STATE     = Gauge("tropicare_circuit_breaker_open",  "Circuit breaker open (1
 DB_POOL_ACTIVE = Gauge("tropicare_db_pool_active", "DB pool active connections")
 DB_POOL_IDLE   = Gauge("tropicare_db_pool_idle",   "DB pool idle connections")
 SESSION_CLEANUP_RUNS = Counter("tropicare_session_cleanup_runs_total", "Session cleanup scheduler runs")
+SCHEMA_MIGRATIONS_APPLIED = Counter(
+    "tropicare_schema_migrations_applied_total",
+    "Columns added to existing tables at startup",
+    ["table", "column"],
+)
 
 # -----------------------------------------------------------------
 # REDIS
@@ -260,9 +266,16 @@ Base = declarative_base()
 
 @event.listens_for(engine, "checkout")
 def _on_checkout(dbapi_conn, conn_record, conn_proxy):
-    pool = engine.pool
-    DB_POOL_ACTIVE.set(getattr(pool, "_checked_out", 0))
-    DB_POOL_IDLE.set(getattr(pool, "_pool", None) and pool._pool.qsize() or 0)
+    try:
+        pool = engine.pool
+        DB_POOL_ACTIVE.set(getattr(pool, "_checked_out", 0))
+        idle_queue = getattr(pool, "_pool", None)
+        DB_POOL_IDLE.set(idle_queue.qsize() if idle_queue is not None else 0)
+    except Exception:
+        # Pool internals vary by SQLAlchemy pool implementation (e.g. SQLite's
+        # StaticPool/NullPool do not expose the same attributes as QueuePool).
+        # Metrics are best-effort and must never break a real DB checkout.
+        pass
 
 
 # -----------------------------------------------------------------
@@ -321,6 +334,87 @@ class SessionModel(Base):
     __table_args__ = (
         Index("ix_sessions_user_completed", "user_id", "completed"),
     )
+
+
+# -----------------------------------------------------------------
+# SCHEMA AUTO-MIGRATION
+#
+# This project does not use Alembic. Base.metadata.create_all() only creates
+# tables that do not exist yet -- it silently does NOT add new columns to
+# tables that already exist in the live database. That mismatch is exactly
+# what caused `trajectory` (assessment_sessions) and `confidence_trajectory`
+# (diagnoses) to be missing on Render/Neon after being added to the ORM
+# models here, which made every INSERT touching those columns fail and get
+# swallowed by the frontend's offline fallback -- so results displayed
+# correctly in the UI but were never actually persisted, and history/records
+# stayed empty.
+#
+# This function inspects the live table definitions at startup and adds any
+# column that exists on the ORM model but not in the actual table, so future
+# column additions can never silently break persistence again. It is
+# defensive: each column is added in its own try/except so one failure does
+# not block startup or other migrations.
+# -----------------------------------------------------------------
+
+def run_schema_migrations() -> None:
+    try:
+        inspector = inspect(engine)
+        existing_tables = set(inspector.get_table_names())
+    except Exception as e:
+        logger.error({"event": "schema_migration_inspect_failed", "error": str(e)})
+        return
+
+    for model in (UserModel, SessionModel, DiagnosisModel):
+        table = model.__table__
+        if table.name not in existing_tables:
+            # Brand-new table: Base.metadata.create_all() already created it
+            # with every current column, so there is nothing to migrate.
+            continue
+
+        try:
+            existing_cols = {c["name"] for c in inspector.get_columns(table.name)}
+        except Exception as e:
+            logger.error({
+                "event": "schema_migration_columns_failed",
+                "table": table.name,
+                "error": str(e),
+            })
+            continue
+
+        for column in table.columns:
+            if column.name in existing_cols:
+                continue
+
+            try:
+                col_type = column.type.compile(dialect=engine.dialect)
+                default_clause = ""
+                if column.default is not None and getattr(column.default, "is_scalar", False):
+                    default_value = column.default.arg
+                    if isinstance(default_value, str):
+                        default_clause = f" DEFAULT '{default_value}'"
+                    elif isinstance(default_value, bool):
+                        default_clause = f" DEFAULT {str(default_value).upper()}"
+                    elif isinstance(default_value, (int, float)):
+                        default_clause = f" DEFAULT {default_value}"
+
+                ddl = f"ALTER TABLE {table.name} ADD COLUMN {column.name} {col_type}{default_clause}"
+                with engine.begin() as conn:
+                    conn.execute(text(ddl))
+
+                SCHEMA_MIGRATIONS_APPLIED.labels(table=table.name, column=column.name).inc()
+                logger.info({
+                    "event": "schema_migration_applied",
+                    "table": table.name,
+                    "column": column.name,
+                    "ddl": ddl,
+                })
+            except Exception as e:
+                logger.error({
+                    "event": "schema_migration_failed",
+                    "table": table.name,
+                    "column": column.name,
+                    "error": str(e),
+                })
 
 
 # -----------------------------------------------------------------
@@ -764,6 +858,29 @@ async def _do_openrouter_request(headers: dict, payload: dict) -> Optional[dict]
             return result
 
 
+async def _call_openrouter_through_breaker(headers: dict, payload: dict) -> Optional[dict]:
+    """
+    Routes the actual HTTP call through the module-level circuit breaker so
+    repeated OpenRouter failures actually open the breaker (and short-circuit
+    further calls until reset_timeout elapses) instead of the breaker object
+    sitting unused while every call goes straight to the network.
+    """
+    if hasattr(_openrouter_cb, "call_async"):
+        return await _openrouter_cb.call_async(_do_openrouter_request, headers, payload)
+    # Fallback for pybreaker versions without call_async: manually honour
+    # breaker state around the async call.
+    if _openrouter_cb.current_state == "open":
+        raise pybreaker.CircuitBreakerError("Circuit breaker is open")
+    try:
+        result = await _do_openrouter_request(headers, payload)
+    except Exception:
+        _openrouter_cb._state_storage.increment_counter()
+        raise
+    else:
+        _openrouter_cb._state_storage.reset_counter()
+        return result
+
+
 async def call_openrouter(
     disease: str,
     risk: str,
@@ -837,7 +954,7 @@ Rules:
     for attempt in range(_RETRY_TIMES + 1):
         try:
             t0     = time.monotonic()
-            result = await _do_openrouter_request(headers, payload)
+            result = await _call_openrouter_through_breaker(headers, payload)
             OPENROUTER_LATENCY.observe(time.monotonic() - t0)
             if result and settings.enable_ai_cache:
                 await cache_set(cache_key, json.dumps(result), ttl=86400)
@@ -1028,9 +1145,8 @@ _pending_requests: int = 0
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _pending_requests
-
     Base.metadata.create_all(bind=engine)
+    run_schema_migrations()
     load_ml_models()
     start_model_watcher()
 
@@ -1112,7 +1228,7 @@ def _sanitize(value: str) -> str:
 
 @app.middleware("http")
 async def request_middleware(request: Request, call_next):
-    global _pending_requests
+    global _pending_requests  # noqa: F824 - mutated below via += / -=
 
     if request.method == "OPTIONS":
         return await call_next(request)
@@ -1247,14 +1363,13 @@ async def health_live():
 
 @app.get("/health/ready")
 async def health_ready():
-    import sqlalchemy
     checks: Dict[str, str] = {}
 
     try:
         await asyncio.wait_for(
             asyncio.get_event_loop().run_in_executor(
                 None,
-                lambda: SessionLocal().execute(sqlalchemy.text("SELECT 1"))
+                lambda: SessionLocal().execute(text("SELECT 1"))
             ),
             timeout=5,
         )
@@ -1825,6 +1940,33 @@ async def reload_models(admin_id: int = Depends(verify_admin)):
     for fname in pkl_files:
         await loop.run_in_executor(None, _load_single_model, fname)
     return {"reloaded": pkl_files, "models": list(LOADED_MODELS.keys())}
+
+
+# -----------------------------------------------------------------
+# ROUTES - Admin: Schema Migration (manual trigger)
+#
+# Useful if you want to re-run the column sync on demand (e.g. right after
+# deploying a model change) without waiting for the next process restart.
+# -----------------------------------------------------------------
+
+@app.post("/api/v1/admin/schema/sync")
+async def sync_schema(admin_id: int = Depends(verify_admin)):
+    run_schema_migrations()
+    inspector = inspect(engine)
+    report = {}
+    for model in (UserModel, SessionModel, DiagnosisModel):
+        table = model.__table__
+        try:
+            cols = {c["name"] for c in inspector.get_columns(table.name)}
+        except Exception:
+            cols = set()
+        expected = {c.name for c in table.columns}
+        report[table.name] = {
+            "expected": sorted(expected),
+            "present":  sorted(cols),
+            "missing":  sorted(expected - cols),
+        }
+    return {"message": "Schema sync complete", "tables": report}
 
 
 # -----------------------------------------------------------------
