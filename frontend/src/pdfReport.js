@@ -134,10 +134,27 @@ function drawHeader(doc, reportId, dateStr) {
 function drawPatientInfo(doc, patient, y) {
   y = sectionLabel(doc, "Patient Information", y);
 
-  const name   = field(patient?.name, patient?.full_name);
-  const email  = field(patient?.email);
-  const age    = patient?.age ? `${field(patient.age)} years` : "Not provided";
-  const gender = field(patient?.gender);
+  // Accepts multiple possible key names so this works regardless of which
+  // shape the caller passes (user object, profile object, or a partial
+  // record-summary object).
+  const name = field(
+    patient?.name,
+    patient?.full_name,
+    patient?.patient_name
+  );
+  const email = field(
+    patient?.email,
+    patient?.patient_email
+  );
+  const ageRaw = field(
+    patient?.age,
+    patient?.patient_age
+  );
+  const age = ageRaw !== "Not provided" ? `${ageRaw} years` : "Not provided";
+  const gender = field(
+    patient?.gender,
+    patient?.patient_gender
+  );
 
   const rows = [
     ["Name", name],
@@ -358,13 +375,23 @@ function drawRecommendations(doc, rec, y) {
 
 // ─────────────────────────────────────────────
 // CONFIDENCE EVOLUTION CHART
+//
+// Only plots steps where the patient answered "Yes" — these are the only
+// points that actually moved the model's reasoning toward a result. The
+// x-axis tick for each plotted point sits directly beneath that point's
+// node, labelled with the exact symptom that was confirmed at that step.
 // ─────────────────────────────────────────────
 function drawConfidenceChart(doc, trajectory, y) {
   if (!trajectory || trajectory.length === 0) return y;
 
-  // pick top diseases across the whole trajectory
+  // Keep only steps where the symptom was confirmed (answer === true).
+  // These are the only points that changed the assessment's direction.
+  const confirmedSteps = trajectory.filter((step) => step.answer === true);
+  if (confirmedSteps.length === 0) return y;
+
+  // Identify the top diseases across the confirmed steps only.
   const peak = {};
-  trajectory.forEach((step) => {
+  confirmedSteps.forEach((step) => {
     Object.entries(step.scores || {}).forEach(([d, v]) => {
       peak[d] = Math.max(peak[d] || 0, v);
     });
@@ -375,13 +402,18 @@ function drawConfidenceChart(doc, trajectory, y) {
     .map(([d]) => d);
   if (diseases.length === 0) return y;
 
-  // Reserve a full block (legend + chart + x labels) on one page, so the
-  // chart never gets split or overlaps the footer.
+  const n = confirmedSteps.length;
+
+  // Reserve a full block (intro + legend + chart + x labels) on one page,
+  // so the chart never gets split across a page break or overlaps the footer.
   const legendRows = Math.ceil(diseases.length / 2);
   const legendH = legendRows * 5 + 4;
   const chartH = 56;
-  const xLabelH = 16;
-  const totalBlock = 16 + legendH + chartH + xLabelH;
+  // Single-word symptom labels rotated 45 degrees need real vertical room —
+  // scale this with how many points are plotted so nothing gets clipped.
+  const xLabelH = 22;
+  const introH = 13;
+  const totalBlock = introH + legendH + chartH + xLabelH + 14;
 
   y = ensureSpace(doc, y, totalBlock);
   y = sectionLabel(doc, "Confidence Evolution", y);
@@ -389,10 +421,14 @@ function drawConfidenceChart(doc, trajectory, y) {
   doc.setFontSize(8);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(...MUTED);
-  doc.text("Model probability for the leading conditions as each symptom was answered.", MARGIN, y);
+  doc.text(
+    "Model probability for the leading conditions after each confirmed (Yes) symptom.",
+    MARGIN,
+    y
+  );
   y += 7;
 
-  // Legend (above the chart, wrapped onto rows so it never overlaps lines)
+  // Legend — wrapped onto rows so it never overlaps the plotted lines.
   let lx = MARGIN;
   let ly = y;
   doc.setFontSize(7.5);
@@ -432,39 +468,55 @@ function drawConfidenceChart(doc, trajectory, y) {
   doc.line(chartX, chartY, chartX, chartY + chartH);
   doc.line(chartX, chartY + chartH, chartX + chartW, chartY + chartH);
 
-  const n = trajectory.length;
-  const xStep = n > 1 ? chartW / (n - 1) : 0;
+  // Even spacing: with n confirmed points, place them at the centre of n
+  // equal slots so each x-axis label sits directly under its own node,
+  // never under a neighbouring one, regardless of how many points exist.
+  const slotW = chartW / n;
+  const xPos = (i) => chartX + slotW * i + slotW / 2;
 
-  // plot lines
+  // plot lines — one polyline per disease, one node per confirmed step
   diseases.forEach((d, idx) => {
     const color = LINE_COLORS[idx % LINE_COLORS.length];
     doc.setDrawColor(...color);
     doc.setLineWidth(0.6);
     let prevX = null;
     let prevY = null;
-    trajectory.forEach((step, i) => {
+    confirmedSteps.forEach((step, i) => {
       const v = (step.scores && step.scores[d]) || 0;
-      const x = chartX + i * xStep;
+      const x = xPos(i);
       const yy = chartY + chartH - Math.min(v, 1) * chartH;
       if (prevX !== null) doc.line(prevX, prevY, x, yy);
       doc.setFillColor(...color);
-      doc.circle(x, yy, 0.7, "F");
+      doc.circle(x, yy, 0.8, "F");
       prevX = x;
       prevY = yy;
     });
   });
 
-  // x-axis tick labels — only show every Nth label if there are many steps,
-  // so labels never overlap each other.
-  const maxLabels = 12;
-  const labelStride = Math.max(1, Math.ceil(n / maxLabels));
-  doc.setFontSize(6);
-  doc.setTextColor(...MUTED);
-  trajectory.forEach((step, i) => {
-    if (i % labelStride !== 0 && i !== n - 1) return;
-    const x = chartX + i * xStep;
-    const label = (step.symptom || "").replace(/_/g, " ");
-    doc.text(label, x, chartY + chartH + 9, { angle: 45, maxWidth: 24 });
+  // Vertical tick marks aligned exactly under each node, connecting the
+  // chart baseline to the rotated label so the relationship is unambiguous.
+  doc.setDrawColor(...BORDER);
+  doc.setLineWidth(0.25);
+  confirmedSteps.forEach((step, i) => {
+    const x = xPos(i);
+    doc.line(x, chartY + chartH, x, chartY + chartH + 2.5);
+  });
+
+  // x-axis labels — one per confirmed symptom, rotated for readability,
+  // anchored so the start of each label aligns under its own tick mark.
+  // If there are many confirmed symptoms, labels are abbreviated rather
+  // than skipped, so every plotted point still has a visible reference.
+  const maxFullLabels = 10;
+  doc.setFontSize(6.2);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(...INK);
+  confirmedSteps.forEach((step, i) => {
+    const x = xPos(i);
+    let label = (step.symptom || "").replace(/_/g, " ");
+    if (n > maxFullLabels && label.length > 12) {
+      label = label.slice(0, 11) + "...";
+    }
+    doc.text(label, x + 1, chartY + chartH + 6, { angle: 45, maxWidth: 26 });
   });
 
   doc.setTextColor(...INK);
@@ -514,7 +566,7 @@ export function generateTropiCareReport({ patient, diagnosis }) {
 
   drawPageFooter(doc);
 
-  const safeName = field(patient?.name).replace(/[^a-z0-9]+/gi, "_");
+  const safeName = field(patient?.name, patient?.patient_name).replace(/[^a-z0-9]+/gi, "_");
   const fileDate = new Date().toISOString().slice(0, 10);
   doc.save(`TropiCare_Report_${safeName}_${fileDate}.pdf`);
 }
