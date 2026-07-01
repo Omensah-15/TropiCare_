@@ -1,13 +1,14 @@
 /*
  * TropiCare — ClinicFinder.jsx
- * Free clinic/hospital locator using browser geolocation, OpenStreetMap
- * (Leaflet) tiles, and the free Overpass API for facility data.
- * Directions are handled via Google Maps deep links — no paid routing API.
+ * Free clinic/hospital locator using browser geolocation, OpenStreetMap (Leaflet)
+ * and Overpass API. Google Maps used for directions only.
  */
 
 import { useState, useEffect, useRef } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+
+/* ---------------- ICONS ---------------- */
 
 const DefaultIcon = L.icon({
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -28,8 +29,12 @@ const USER_ICON = L.divIcon({
   iconAnchor: [9, 9],
 });
 
+/* ---------------- CONFIG ---------------- */
+
 const OVERPASS_URL = "https://overpass-api.de/api/interpreter";
 const SEARCH_RADIUS_M = 6000;
+
+/* ---------------- HELPERS ---------------- */
 
 function toRad(deg) {
   return (deg * Math.PI) / 180;
@@ -39,23 +44,27 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
+
   const a =
     Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) ** 2;
 
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function buildOverpassQuery(lat, lon, radius) {
-  return `[out:json][timeout:25];(
-    node["amenity"="hospital"](around:${radius},${lat},${lon});
-    way["amenity"="hospital"](around:${radius},${lat},${lon});
-    node["amenity"="clinic"](around:${radius},${lat},${lon});
-    way["amenity"="clinic"](around:${radius},${lat},${lon});
-    node["amenity"="doctors"](around:${radius},${lat},${lon});
-    node["amenity"="pharmacy"](around:${radius},${lat},${lon});
-    node["healthcare"="pharmacy"](around:${radius},${lat},${lon});
-  );out center 40;`;
+  return `[out:json][timeout:25];
+(
+  node["amenity"="hospital"](around:${radius},${lat},${lon});
+  way["amenity"="hospital"](around:${radius},${lat},${lon});
+  node["amenity"="clinic"](around:${radius},${lat},${lon});
+  way["amenity"="clinic"](around:${radius},${lat},${lon});
+  node["amenity"="doctors"](around:${radius},${lat},${lon});
+  node["amenity"="pharmacy"](around:${radius},${lat},${lon});
+);
+out center;`;
 }
 
 function extractPlaces(elements, userLat, userLon) {
@@ -63,10 +72,11 @@ function extractPlaces(elements, userLat, userLon) {
     .map((el) => {
       const lat = el.lat ?? el.center?.lat;
       const lon = el.lon ?? el.center?.lon;
-      if (lat == null || lon == null) return null;
+
+      if (!lat || !lon) return null;
 
       const tags = el.tags || {};
-      const name = tags.name || tags["name:en"] || "Unnamed facility";
+      const name = tags.name || "Unnamed facility";
 
       const type =
         tags.amenity === "hospital"
@@ -74,20 +84,15 @@ function extractPlaces(elements, userLat, userLon) {
           : tags.amenity === "clinic"
           ? "Clinic"
           : tags.amenity === "doctors"
-          ? "Doctor's Office"
-          : tags.amenity === "pharmacy" || tags.healthcare === "pharmacy"
+          ? "Doctor"
+          : tags.amenity === "pharmacy"
           ? "Pharmacy"
           : "Health Facility";
-
-      const address = [tags["addr:street"], tags["addr:city"] || tags["addr:suburb"]]
-        .filter(Boolean)
-        .join(", ");
 
       return {
         id: `${el.type}/${el.id}`,
         name,
         type,
-        address,
         lat,
         lon,
         distanceKm: haversineKm(userLat, userLon, lat, lon),
@@ -96,96 +101,63 @@ function extractPlaces(elements, userLat, userLon) {
     .filter(Boolean)
     .sort((a, b) => a.distanceKm - b.distanceKm);
 
-  const seen = new Set();
-  const unique = [];
-
-  for (const p of places) {
-    const key = `${p.name}-${p.lat.toFixed(3)}-${p.lon.toFixed(3)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(p);
-  }
-
-  return unique.slice(0, 15);
+  return places.slice(0, 15);
 }
 
-function directionsUrl(originLat, originLon, destLat, destLon) {
-  return `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLon}&destination=${destLat},${destLon}&travelmode=driving`;
+function directionsUrl(oLat, oLon, dLat, dLon) {
+  return `https://www.google.com/maps/dir/?api=1&origin=${oLat},${oLon}&destination=${dLat},${dLon}&travelmode=driving`;
 }
 
-const injectClinicFinderStyles = () => {
-  if (document.getElementById("cf-styles")) return;
-
-  const el = document.createElement("style");
-  el.id = "cf-styles";
-  el.textContent = `
-    .cf-overlay{position:fixed;inset:0;background:rgba(11,23,38,0.55);z-index:9998;display:flex;align-items:flex-end;justify-content:center;}
-    .cf-sheet{background:var(--surface);width:100%;max-width:560px;max-height:92vh;border-radius:20px 20px 0 0;display:flex;flex-direction:column;overflow:hidden;}
-    .cf-map{width:100%;height:220px;}
-    .cf-body{flex:1;overflow-y:auto;padding:14px 18px;}
-    .cf-item{display:flex;gap:12px;padding:12px;border:1px solid var(--border);border-radius:12px;}
-    .cf-item.nearest{border-color:var(--teal);}
-    .cf-user-dot{width:14px;height:14px;border-radius:50%;background:#2f6fed;border:3px solid #fff;}
-  `;
-
-  document.head.appendChild(el);
-};
-
-const CloseIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <line x1="18" y1="6" x2="6" y2="18" />
-    <line x1="6" y1="6" x2="18" y2="18" />
-  </svg>
-);
-
-const PinIcon = () => (
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-    <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
-    <circle cx="12" cy="10" r="3" />
-  </svg>
-);
+/* ---------------- COMPONENT ---------------- */
 
 export default function ClinicFinder({ onClose }) {
   const [status, setStatus] = useState("locating");
-  const [errorMsg, setErrorMsg] = useState("");
   const [position, setPosition] = useState(null);
   const [clinics, setClinics] = useState([]);
+  const [error, setError] = useState("");
 
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
-  const markersLayer = useRef(null);
+  const layerRef = useRef(null);
 
-  useEffect(() => {
-    injectClinicFinderStyles();
-  }, []);
+  /* ---------------- GET LOCATION ---------------- */
 
   useEffect(() => {
     if (!navigator.geolocation) {
       setStatus("error");
-      setErrorMsg("Geolocation not supported.");
+      setError("Geolocation not supported.");
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setPosition({ lat: pos.coords.latitude, lon: pos.coords.longitude });
+        setPosition({
+          lat: pos.coords.latitude,
+          lon: pos.coords.longitude,
+        });
         setStatus("searching");
       },
       () => {
         setStatus("error");
-        setErrorMsg("Location permission denied.");
+        setError("Location permission denied.");
       }
     );
   }, []);
+
+  /* ---------------- FETCH CLINICS ---------------- */
 
   useEffect(() => {
     if (status !== "searching" || !position) return;
 
     let cancelled = false;
 
-    const run = async () => {
+    const fetchData = async () => {
       try {
-        const query = buildOverpassQuery(position.lat, position.lon, SEARCH_RADIUS_M);
+        const query = buildOverpassQuery(
+          position.lat,
+          position.lon,
+          SEARCH_RADIUS_M
+        );
 
         const res = await fetch(OVERPASS_URL, {
           method: "POST",
@@ -196,53 +168,84 @@ export default function ClinicFinder({ onClose }) {
         const data = await res.json();
         if (cancelled) return;
 
-        const places = extractPlaces(data.elements || [], position.lat, position.lon);
+        const places = extractPlaces(
+          data.elements || [],
+          position.lat,
+          position.lon
+        );
 
         if (!places.length) {
           setStatus("error");
-          setErrorMsg("No clinics found nearby.");
+          setError("No clinics found nearby.");
           return;
         }
 
         setClinics(places);
         setStatus("ready");
       } catch {
-        setStatus("error");
-        setErrorMsg("Network error fetching clinics.");
+        if (!cancelled) {
+          setStatus("error");
+          setError("Network error loading clinics.");
+        }
       }
     };
 
-    run();
+    fetchData();
+
     return () => {
       cancelled = true;
     };
   }, [status, position]);
 
+  /* ---------------- MAP INIT ---------------- */
+
   useEffect(() => {
     if (status !== "ready" || !position || !mapRef.current) return;
 
+    // create map once
     if (!mapInstance.current) {
-      mapInstance.current = L.map(mapRef.current).setView([position.lat, position.lon], 13);
-
-      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(
-        mapInstance.current
+      mapInstance.current = L.map(mapRef.current).setView(
+        [position.lat, position.lon],
+        13
       );
 
-      markersLayer.current = L.layerGroup().addTo(mapInstance.current);
+      L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "&copy; OpenStreetMap",
+      }).addTo(mapInstance.current);
+
+      layerRef.current = L.layerGroup().addTo(mapInstance.current);
     }
 
-    markersLayer.current.clearLayers();
+    // FIX: ensures proper rendering (critical for Vercel / React)
+    setTimeout(() => {
+      mapInstance.current?.invalidateSize();
+    }, 150);
 
-    L.marker([position.lat, position.lon], { icon: USER_ICON }).addTo(markersLayer.current);
+    layerRef.current.clearLayers();
 
-    clinics.forEach((c, i) => {
+    L.marker([position.lat, position.lon], { icon: USER_ICON })
+      .addTo(layerRef.current)
+      .bindPopup("You are here");
+
+    clinics.forEach((c) => {
       L.marker([c.lat, c.lon])
-        .addTo(markersLayer.current)
-        .bindPopup(`${c.name}${i === 0 ? " (Nearest)" : ""}`);
+        .addTo(layerRef.current)
+        .bindPopup(c.name);
     });
+
+    mapInstance.current.fitBounds(
+      [
+        [position.lat, position.lon],
+        ...clinics.slice(0, 5).map((c) => [c.lat, c.lon]),
+      ],
+      { padding: [30, 30] }
+    );
   }, [status, position, clinics]);
 
   const nearest = clinics[0];
+
+  /* ---------------- UI ---------------- */
 
   return (
     <div className="cf-overlay" onClick={onClose}>
@@ -250,9 +253,19 @@ export default function ClinicFinder({ onClose }) {
         <div className="cf-map" ref={mapRef} />
 
         <div className="cf-body">
+          {status === "locating" && <p>Getting location...</p>}
+          {status === "searching" && <p>Searching clinics...</p>}
+
+          {status === "error" && <p>{error}</p>}
+
           {status === "ready" && nearest && (
             <a
-              href={directionsUrl(position.lat, position.lon, nearest.lat, nearest.lon)}
+              href={directionsUrl(
+                position.lat,
+                position.lon,
+                nearest.lat,
+                nearest.lon
+              )}
               target="_blank"
               rel="noopener noreferrer"
               className="btn btn-primary"
@@ -261,27 +274,32 @@ export default function ClinicFinder({ onClose }) {
             </a>
           )}
 
-          {clinics.map((c, i) => (
-            <div key={c.id} className={`cf-item ${i === 0 ? "nearest" : ""}`}>
-              <PinIcon />
-              <div>
-                {c.name}
-                <div>{c.distanceKm.toFixed(1)} km</div>
-              </div>
+          {status === "ready" &&
+            clinics.map((c) => (
+              <div key={c.id} className="cf-item">
+                <div>
+                  <strong>{c.name}</strong>
+                  <div>{c.distanceKm.toFixed(1)} km</div>
+                </div>
 
-              <a
-                href={directionsUrl(position.lat, position.lon, c.lat, c.lon)}
-                target="_blank"
-                rel="noopener noreferrer"
-              >
-                Directions
-              </a>
-            </div>
-          ))}
+                <a
+                  href={directionsUrl(
+                    position.lat,
+                    position.lon,
+                    c.lat,
+                    c.lon
+                  )}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Directions
+                </a>
+              </div>
+            ))}
         </div>
 
         <button onClick={onClose} className="cf-close">
-          <CloseIcon />
+          ✕
         </button>
       </div>
     </div>
