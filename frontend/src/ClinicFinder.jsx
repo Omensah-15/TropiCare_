@@ -666,7 +666,7 @@ export default function ClinicFinder({ onClose }) {
               )}
 
               {nearest && (
-                
+                <a
                   href={directionsUrl(position.lat, position.lon, nearest.lat, nearest.lon)}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -690,7 +690,7 @@ export default function ClinicFinder({ onClose }) {
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
                       <div className="cf-item-dist">{c.distanceKm.toFixed(1)} km</div>
-                      
+                      <a
                         href={directionsUrl(position.lat, position.lon, c.lat, c.lon)}
                         target="_blank"
                         rel="noopener noreferrer"
