@@ -1112,7 +1112,17 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def _extract_clinic_places(elements: List[dict], user_lat: float, user_lon: float) -> List[dict]:
+def _extract_clinic_places_raw(elements: List[dict]) -> List[dict]:
+    """
+    Extracts facility name/type/address/coordinates only — deliberately no
+    distance calculation here. This is the shape that gets cached, and a
+    cached facility list must remain valid no matter which nearby
+    coordinate a future request comes from. Baking a distance-from-point
+    into the cached value would silently return one person's distances to
+    a different person searching from a slightly different spot within
+    the same cached area — that is a correctness bug, not a caching
+    detail, so distance is always computed fresh in `_rank_places_by_distance`.
+    """
     places: List[dict] = []
     seen: set = set()
 
@@ -1146,23 +1156,39 @@ def _extract_clinic_places(elements: List[dict], user_lat: float, user_lon: floa
             p for p in (tags.get("addr:street"), tags.get("addr:city") or tags.get("addr:suburb")) if p
         )
 
-        dedupe_key = f"{name}-{round(lat, 3)}-{round(lon, 3)}"
+        dedupe_key = f"{name}-{round(lat, 5)}-{round(lon, 5)}"
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
 
         places.append({
-            "id":           f"{el.get('type')}/{el.get('id')}",
-            "name":         name,
-            "type":         facility_type,
-            "address":      address,
-            "lat":          lat,
-            "lon":          lon,
-            "distance_km":  round(_haversine_km(user_lat, user_lon, lat, lon), 2),
+            "id":      f"{el.get('type')}/{el.get('id')}",
+            "name":    name,
+            "type":    facility_type,
+            "address": address,
+            "lat":     lat,
+            "lon":     lon,
         })
 
-    places.sort(key=lambda p: p["distance_km"])
-    return places[:15]
+    return places
+
+
+def _rank_places_by_distance(
+    places: List[dict], user_lat: float, user_lon: float, limit: int = 15
+) -> List[dict]:
+    """
+    Computes distance from the exact coordinates of this specific request
+    and sorts by it. Called on every request — cache hit or miss — so
+    "nearest" is always correct for wherever the person actually is right
+    now, never a stale distance from whatever coordinates first populated
+    the cache.
+    """
+    ranked = [
+        {**p, "distance_km": round(_haversine_km(user_lat, user_lon, p["lat"], p["lon"]), 2)}
+        for p in places
+    ]
+    ranked.sort(key=lambda p: p["distance_km"])
+    return ranked[:limit]
 
 
 # -----------------------------------------------------------------
@@ -1831,26 +1857,34 @@ async def clinics_nearby(
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
         raise HTTPException(status_code=400, detail="Invalid coordinates")
 
-    cache_key = f"clinics:{round(lat, 2)}:{round(lon, 2)}"
+    cache_key = f"clinics:elements:{round(lat, 2)}:{round(lon, 2)}"
     cached = await cache_get(cache_key, key_type="clinics")
+
+    raw_places: Optional[List[dict]] = None
     if cached:
         try:
-            return json.loads(cached)
+            raw_places = json.loads(cached)
         except Exception:
-            pass
+            raw_places = None
 
-    elements = await _fetch_clinic_elements(lat, lon)
-    places = _extract_clinic_places(elements, lat, lon)
+    if raw_places is None:
+        elements = await _fetch_clinic_elements(lat, lon)
+        raw_places = _extract_clinic_places_raw(elements)
+        if raw_places:
+            await cache_set(cache_key, json.dumps(raw_places), ttl=CLINIC_CACHE_TTL_S)
 
-    if not places:
+    if not raw_places:
         raise HTTPException(
             status_code=404,
             detail="No hospitals, clinics, or pharmacies were found within 6 km of this location.",
         )
 
-    response_body = {"places": places}
-    await cache_set(cache_key, json.dumps(response_body), ttl=CLINIC_CACHE_TTL_S)
-    return response_body
+    # Distance is always computed fresh against this request's exact
+    # coordinates, whether the facility list came from cache or a live
+    # fetch, so "nearest" is never stale relative to where the person
+    # actually is right now.
+    ranked = _rank_places_by_distance(raw_places, lat, lon, limit=15)
+    return {"places": ranked}
 
 
 # -----------------------------------------------------------------
