@@ -1,13 +1,23 @@
 /*
  * TropiCare — ClinicFinder.jsx
- * Free clinic/hospital locator using browser geolocation, OpenStreetMap
- * (Leaflet) tiles, and the free Overpass API for facility data.
- * Directions are handled via Google Maps deep links — no paid routing API.
+ * Nearby clinic/hospital locator. Facility data is fetched through the
+ * TropiCare backend (/api/v1/clinics/nearby), which proxies the upstream
+ * map data source server-side. This avoids CORS entirely, since browser
+ * CORS restrictions only apply to requests the browser makes directly —
+ * server-to-server requests are unaffected, and the backend already has a
+ * trusted, working connection to the frontend for every other endpoint.
+ * Directions are handled via Google Maps deep links.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+
+// ─────────────────────────────────────────────
+// BACKEND CONFIG
+// ─────────────────────────────────────────────
+const API_BASE = "https://tropicare.onrender.com/api/v1";
+const TOKEN_KEY = "tc_token";
 
 // ─────────────────────────────────────────────
 // LEAFLET ICONS
@@ -31,153 +41,36 @@ const USER_ICON = L.divIcon({
 });
 
 // ─────────────────────────────────────────────
-// CONFIG
-//
-// Multiple independent map-data sources are queried in parallel and the
-// first successful response wins. This avoids the failure mode where a
-// single slow source is tried, times out, and only then does a second
-// source get attempted — which multiplies the total wait time and the
-// chance of failure. Querying all sources at once bounds the worst case
-// to a single timeout window instead of one per source.
+// API
 // ─────────────────────────────────────────────
-const DATA_SOURCES = [
-  "https://overpass-api.de/api/interpreter",
-  "https://overpass.kumi.systems/api/interpreter",
-  "https://overpass.osm.ch/api/interpreter",
-  "https://overpass.openstreetmap.ru/api/interpreter",
-];
-const SEARCH_RADIUS_M = 6000;
-const REQUEST_TIMEOUT_MS = 20000;
+async function fetchNearbyClinics(lat, lon) {
+  const token = localStorage.getItem(TOKEN_KEY);
+  const res = await fetch(
+    `${API_BASE}/clinics/nearby?lat=${lat}&lon=${lon}`,
+    { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+  );
 
-// ─────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────
-function toRad(deg) {
-  return (deg * Math.PI) / 180;
-}
-
-function haversineKm(lat1, lon1, lat2, lon2) {
-  const R = 6371;
-  const dLat = toRad(lat2 - lat1);
-  const dLon = toRad(lon2 - lon1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function buildOverpassQuery(lat, lon, radius) {
-  return `[out:json][timeout:25];(
-    node["amenity"="hospital"](around:${radius},${lat},${lon});
-    way["amenity"="hospital"](around:${radius},${lat},${lon});
-    node["amenity"="clinic"](around:${radius},${lat},${lon});
-    way["amenity"="clinic"](around:${radius},${lat},${lon});
-    node["amenity"="doctors"](around:${radius},${lat},${lon});
-    node["amenity"="pharmacy"](around:${radius},${lat},${lon});
-    node["healthcare"="pharmacy"](around:${radius},${lat},${lon});
-  );out center 40;`;
-}
-
-function extractPlaces(elements, userLat, userLon) {
-  const places = elements
-    .map((el) => {
-      const lat = el.lat ?? el.center?.lat;
-      const lon = el.lon ?? el.center?.lon;
-      if (lat == null || lon == null) return null;
-      const tags = el.tags || {};
-      const name = tags.name || tags["name:en"] || "Unnamed facility";
-      const type =
-        tags.amenity === "hospital" ? "Hospital" :
-        tags.amenity === "clinic"   ? "Clinic"   :
-        tags.amenity === "doctors"  ? "Doctor's Office" :
-        (tags.amenity === "pharmacy" || tags.healthcare === "pharmacy") ? "Pharmacy" :
-        "Health Facility";
-      const address = [tags["addr:street"], tags["addr:city"] || tags["addr:suburb"]]
-        .filter(Boolean)
-        .join(", ");
-      return {
-        id: `${el.type}/${el.id}`,
-        name,
-        type,
-        address,
-        lat,
-        lon,
-        distanceKm: haversineKm(userLat, userLon, lat, lon),
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => a.distanceKm - b.distanceKm);
-
-  const seen = new Set();
-  const unique = [];
-  for (const p of places) {
-    const key = `${p.name}-${p.lat.toFixed(3)}-${p.lon.toFixed(3)}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    unique.push(p);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const error = new Error(body.detail || `HTTP ${res.status}`);
+    error.status = res.status;
+    throw error;
   }
-  return unique.slice(0, 15);
+
+  const data = await res.json();
+  return (data.places || []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    type: p.type,
+    address: p.address,
+    lat: p.lat,
+    lon: p.lon,
+    distanceKm: p.distance_km,
+  }));
 }
 
 function directionsUrl(originLat, originLon, destLat, destLon) {
   return `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLon}&destination=${destLat},${destLon}&travelmode=driving`;
-}
-
-/*
- * Queries a single data source and either resolves with its elements or
- * rejects with a descriptive error. Used as the building block for the
- * parallel race across all configured sources below.
- */
-async function queryDataSource(source, query) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const url = `${source}?data=${encodeURIComponent(query)}`;
-    const res = await fetch(url, { method: "GET", signal: controller.signal });
-    clearTimeout(timer);
-
-    if (!res.ok) {
-      throw new Error(`${source} responded with HTTP ${res.status}`);
-    }
-
-    const data = await res.json();
-    const elements = data.elements || [];
-    if (elements.length === 0) {
-      // A source can return a valid empty result for a genuinely sparse
-      // area; treat this as a soft failure so the race keeps waiting on
-      // the remaining sources rather than resolving with nothing.
-      throw new Error(`${source} returned no elements`);
-    }
-    return elements;
-  } catch (err) {
-    clearTimeout(timer);
-    const reason =
-      err?.name === "AbortError"
-        ? `${source} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`
-        : err.message || String(err);
-    console.error("ClinicFinder: data source failed:", reason);
-    throw new Error(reason);
-  }
-}
-
-/*
- * Races all configured data sources in parallel and returns the elements
- * from whichever responds first with usable data. This bounds the total
- * wait time to a single timeout window rather than one per source, and
- * means a single slow or unreachable source no longer blocks the search.
- */
-async function fetchClinics(lat, lon) {
-  const query = buildOverpassQuery(lat, lon, SEARCH_RADIUS_M);
-  const attempts = DATA_SOURCES.map((source) => queryDataSource(source, query));
-
-  try {
-    return await Promise.any(attempts);
-  } catch (aggregateErr) {
-    const reasons = (aggregateErr.errors || []).map((e) => e.message).join(" | ");
-    console.error("ClinicFinder: all data sources failed:", reasons);
-    throw new Error("All data sources failed");
-  }
 }
 
 // ─────────────────────────────────────────────
@@ -301,41 +194,22 @@ export default function ClinicFinder({ onClose }) {
     if (status !== "searching" || !position) return;
     let cancelled = false;
 
-    const attemptSearch = async () => {
-      const elements = await fetchClinics(position.lat, position.lon);
-      const places = extractPlaces(elements, position.lat, position.lon);
-      if (places.length === 0) {
-        throw new Error("No facilities in results after filtering");
-      }
-      return places;
-    };
-
     const run = async () => {
       try {
-        const places = await attemptSearch();
+        const places = await fetchNearbyClinics(position.lat, position.lon);
         if (cancelled) return;
         setClinics(places);
         setStatus("ready");
-      } catch (firstErr) {
-        // One silent retry before surfacing anything to the person — this
-        // absorbs the common case of a single transient hiccup so it
-        // never has to become a visible error at all.
-        console.error("ClinicFinder: first attempt failed, retrying:", firstErr.message);
+      } catch (err) {
         if (cancelled) return;
-        await new Promise((r) => setTimeout(r, 1200));
-        if (cancelled) return;
-        try {
-          const places = await attemptSearch();
-          if (cancelled) return;
-          setClinics(places);
-          setStatus("ready");
-        } catch (secondErr) {
-          if (cancelled) return;
-          console.error("ClinicFinder: retry also failed:", secondErr.message);
-          setStatus("error");
-          setErrorMsg(
-            "We couldn't load nearby clinics right now. Please check your internet connection and try again."
-          );
+        console.error("ClinicFinder: search failed:", err.message);
+        setStatus("error");
+        if (err.status === 404) {
+          setErrorMsg("No hospitals, clinics, or pharmacies were found within 6 km of your location.");
+        } else if (err.status === 401) {
+          setErrorMsg("Your session has expired. Please sign in again and retry.");
+        } else {
+          setErrorMsg("We couldn't load nearby clinics right now. Please check your connection and try again.");
         }
       }
     };
