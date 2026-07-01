@@ -13,6 +13,9 @@ An AI symptom checker that delivers early tropical disease risk assessment, pers
 </div> 
 
 ---
+![image alt](https://github.com/Omensah-15/TropiCare_/blob/71ec727e57e15c25276751c517ccf1a67cf1aff5/assets/clinicfinder_snap.png)
+>Finds the nearest clinics or hospitals so users can get medical help fast without having to search manually, especially in urgent situations.
+---
 
 ![image alt](https://github.com/Omensah-15/TropiCare_/blob/56523bc5213ed47d35315f4aa111a40b6a2908e8/assets/mobileview.png)
 > Mobile View
