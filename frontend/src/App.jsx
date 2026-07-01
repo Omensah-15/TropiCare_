@@ -6,6 +6,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
 import { generateTropiCareReport } from "./pdfReport.js";
+import ClinicFinder from "./ClinicFinder.jsx";
 
 // ─────────────────────────────────────────────
 // BACKEND CONFIG
@@ -1018,6 +1019,7 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "monitor":   return <svg {...p}><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>;
     case "refresh":   return <svg {...p}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>;
     case "download":  return <svg {...p}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
+    case "map":       return <svg {...p}><path d="M9 20l-6-3V4l6 3 6-3 6 3v13l-6-3-6 3z"/><line x1="9" y1="7" x2="9" y2="20"/><line x1="15" y1="4" x2="15" y2="17"/></svg>;
     default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
@@ -1803,6 +1805,7 @@ function AnalyzingScreen() {
 // ─────────────────────────────────────────────
 function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
   const [downloading, setDownloading] = useState(false);
+  const [showClinicFinder, setShowClinicFinder] = useState(false);
 
   const handleDownload = () => {
     setDownloading(true);
@@ -1877,6 +1880,7 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
   const scores = result.all_scores
     ? Object.entries(result.all_scores).filter(([d]) => d !== result.disease).slice(0, 5)
     : [];
+  const showClinicButton = risk === "High" || risk === "Medium";
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
@@ -1916,6 +1920,14 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
             </div>
           )}
         </div>
+
+        {/* Clinic finder — Medium and High risk only */}
+        {showClinicButton && (
+          <button className="btn btn-outline btn-full mb-4" onClick={() => setShowClinicFinder(true)}>
+            <Icon name="map" size={16} />
+            Find Nearby Clinics
+          </button>
+        )}
 
         {/* Recommendations */}
         <div className="section-ttl mb-2">What to Do</div>
@@ -1968,6 +1980,8 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
           <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
         </div>
       </div>
+
+      {showClinicFinder && <ClinicFinder onClose={() => setShowClinicFinder(false)} />}
     </div>
   );
 }
@@ -2085,6 +2099,7 @@ function RecordDetail({ record, onBack, toast }) {
   const [delConfirm,  setDelConfirm]  = useState(false);
   const [deleting,    setDeleting]    = useState(false);
   const [deleted,     setDeleted]     = useState(false);
+  const [showClinicFinder, setShowClinicFinder] = useState(false);
 
   // Fetch full record (includes ml_scores + confidence_trajectory)
   useEffect(() => {
@@ -2142,6 +2157,7 @@ function RecordDetail({ record, onBack, toast }) {
   const mlScores = full.ml_scores
     ? Object.entries(full.ml_scores).filter(([d]) => d !== full.disease).slice(0, 5)
     : [];
+  const showClinicButton = full.risk === "High" || full.risk === "Medium";
 
   return (
     <div>
@@ -2177,6 +2193,14 @@ function RecordDetail({ record, onBack, toast }) {
             </div>
           )}
         </div>
+
+        {/* Clinic finder — Medium and High risk only */}
+        {showClinicButton && (
+          <button className="btn btn-outline btn-full mb-4" onClick={() => setShowClinicFinder(true)}>
+            <Icon name="map" size={16} />
+            Find Nearby Clinics
+          </button>
+        )}
 
         {/* Recommendations */}
         <div className="section-ttl mb-2">Recommendations</div>
@@ -2241,6 +2265,8 @@ function RecordDetail({ record, onBack, toast }) {
           )}
         </div>
       </div>
+
+      {showClinicFinder && <ClinicFinder onClose={() => setShowClinicFinder(false)} />}
     </div>
   );
 }
@@ -2760,6 +2786,7 @@ function AboutScreen({ onBack }) {
     { icon: "shield",    color: "var(--purple)", bg: "var(--purple-l)", title: "Risk Stratification",          desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
     { icon: "heart",     color: "var(--red)",    bg: "var(--red-l)",    title: "AI-Powered Recommendations",   desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
     { icon: "clipboard", color: "var(--amber)",  bg: "var(--amber-l)",  title: "Assessment History",           desc: "All past results are stored securely so you and your care provider can track changes over time." },
+    { icon: "map",       color: "var(--teal)",   bg: "var(--teal-xl)",  title: "Nearby Clinic Finder",         desc: "For Medium and High risk results, locate nearby hospitals and clinics with one tap and get directions." },
     { icon: "user",      color: "var(--green)",  bg: "var(--green-l)",  title: "Built for West Africa",        desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
   ];
 
