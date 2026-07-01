@@ -4,13 +4,19 @@
  * TropiCare backend (/api/v1/clinics/nearby), which proxies the upstream
  * map data source server-side.
  *
- * Location accuracy: a single geolocation reading can be imprecise,
- * especially on devices without GPS. Rather than trusting the first fix,
- * this samples multiple readings over a short window and keeps the most
- * accurate one. The location pin on the map is also draggable, so the
- * person can correct their exact position with certainty if the automatic
- * fix is ever off — search results update immediately from wherever the
- * pin is placed.
+ * LOCATION STRATEGY
+ * A device's very first location reading is often a coarse network/Wi-Fi
+ * estimate, with a precise GPS fix arriving a few seconds later. Rather
+ * than waiting for "the best of several samples" before showing anything
+ * (slow, and still no better than one fix if GPS never improves), this
+ * shows the first reading immediately and keeps listening in the
+ * background: any later reading that is at least as accurate as the one
+ * currently in use silently replaces it and the search re-runs — the pin
+ * and results snap to the precise location the moment GPS locks in, with
+ * no action needed. A reading that is *less* accurate than what's already
+ * trusted is always discarded, so the location only ever gets better,
+ * never worse. Dragging the pin remains available as a manual override,
+ * but is a safety net rather than the primary mechanism.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -22,6 +28,13 @@ import "leaflet/dist/leaflet.css";
 // ─────────────────────────────────────────────
 const API_BASE = "https://tropicare.onrender.com/api/v1";
 const TOKEN_KEY = "tc_token";
+
+// ─────────────────────────────────────────────
+// LOCATION TUNING
+// ─────────────────────────────────────────────
+const GOOD_ACCURACY_M = 30;      // stop refining once a fix this precise (or better) arrives
+const REFINE_WINDOW_MS = 20000;  // stop listening for improvements after this long, regardless
+const SEARCH_DEBOUNCE_MS = 450;  // avoid firing a search on every micro-update while GPS settles
 
 // ─────────────────────────────────────────────
 // LEAFLET ICONS
@@ -43,63 +56,6 @@ const USER_ICON = L.divIcon({
   iconSize: [18, 18],
   iconAnchor: [9, 9],
 });
-
-// ─────────────────────────────────────────────
-// HIGH-ACCURACY LOCATION
-//
-// navigator.geolocation.getCurrentPosition returns the first fix a device
-// can produce, which can be a rough Wi-Fi/network estimate before a GPS
-// lock settles in — particularly on first use. This instead watches for
-// up to maxWaitMs, keeping the most accurate reading (lowest
-// coords.accuracy, in metres) seen during that window, and returns early
-// the moment a genuinely precise fix (<= targetAccuracyM) arrives.
-// ─────────────────────────────────────────────
-function getBestPosition({ maxWaitMs = 8000, targetAccuracyM = 30 } = {}) {
-  return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(new Error("Geolocation is not supported on this device."));
-      return;
-    }
-
-    let best = null;
-    let watchId = null;
-    let settled = false;
-
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-      if (best) {
-        resolve(best);
-      } else {
-        reject(new Error("Could not get a location fix."));
-      }
-    };
-
-    const timer = setTimeout(finish, maxWaitMs);
-
-    watchId = navigator.geolocation.watchPosition(
-      (pos) => {
-        const { latitude, longitude, accuracy } = pos.coords;
-        if (!best || accuracy < best.accuracy) {
-          best = { lat: latitude, lon: longitude, accuracy };
-        }
-        if (accuracy <= targetAccuracyM) {
-          clearTimeout(timer);
-          finish();
-        }
-      },
-      (err) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-        reject(err);
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: maxWaitMs }
-    );
-  });
-}
 
 // ─────────────────────────────────────────────
 // API
@@ -134,6 +90,12 @@ function directionsUrl(originLat, originLon, destLat, destLon) {
   return `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLon}&destination=${destLat},${destLon}&travelmode=driving`;
 }
 
+function formatAccuracy(m) {
+  if (m == null) return "";
+  if (m < 1000) return `±${Math.round(m)}m`;
+  return `±${(m / 1000).toFixed(1)}km`;
+}
+
 // ─────────────────────────────────────────────
 // SELF-CONTAINED STYLES
 // ─────────────────────────────────────────────
@@ -146,17 +108,26 @@ const injectClinicFinderStyles = () => {
     @media(min-width:768px){.cf-overlay{align-items:center;padding:24px;}}
     @keyframes cfFade{from{opacity:0;}to{opacity:1;}}
     .cf-sheet{background:var(--surface,#fff);width:100%;max-width:560px;max-height:92vh;border-radius:20px 20px 0 0;display:flex;flex-direction:column;overflow:hidden;animation:cfUp 300ms ease;box-shadow:0 14px 48px rgba(11,23,38,0.24);}
-    @media(min-width:768px){.cf-sheet{border-radius:16px;max-height:85vh;}}
+    @media(min-width:768px){.cf-sheet{border-radius:16px;max-height:88vh;}}
     @keyframes cfUp{from{transform:translateY(24px);opacity:0;}to{transform:none;opacity:1;}}
-    .cf-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border,#dde4ea);flex-shrink:0;}
+    .cf-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border,#dde4ea);flex-shrink:0;gap:12px;}
+    .cf-title-wrap{min-width:0;}
     .cf-title{font-family:var(--display,serif);font-size:18px;font-weight:700;color:var(--ink,#0b1726);}
-    .cf-sub{font-size:12px;color:var(--muted,#5b6b7c);margin-top:2px;}
+    .cf-sub-row{display:flex;align-items:center;gap:8px;margin-top:3px;flex-wrap:wrap;}
+    .cf-sub{font-size:12px;color:var(--muted,#5b6b7c);}
+    .cf-accuracy-pill{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--teal-xl,#eefcfa);color:var(--teal-d,#0a6b62);white-space:nowrap;}
+    .cf-refining-pill{display:inline-flex;align-items:center;gap:5px;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--blue-l,#eaf1ff);color:var(--blue-d,#1d54c4);white-space:nowrap;}
+    .cf-pulse-dot{width:6px;height:6px;border-radius:50%;background:var(--blue,#2f6fed);animation:cfPulse 1.2s ease-in-out infinite;flex-shrink:0;}
+    @keyframes cfPulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:0.35;transform:scale(0.7);}}
     .cf-close-btn{border:none;background:var(--border-l,#eef2f5);border-radius:8px;padding:8px;cursor:pointer;display:flex;color:var(--muted,#5b6b7c);flex-shrink:0;}
     .cf-close-btn:hover{background:var(--border,#dde4ea);}
     .cf-map-wrap{position:relative;flex-shrink:0;}
-    .cf-map{width:100%;height:240px;background:var(--border-l,#eef2f5);}
-    .cf-recenter-btn{position:absolute;top:10px;right:10px;z-index:500;border:none;background:var(--surface,#fff);color:var(--ink-2,#1a2a3c);border-radius:8px;padding:8px;cursor:pointer;display:flex;box-shadow:0 2px 8px rgba(11,23,38,0.2);}
+    .cf-map{width:100%;height:230px;background:var(--border-l,#eef2f5);}
+    @media(min-width:768px){.cf-map{height:280px;}}
+    .cf-recenter-btn{position:absolute;top:10px;right:10px;z-index:500;border:none;background:var(--surface,#fff);color:var(--ink-2,#1a2a3c);border-radius:10px;padding:9px;cursor:pointer;display:flex;box-shadow:0 2px 10px rgba(11,23,38,0.22);transition:background 150ms ease,transform 150ms ease;}
     .cf-recenter-btn:hover{background:var(--border-l,#eef2f5);}
+    .cf-recenter-btn:active{transform:scale(0.92);}
+    .cf-recenter-btn.spinning svg{animation:cfSpin 1s linear infinite;}
     .cf-hint{display:flex;align-items:flex-start;gap:8px;padding:10px 18px;background:var(--teal-xl,#eefcfa);border-bottom:1px solid var(--border,#dde4ea);flex-shrink:0;}
     .cf-hint-text{font-size:12px;color:var(--teal-dd,#074d47);line-height:1.5;}
     .cf-body{flex:1;overflow-y:auto;padding:14px 18px 18px;}
@@ -164,9 +135,12 @@ const injectClinicFinderStyles = () => {
     .cf-state-title{font-size:15px;font-weight:700;color:var(--ink,#0b1726);}
     .cf-state-text{font-size:13px;color:var(--muted,#5b6b7c);line-height:1.55;}
     .cf-retry-btn{margin-top:6px;padding:11px 22px;border-radius:10px;border:none;font-weight:600;font-size:14px;cursor:pointer;background:linear-gradient(160deg,var(--teal,#0c8a7e) 0%,var(--teal-d,#0a6b62) 100%);color:#fff;}
-    .cf-directions-btn{display:block;width:100%;text-align:center;padding:13px 18px;border-radius:10px;font-weight:600;font-size:14px;text-decoration:none;background:linear-gradient(160deg,var(--teal,#0c8a7e) 0%,var(--teal-d,#0a6b62) 100%);color:#fff;margin-bottom:14px;box-sizing:border-box;}
+    .cf-directions-btn{display:block;width:100%;text-align:center;padding:13px 18px;border-radius:10px;font-weight:600;font-size:14px;text-decoration:none;background:linear-gradient(160deg,var(--teal,#0c8a7e) 0%,var(--teal-d,#0a6b62) 100%);color:#fff;margin-bottom:14px;box-sizing:border-box;transition:box-shadow 150ms ease,transform 150ms ease;}
+    .cf-directions-btn:hover{box-shadow:0 6px 18px rgba(12,138,126,0.3);transform:translateY(-1px);}
+    .cf-updating-pill{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted,#5b6b7c);margin-bottom:10px;padding:8px 12px;background:var(--border-l,#eef2f5);border-radius:10px;}
     .cf-list{display:flex;flex-direction:column;gap:8px;}
-    .cf-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border,#dde4ea);border-radius:14px;}
+    .cf-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border,#dde4ea);border-radius:14px;transition:box-shadow 150ms ease;}
+    .cf-item:hover{box-shadow:0 2px 10px rgba(11,23,38,0.08);}
     .cf-item.nearest{border-color:var(--teal,#0c8a7e);background:var(--teal-xl,#eefcfa);}
     .cf-item-icon{width:36px;height:36px;border-radius:10px;background:var(--teal-xl,#eefcfa);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:var(--teal-d,#0a6b62);}
     .cf-item-name{font-size:13px;font-weight:700;color:var(--ink,#0b1726);display:flex;align-items:center;flex-wrap:wrap;}
@@ -230,79 +204,166 @@ const InfoIcon = () => (
 // COMPONENT
 // ─────────────────────────────────────────────
 export default function ClinicFinder({ onClose }) {
-  const [status, setStatus] = useState("locating"); // locating | searching | ready | error
-  const [errorMsg, setErrorMsg] = useState("");
+  // Location state
+  const [phase, setPhase] = useState("locating"); // locating | ready | location-error
   const [position, setPosition] = useState(null);
   const [accuracy, setAccuracy] = useState(null);
+  const [refining, setRefining] = useState(false);
+  const [locationErrorMsg, setLocationErrorMsg] = useState("");
+
+  // Clinic search state (independent of location phase, so a background
+  // location refinement never blanks out results already on screen)
   const [clinics, setClinics] = useState([]);
+  const [loadingClinics, setLoadingClinics] = useState(false);
+  const [clinicErrorMsg, setClinicErrorMsg] = useState("");
+
+  const watchIdRef = useRef(null);
+  const refineTimerRef = useRef(null);
+  const searchDebounceRef = useRef(null);
+  const bestAccuracyRef = useRef(Infinity);
+  const mountedRef = useRef(true);
 
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const markersLayer = useRef(null);
 
   useEffect(() => { injectClinicFinderStyles(); }, []);
-
-  // ── Acquire the most accurate device location available ──
-  const getLocation = useCallback(() => {
-    setStatus("locating");
-    setErrorMsg("");
-    setClinics([]);
-
-    getBestPosition()
-      .then(({ lat, lon, accuracy: acc }) => {
-        setPosition({ lat, lon });
-        setAccuracy(acc);
-        setStatus("searching");
-      })
-      .catch((geoErr) => {
-        console.error("ClinicFinder: geolocation error:", geoErr.message);
-        setStatus("error");
-        setErrorMsg(
-          geoErr.code === 1
-            ? "Location access was denied. Enable location permissions in your browser settings and try again."
-            : "Could not determine your location. Check your device's location settings and try again."
-        );
-      });
-  }, []);
-
-  useEffect(() => { getLocation(); }, [getLocation]);
-
-  // ── Manual correction: dragging the pin re-searches from that exact spot ──
-  const handleManualPosition = useCallback((lat, lon) => {
-    setPosition({ lat, lon });
-    setAccuracy(null); // a manually placed pin is treated as user-confirmed
-    setClinics([]);
-    setStatus("searching");
-  }, []);
-
-  // ── Search for clinics whenever we have a position to search from ──
   useEffect(() => {
-    if (status !== "searching" || !position) return;
-    let cancelled = false;
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
-    const run = async () => {
-      try {
-        const places = await fetchNearbyClinics(position.lat, position.lon);
-        if (cancelled) return;
-        setClinics(places);
-        setStatus("ready");
-      } catch (err) {
-        if (cancelled) return;
-        console.error("ClinicFinder: search failed:", err.message);
-        setStatus("error");
-        if (err.status === 404) {
-          setErrorMsg("No hospitals, clinics, or pharmacies were found within 6 km of this location.");
-        } else if (err.status === 401) {
-          setErrorMsg("Your session has expired. Please sign in again and retry.");
-        } else {
-          setErrorMsg("We couldn't load nearby clinics right now. Please check your connection and try again.");
-        }
+  const stopWatch = useCallback(() => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+    if (refineTimerRef.current) {
+      clearTimeout(refineTimerRef.current);
+      refineTimerRef.current = null;
+    }
+  }, []);
+
+  // ── Clinic search, used for the initial fix, background refinements,
+  //    manual pin drags, and explicit retries ──
+  const searchClinicsAt = useCallback(async (lat, lon) => {
+    setLoadingClinics(true);
+    setClinicErrorMsg("");
+    try {
+      const places = await fetchNearbyClinics(lat, lon);
+      if (!mountedRef.current) return;
+      setClinics(places);
+    } catch (err) {
+      if (!mountedRef.current) return;
+      console.error("ClinicFinder: search failed:", err.message);
+      if (err.status === 404) {
+        setClinics([]);
+        setClinicErrorMsg("No hospitals, clinics, or pharmacies were found within 6 km of this location.");
+      } else if (err.status === 401) {
+        setClinicErrorMsg("Your session has expired. Please sign in again and retry.");
+      } else {
+        setClinicErrorMsg("We couldn't load nearby clinics right now. Please check your connection and try again.");
       }
-    };
+    } finally {
+      if (mountedRef.current) setLoadingClinics(false);
+    }
+  }, []);
 
-    run();
-    return () => { cancelled = true; };
-  }, [status, position]);
+  const scheduleSearch = useCallback((lat, lon) => {
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchDebounceRef.current = setTimeout(() => searchClinicsAt(lat, lon), SEARCH_DEBOUNCE_MS);
+  }, [searchClinicsAt]);
+
+  // ── Location acquisition: shows the first fix immediately, then keeps
+  //    listening in the background and only ever replaces the position
+  //    with a reading that is at least as accurate as the one in use ──
+  const startLocating = useCallback(() => {
+    if (!navigator.geolocation) {
+      setPhase("location-error");
+      setLocationErrorMsg("Your browser does not support location services.");
+      return;
+    }
+
+    stopWatch();
+
+    const hadPositionAlready = position != null;
+    bestAccuracyRef.current = hadPositionAlready ? (accuracy ?? Infinity) : Infinity;
+
+    if (!hadPositionAlready) {
+      setPhase("locating");
+      setLocationErrorMsg("");
+    }
+    setRefining(true);
+
+    let receivedAcceptedFix = hadPositionAlready;
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (pos) => {
+        if (!mountedRef.current) return;
+        const { latitude, longitude, accuracy: acc } = pos.coords;
+
+        if (acc <= bestAccuracyRef.current) {
+          bestAccuracyRef.current = acc;
+          receivedAcceptedFix = true;
+          setPosition({ lat: latitude, lon: longitude });
+          setAccuracy(acc);
+          setPhase("ready");
+          scheduleSearch(latitude, longitude);
+        }
+
+        if (acc <= GOOD_ACCURACY_M) {
+          setRefining(false);
+          stopWatch();
+        }
+      },
+      (err) => {
+        if (!mountedRef.current) return;
+        console.error("ClinicFinder: geolocation error:", err.message);
+        setRefining(false);
+        if (!receivedAcceptedFix) {
+          setPhase("location-error");
+          setLocationErrorMsg(
+            err.code === 1
+              ? "Location access was denied. Enable location permissions in your browser settings and try again."
+              : "Could not determine your location. Check your device's location settings and try again."
+          );
+        }
+      },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: REFINE_WINDOW_MS }
+    );
+
+    refineTimerRef.current = setTimeout(() => {
+      setRefining(false);
+      stopWatch();
+    }, REFINE_WINDOW_MS);
+  }, [position, accuracy, stopWatch, scheduleSearch]);
+
+  // Run once on mount
+  useEffect(() => {
+    startLocating();
+    return () => {
+      stopWatch();
+      if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Manual correction: dragging the pin is authoritative and searches
+  //    immediately, no debounce ──
+  const handleManualPosition = useCallback((lat, lon) => {
+    stopWatch();
+    setRefining(false);
+    bestAccuracyRef.current = 0;
+    setPosition({ lat, lon });
+    setAccuracy(0);
+    setPhase("ready");
+    if (searchDebounceRef.current) clearTimeout(searchDebounceRef.current);
+    searchClinicsAt(lat, lon);
+  }, [stopWatch, searchClinicsAt]);
+
+  const retryClinicSearch = useCallback(() => {
+    if (position) searchClinicsAt(position.lat, position.lon);
+  }, [position, searchClinicsAt]);
 
   // ── Map lifecycle: create once, destroy on unmount only ──
   useEffect(() => {
@@ -341,8 +402,8 @@ export default function ClinicFinder({ onClose }) {
 
     userMarker.bindPopup(
       accuracy
-        ? `Your location · accurate to ~${Math.round(accuracy)}m<br/><em>Drag to correct if needed</em>`
-        : `Your location<br/><em>Drag to correct if needed</em>`
+        ? `Your location · accurate to ${formatAccuracy(accuracy)}<br/><em>Drag to correct if needed</em>`
+        : `Your location (set manually)<br/><em>Drag to adjust</em>`
     );
 
     userMarker.on("dragend", (e) => {
@@ -360,7 +421,7 @@ export default function ClinicFinder({ onClose }) {
       }).addTo(markersLayer.current);
     }
 
-    if (status === "ready" && clinics.length > 0) {
+    if (clinics.length > 0) {
       clinics.forEach((c, i) => {
         L.marker([c.lat, c.lon])
           .addTo(markersLayer.current)
@@ -374,28 +435,31 @@ export default function ClinicFinder({ onClose }) {
     } else {
       mapInstance.current.setView([position.lat, position.lon], mapInstance.current.getZoom() || 15);
     }
-  }, [position, accuracy, status, clinics, handleManualPosition]);
+  }, [position, accuracy, clinics, handleManualPosition]);
 
   const nearest = clinics[0];
-  const showMap = !!position;
-
-  const retrySearch = () => {
-    if (position) {
-      setClinics([]);
-      setStatus("searching");
-    } else {
-      getLocation();
-    }
-  };
+  const showMap = phase === "ready" && !!position;
+  const hasResults = clinics.length > 0;
 
   return (
     <div className="cf-overlay" onClick={onClose}>
       <div className="cf-sheet" onClick={(e) => e.stopPropagation()}>
         <div className="cf-head">
-          <div>
+          <div className="cf-title-wrap">
             <div className="cf-title">Nearby Clinics & Hospitals</div>
-            <div className="cf-sub">
-              {status === "ready" ? `${clinics.length} facilities found nearby` : "Finding facilities near you"}
+            <div className="cf-sub-row">
+              <span className="cf-sub">
+                {hasResults ? `${clinics.length} facilities found` : "Finding facilities near you"}
+              </span>
+              {phase === "ready" && accuracy != null && accuracy > 0 && !refining && (
+                <span className="cf-accuracy-pill">{formatAccuracy(accuracy)}</span>
+              )}
+              {refining && (
+                <span className="cf-refining-pill">
+                  <span className="cf-pulse-dot" />
+                  Refining GPS
+                </span>
+              )}
             </div>
           </div>
           <button onClick={onClose} aria-label="Close" className="cf-close-btn">
@@ -407,8 +471,8 @@ export default function ClinicFinder({ onClose }) {
           <div className="cf-map-wrap">
             <div className="cf-map" ref={mapRef} />
             <button
-              className="cf-recenter-btn"
-              onClick={getLocation}
+              className={`cf-recenter-btn${refining ? " spinning" : ""}`}
+              onClick={startLocating}
               aria-label="Use my current device location"
               title="Use my current device location"
             >
@@ -421,74 +485,95 @@ export default function ClinicFinder({ onClose }) {
           <div className="cf-hint">
             <InfoIcon />
             <div className="cf-hint-text">
-              Drag the blue pin on the map to your exact location for the most accurate results.
+              Your location updates automatically as GPS improves. Drag the blue pin if it's ever off.
             </div>
           </div>
         )}
 
         <div className="cf-body">
-          {status === "locating" && (
+          {phase === "locating" && (
             <div className="cf-state">
               <div className="cf-spinner" />
-              <div className="cf-state-text">Getting your precise location...</div>
+              <div className="cf-state-text">Getting your location...</div>
             </div>
           )}
 
-          {status === "searching" && (
-            <div className="cf-inline-loading">
-              <div className="cf-spinner cf-spinner-sm" />
-              Searching for nearby clinics...
-            </div>
-          )}
-
-          {status === "error" && (
+          {phase === "location-error" && (
             <div className="cf-state">
               <AlertIcon />
-              <div className="cf-state-title">Could not find clinics</div>
-              <div className="cf-state-text">{errorMsg}</div>
-              <button className="cf-retry-btn" onClick={retrySearch}>Try Again</button>
+              <div className="cf-state-title">Could not get your location</div>
+              <div className="cf-state-text">{locationErrorMsg}</div>
+              <button className="cf-retry-btn" onClick={startLocating}>Try Again</button>
             </div>
           )}
 
-          {status === "ready" && (
+          {phase === "ready" && (
             <>
-              {nearest && (
-                <a
-                  href={directionsUrl(position.lat, position.lon, nearest.lat, nearest.lon)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="cf-directions-btn"
-                >
-                  Directions to Nearest — {nearest.name} ({nearest.distanceKm.toFixed(1)} km)
-                </a>
+              {loadingClinics && !hasResults && !clinicErrorMsg && (
+                <div className="cf-inline-loading">
+                  <div className="cf-spinner cf-spinner-sm" />
+                  Searching for nearby clinics...
+                </div>
               )}
-              <div className="cf-list">
-                {clinics.map((c, i) => (
-                  <div key={c.id} className={`cf-item${i === 0 ? " nearest" : ""}`}>
-                    <div className="cf-item-icon"><PinIcon /></div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div className="cf-item-name">
-                        {c.name}
-                        {i === 0 && <span className="cf-badge-nearest">Nearest</span>}
-                      </div>
-                      <div className="cf-item-meta">
-                        {c.type}{c.address ? ` · ${c.address}` : ""}
-                      </div>
+
+              {clinicErrorMsg && !hasResults && (
+                <div className="cf-state">
+                  <AlertIcon />
+                  <div className="cf-state-title">Could not find clinics</div>
+                  <div className="cf-state-text">{clinicErrorMsg}</div>
+                  <button className="cf-retry-btn" onClick={retryClinicSearch}>Try Again</button>
+                </div>
+              )}
+
+              {hasResults && (
+                <>
+                  {loadingClinics && (
+                    <div className="cf-updating-pill">
+                      <div className="cf-spinner cf-spinner-sm" />
+                      Updating with your refined location...
                     </div>
-                    <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
-                      <div className="cf-item-dist">{c.distanceKm.toFixed(1)} km</div>
-                      <a
-                        href={directionsUrl(position.lat, position.lon, c.lat, c.lon)}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="cf-item-directions"
-                      >
-                        Directions
-                      </a>
-                    </div>
+                  )}
+
+                  {nearest && (
+                    <a
+                      href={directionsUrl(position.lat, position.lon, nearest.lat, nearest.lon)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="cf-directions-btn"
+                    >
+                      Directions to Nearest — {nearest.name} ({nearest.distanceKm.toFixed(1)} km)
+                    </a>
+                  )}
+
+                  <div className="cf-list">
+                    {clinics.map((c, i) => (
+                      <div key={c.id} className={`cf-item${i === 0 ? " nearest" : ""}`}>
+                        <div className="cf-item-icon"><PinIcon /></div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="cf-item-name">
+                            {c.name}
+                            {i === 0 && <span className="cf-badge-nearest">Nearest</span>}
+                          </div>
+                          <div className="cf-item-meta">
+                            {c.type}{c.address ? ` · ${c.address}` : ""}
+                          </div>
+                        </div>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
+                          <div className="cf-item-dist">{c.distanceKm.toFixed(1)} km</div>
+                          <a
+                            href={directionsUrl(position.lat, position.lon, c.lat, c.lon)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="cf-item-directions"
+                          >
+                            Directions
+                          </a>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
+                </>
+              )}
             </>
           )}
         </div>
