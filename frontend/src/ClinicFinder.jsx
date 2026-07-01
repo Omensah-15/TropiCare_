@@ -33,18 +33,21 @@ const USER_ICON = L.divIcon({
 // ─────────────────────────────────────────────
 // CONFIG
 //
-// The public Overpass API is free and requires no key, but the primary
-// mirror (overpass-api.de) is a shared community server that occasionally
-// rate-limits or times out under load. A second free mirror is queried
-// automatically if the first one fails, rather than surfacing a single
-// unexplained "network error" to the person using the app.
+// Multiple independent map-data sources are queried in parallel and the
+// first successful response wins. This avoids the failure mode where a
+// single slow source is tried, times out, and only then does a second
+// source get attempted — which multiplies the total wait time and the
+// chance of failure. Querying all sources at once bounds the worst case
+// to a single timeout window instead of one per source.
 // ─────────────────────────────────────────────
-const OVERPASS_MIRRORS = [
+const DATA_SOURCES = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
+  "https://overpass.osm.ch/api/interpreter",
+  "https://overpass.openstreetmap.ru/api/interpreter",
 ];
 const SEARCH_RADIUS_M = 6000;
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 20000;
 
 // ─────────────────────────────────────────────
 // HELPERS
@@ -121,48 +124,60 @@ function directionsUrl(originLat, originLon, destLat, destLon) {
 }
 
 /*
- * Queries each Overpass mirror in order and returns the first successful
- * response. Every failure (non-2xx status, timeout, network error) is
- * logged with its real cause and the next mirror is tried before finally
- * throwing, so the person sees an accurate message instead of a generic
- * "network error" regardless of what actually went wrong.
+ * Queries a single data source and either resolves with its elements or
+ * rejects with a descriptive error. Used as the building block for the
+ * parallel race across all configured sources below.
  */
-async function fetchClinicsWithFallback(lat, lon) {
-  const query = buildOverpassQuery(lat, lon, SEARCH_RADIUS_M);
-  let lastError = null;
+async function queryDataSource(source, query) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
-  for (const mirror of OVERPASS_MIRRORS) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const url = `${source}?data=${encodeURIComponent(query)}`;
+    const res = await fetch(url, { method: "GET", signal: controller.signal });
+    clearTimeout(timer);
 
-    try {
-      const res = await fetch(mirror, {
-        method: "POST",
-        headers: { "Content-Type": "text/plain" },
-        body: query,
-        signal: controller.signal,
-      });
-      clearTimeout(timer);
-
-      if (!res.ok) {
-        lastError = new Error(`${mirror} responded with HTTP ${res.status}`);
-        console.error("ClinicFinder: Overpass mirror failed:", lastError.message);
-        continue;
-      }
-
-      const data = await res.json();
-      return data.elements || [];
-    } catch (err) {
-      clearTimeout(timer);
-      lastError =
-        err?.name === "AbortError"
-          ? new Error(`${mirror} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`)
-          : err;
-      console.error("ClinicFinder: Overpass mirror error:", lastError.message);
+    if (!res.ok) {
+      throw new Error(`${source} responded with HTTP ${res.status}`);
     }
-  }
 
-  throw lastError || new Error("All Overpass mirrors failed");
+    const data = await res.json();
+    const elements = data.elements || [];
+    if (elements.length === 0) {
+      // A source can return a valid empty result for a genuinely sparse
+      // area; treat this as a soft failure so the race keeps waiting on
+      // the remaining sources rather than resolving with nothing.
+      throw new Error(`${source} returned no elements`);
+    }
+    return elements;
+  } catch (err) {
+    clearTimeout(timer);
+    const reason =
+      err?.name === "AbortError"
+        ? `${source} timed out after ${REQUEST_TIMEOUT_MS / 1000}s`
+        : err.message || String(err);
+    console.error("ClinicFinder: data source failed:", reason);
+    throw new Error(reason);
+  }
+}
+
+/*
+ * Races all configured data sources in parallel and returns the elements
+ * from whichever responds first with usable data. This bounds the total
+ * wait time to a single timeout window rather than one per source, and
+ * means a single slow or unreachable source no longer blocks the search.
+ */
+async function fetchClinics(lat, lon) {
+  const query = buildOverpassQuery(lat, lon, SEARCH_RADIUS_M);
+  const attempts = DATA_SOURCES.map((source) => queryDataSource(source, query));
+
+  try {
+    return await Promise.any(attempts);
+  } catch (aggregateErr) {
+    const reasons = (aggregateErr.errors || []).map((e) => e.message).join(" | ");
+    console.error("ClinicFinder: all data sources failed:", reasons);
+    throw new Error("All data sources failed");
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -286,26 +301,42 @@ export default function ClinicFinder({ onClose }) {
     if (status !== "searching" || !position) return;
     let cancelled = false;
 
+    const attemptSearch = async () => {
+      const elements = await fetchClinics(position.lat, position.lon);
+      const places = extractPlaces(elements, position.lat, position.lon);
+      if (places.length === 0) {
+        throw new Error("No facilities in results after filtering");
+      }
+      return places;
+    };
+
     const run = async () => {
       try {
-        const elements = await fetchClinicsWithFallback(position.lat, position.lon);
+        const places = await attemptSearch();
         if (cancelled) return;
-
-        const places = extractPlaces(elements, position.lat, position.lon);
-        if (places.length === 0) {
-          setStatus("error");
-          setErrorMsg("No clinics or hospitals were found within 6 km of your location.");
-          return;
-        }
         setClinics(places);
         setStatus("ready");
-      } catch (err) {
+      } catch (firstErr) {
+        // One silent retry before surfacing anything to the person — this
+        // absorbs the common case of a single transient hiccup so it
+        // never has to become a visible error at all.
+        console.error("ClinicFinder: first attempt failed, retrying:", firstErr.message);
         if (cancelled) return;
-        console.error("ClinicFinder: clinic search failed:", err);
-        setStatus("error");
-        setErrorMsg(
-          "Could not reach the clinic directory right now. This is usually a temporary issue with the free map data service — please try again in a moment."
-        );
+        await new Promise((r) => setTimeout(r, 1200));
+        if (cancelled) return;
+        try {
+          const places = await attemptSearch();
+          if (cancelled) return;
+          setClinics(places);
+          setStatus("ready");
+        } catch (secondErr) {
+          if (cancelled) return;
+          console.error("ClinicFinder: retry also failed:", secondErr.message);
+          setStatus("error");
+          setErrorMsg(
+            "We couldn't load nearby clinics right now. Please check your internet connection and try again."
+          );
+        }
       }
     };
 
