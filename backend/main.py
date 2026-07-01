@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import secrets
@@ -178,6 +179,11 @@ SCHEMA_MIGRATIONS_APPLIED = Counter(
     "tropicare_schema_migrations_applied_total",
     "Columns added to existing tables at startup",
     ["table", "column"],
+)
+CLINIC_SOURCE_ERRORS = Counter(
+    "tropicare_clinic_source_errors_total",
+    "Clinic data source failures",
+    ["source", "reason"],
 )
 
 # -----------------------------------------------------------------
@@ -1014,6 +1020,152 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
 
 
 # -----------------------------------------------------------------
+# CLINIC FINDER (server-side proxy)
+#
+# The nearby-clinics feature was originally implemented by calling public
+# Overpass API mirrors directly from the browser. In production this proved
+# unreliable: overpass-api.de intermittently omits CORS headers on its GET
+# endpoint (the browser reports this as a CORS failure even though the
+# underlying cause is server-side, often rate limiting), and the remaining
+# free mirrors vary widely in latency and uptime. None of that is fixable
+# from client-side code.
+#
+# Routing the request through this backend removes the problem entirely:
+# server-to-server HTTP calls are not subject to CORS at all, and this
+# server controls its own timeouts, retries, and caching. Results are
+# cached in Redis per rounded coordinate so repeat lookups near the same
+# location do not re-hit the upstream data source.
+# -----------------------------------------------------------------
+
+CLINIC_DATA_SOURCES: List[str] = [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.osm.ch/api/interpreter",
+]
+CLINIC_SEARCH_RADIUS_M = 6000
+CLINIC_SOURCE_TIMEOUT_S = 12
+CLINIC_CACHE_TTL_S = 21600  # 6 hours
+
+
+def _build_clinic_query(lat: float, lon: float, radius_m: int) -> str:
+    return (
+        f'[out:json][timeout:20];('
+        f'node["amenity"="hospital"](around:{radius_m},{lat},{lon});'
+        f'way["amenity"="hospital"](around:{radius_m},{lat},{lon});'
+        f'node["amenity"="clinic"](around:{radius_m},{lat},{lon});'
+        f'way["amenity"="clinic"](around:{radius_m},{lat},{lon});'
+        f'node["amenity"="doctors"](around:{radius_m},{lat},{lon});'
+        f'node["amenity"="pharmacy"](around:{radius_m},{lat},{lon});'
+        f'node["healthcare"="pharmacy"](around:{radius_m},{lat},{lon});'
+        f');out center 40;'
+    )
+
+
+async def _query_clinic_source(
+    session: aiohttp.ClientSession, source: str, query: str
+) -> Optional[List[dict]]:
+    try:
+        async with session.post(
+            source,
+            data=query,
+            headers={"Content-Type": "text/plain"},
+            timeout=aiohttp.ClientTimeout(total=CLINIC_SOURCE_TIMEOUT_S),
+        ) as resp:
+            if resp.status != 200:
+                CLINIC_SOURCE_ERRORS.labels(source=source, reason=f"http_{resp.status}").inc()
+                logger.warning({"event": "clinic_source_bad_status", "source": source, "status": resp.status})
+                return None
+            data = await resp.json()
+            elements = data.get("elements", [])
+            if not elements:
+                CLINIC_SOURCE_ERRORS.labels(source=source, reason="empty").inc()
+                return None
+            return elements
+    except asyncio.TimeoutError:
+        CLINIC_SOURCE_ERRORS.labels(source=source, reason="timeout").inc()
+        logger.warning({"event": "clinic_source_timeout", "source": source})
+        return None
+    except Exception as e:
+        CLINIC_SOURCE_ERRORS.labels(source=source, reason="error").inc()
+        logger.warning({"event": "clinic_source_error", "source": source, "error": str(e)})
+        return None
+
+
+async def _fetch_clinic_elements(lat: float, lon: float) -> List[dict]:
+    query = _build_clinic_query(lat, lon, CLINIC_SEARCH_RADIUS_M)
+    async with aiohttp.ClientSession() as session:
+        for source in CLINIC_DATA_SOURCES:
+            elements = await _query_clinic_source(session, source, query)
+            if elements:
+                return elements
+    return []
+
+
+def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    r = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
+    )
+    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _extract_clinic_places(elements: List[dict], user_lat: float, user_lon: float) -> List[dict]:
+    places: List[dict] = []
+    seen: set = set()
+
+    for el in elements:
+        lat = el.get("lat")
+        lon = el.get("lon")
+        if lat is None or lon is None:
+            center = el.get("center") or {}
+            lat = center.get("lat")
+            lon = center.get("lon")
+        if lat is None or lon is None:
+            continue
+
+        tags = el.get("tags", {})
+        name = tags.get("name") or tags.get("name:en") or "Unnamed facility"
+        amenity = tags.get("amenity")
+        healthcare = tags.get("healthcare")
+
+        if amenity == "hospital":
+            facility_type = "Hospital"
+        elif amenity == "clinic":
+            facility_type = "Clinic"
+        elif amenity == "doctors":
+            facility_type = "Doctor's Office"
+        elif amenity == "pharmacy" or healthcare == "pharmacy":
+            facility_type = "Pharmacy"
+        else:
+            facility_type = "Health Facility"
+
+        address = ", ".join(
+            p for p in (tags.get("addr:street"), tags.get("addr:city") or tags.get("addr:suburb")) if p
+        )
+
+        dedupe_key = f"{name}-{round(lat, 3)}-{round(lon, 3)}"
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        places.append({
+            "id":           f"{el.get('type')}/{el.get('id')}",
+            "name":         name,
+            "type":         facility_type,
+            "address":      address,
+            "lat":          lat,
+            "lon":          lon,
+            "distance_km":  round(_haversine_km(user_lat, user_lon, lat, lon), 2),
+        })
+
+    places.sort(key=lambda p: p["distance_km"])
+    return places[:15]
+
+
+# -----------------------------------------------------------------
 # PYDANTIC SCHEMAS
 # -----------------------------------------------------------------
 
@@ -1657,6 +1809,47 @@ async def analyze(
     if idem_key:
         await cache_set(f"idem:{idem_key}", json.dumps(response_body), ttl=86400)
 
+    return response_body
+
+
+# -----------------------------------------------------------------
+# ROUTES - Clinics
+#
+# See the "CLINIC FINDER (server-side proxy)" section above for why this
+# proxies to the upstream data source rather than the frontend calling it
+# directly.
+# -----------------------------------------------------------------
+
+@app.get("/api/v1/clinics/nearby")
+@limiter.limit("20/minute")
+async def clinics_nearby(
+    request: Request,
+    lat: float,
+    lon: float,
+    user_id: int = Depends(verify_token),
+):
+    if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        raise HTTPException(status_code=400, detail="Invalid coordinates")
+
+    cache_key = f"clinics:{round(lat, 2)}:{round(lon, 2)}"
+    cached = await cache_get(cache_key, key_type="clinics")
+    if cached:
+        try:
+            return json.loads(cached)
+        except Exception:
+            pass
+
+    elements = await _fetch_clinic_elements(lat, lon)
+    places = _extract_clinic_places(elements, lat, lon)
+
+    if not places:
+        raise HTTPException(
+            status_code=404,
+            detail="No hospitals, clinics, or pharmacies were found within 6 km of this location.",
+        )
+
+    response_body = {"places": places}
+    await cache_set(cache_key, json.dumps(response_body), ttl=CLINIC_CACHE_TTL_S)
     return response_body
 
 
