@@ -4,13 +4,21 @@
  * TropiCare backend (/api/v1/clinics/nearby), which proxies the upstream
  * map data source server-side.
  *
- * Location accuracy: a single geolocation reading can be imprecise,
- * especially on devices without GPS. Rather than trusting the first fix,
- * this samples multiple readings over a short window and keeps the most
- * accurate one. The location pin on the map is also draggable, so the
- * person can correct their exact position with certainty if the automatic
- * fix is ever off — search results update immediately from wherever the
- * pin is placed.
+ * Location strategy (Google Maps / Uber pattern):
+ *   1. FAST FIX — a single getCurrentPosition() call resolves almost
+ *      immediately (often a cached Wi-Fi/cell estimate), so the map and
+ *      clinic list appear right away instead of a blank loading screen.
+ *   2. BACKGROUND REFINEMENT — a watchPosition() stream keeps listening
+ *      after that fast fix lands. Every time a materially more accurate
+ *      reading arrives, the pin is smoothly animated (glided, never
+ *      snapped) to the corrected position. If the correction moves the
+ *      person far enough that results would change, the clinic list is
+ *      quietly re-fetched in the background without disturbing the view.
+ *      Refinement stops once a genuinely precise fix is reached or a
+ *      timeout elapses, so the GPS radio isn't left running forever.
+ *   3. MANUAL OVERRIDE — the pin stays draggable at all times. Dragging
+ *      it cancels background refinement immediately and treats the
+ *      dropped position as authoritative.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -45,60 +53,126 @@ const USER_ICON = L.divIcon({
 });
 
 // ─────────────────────────────────────────────
-// HIGH-ACCURACY LOCATION
-//
-// navigator.geolocation.getCurrentPosition returns the first fix a device
-// can produce, which can be a rough Wi-Fi/network estimate before a GPS
-// lock settles in — particularly on first use. This instead watches for
-// up to maxWaitMs, keeping the most accurate reading (lowest
-// coords.accuracy, in metres) seen during that window, and returns early
-// the moment a genuinely precise fix (<= targetAccuracyM) arrives.
+// LOCATION ACQUISITION CONSTANTS
 // ─────────────────────────────────────────────
-function getBestPosition({ maxWaitMs = 8000, targetAccuracyM = 30 } = {}) {
+const FAST_FIX_TIMEOUT_MS = 8000;      // how long we wait for the first usable fix
+const FAST_FIX_MAX_AGE_MS = 8000;      // accept a recent cached fix for a fast first paint
+const REFINE_WINDOW_MS = 12000;        // how long we keep listening for a better fix
+const REFINE_TARGET_ACCURACY_M = 15;   // stop refining once we're this precise
+const MOVE_RESEARCH_THRESHOLD_M = 35;  // only re-fetch clinics if the correction moved this far
+
+// ─────────────────────────────────────────────
+// GEOLOCATION HELPERS
+// ─────────────────────────────────────────────
+function getFastPosition() {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      reject(new Error("Geolocation is not supported on this device."));
+      reject(Object.assign(new Error("Geolocation is not supported."), { code: "unsupported" }));
       return;
     }
-
-    let best = null;
-    let watchId = null;
-    let settled = false;
-
-    const finish = () => {
-      if (settled) return;
-      settled = true;
-      if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-      if (best) {
-        resolve(best);
-      } else {
-        reject(new Error("Could not get a location fix."));
-      }
-    };
-
-    const timer = setTimeout(finish, maxWaitMs);
-
-    watchId = navigator.geolocation.watchPosition(
+    navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude, accuracy } = pos.coords;
-        if (!best || accuracy < best.accuracy) {
-          best = { lat: latitude, lon: longitude, accuracy };
-        }
-        if (accuracy <= targetAccuracyM) {
+        resolve({ lat: latitude, lon: longitude, accuracy });
+      },
+      (err) => reject(err),
+      { enableHighAccuracy: true, timeout: FAST_FIX_TIMEOUT_MS, maximumAge: FAST_FIX_MAX_AGE_MS }
+    );
+  });
+}
+
+/**
+ * Starts a background watch that only reports a new fix when it is a
+ * meaningful accuracy improvement over the last one (avoids jittering the
+ * pin on noisy readings). Stops automatically once a precise fix is
+ * reached or the time window elapses. Returns a handle with `.stop()` so
+ * the caller can cancel it early (e.g. on manual drag or unmount).
+ */
+function startRefinement({ startAccuracy, onImprove, onDone }) {
+  if (!navigator.geolocation) {
+    onDone();
+    return { stop: () => {} };
+  }
+
+  let best = startAccuracy;
+  let finished = false;
+  let watchId = null;
+
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    onDone();
+  };
+
+  const timer = setTimeout(finish, REFINE_WINDOW_MS);
+
+  watchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      const { latitude, longitude, accuracy } = pos.coords;
+      if (accuracy < best - 1) {
+        best = accuracy;
+        onImprove({ lat: latitude, lon: longitude, accuracy });
+        if (accuracy <= REFINE_TARGET_ACCURACY_M) {
           clearTimeout(timer);
           finish();
         }
-      },
-      (err) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (watchId !== null) navigator.geolocation.clearWatch(watchId);
-        reject(err);
-      },
-      { enableHighAccuracy: true, maximumAge: 0, timeout: maxWaitMs }
-    );
-  });
+      }
+    },
+    () => {
+      /* Background errors are ignored — a usable fix already exists. */
+    },
+    { enableHighAccuracy: true, maximumAge: 0, timeout: REFINE_WINDOW_MS }
+  );
+
+  return {
+    stop: () => {
+      clearTimeout(timer);
+      finish();
+    },
+  };
+}
+
+function distanceMetres(lat1, lon1, lat2, lon2) {
+  const R = 6371000;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180;
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos((lat1 * Math.PI) / 180) *
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+/** Smoothly glides a Leaflet marker to a new position (ease-out cubic). */
+function animateMarkerTo(marker, toLatLng, duration = 650) {
+  if (!marker) return;
+  const from = marker.getLatLng();
+  const to = L.latLng(toLatLng);
+  if (from.equals(to)) return;
+
+  if (marker._tcAnimFrame) {
+    cancelAnimationFrame(marker._tcAnimFrame);
+    marker._tcAnimFrame = null;
+  }
+
+  const start = performance.now();
+
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - t, 3);
+    const lat = from.lat + (to.lat - from.lat) * eased;
+    const lng = from.lng + (to.lng - from.lng) * eased;
+    marker.setLatLng([lat, lng]);
+    if (t < 1) {
+      marker._tcAnimFrame = requestAnimationFrame(step);
+    } else {
+      marker._tcAnimFrame = null;
+    }
+  };
+
+  marker._tcAnimFrame = requestAnimationFrame(step);
 }
 
 // ─────────────────────────────────────────────
@@ -148,9 +222,12 @@ const injectClinicFinderStyles = () => {
     .cf-sheet{background:var(--surface,#fff);width:100%;max-width:560px;max-height:92vh;border-radius:20px 20px 0 0;display:flex;flex-direction:column;overflow:hidden;animation:cfUp 300ms ease;box-shadow:0 14px 48px rgba(11,23,38,0.24);}
     @media(min-width:768px){.cf-sheet{border-radius:16px;max-height:85vh;}}
     @keyframes cfUp{from{transform:translateY(24px);opacity:0;}to{transform:none;opacity:1;}}
-    .cf-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border,#dde4ea);flex-shrink:0;}
+    .cf-head{display:flex;align-items:flex-start;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--border,#dde4ea);flex-shrink:0;gap:12px;}
     .cf-title{font-family:var(--display,serif);font-size:18px;font-weight:700;color:var(--ink,#0b1726);}
     .cf-sub{font-size:12px;color:var(--muted,#5b6b7c);margin-top:2px;}
+    .cf-accuracy-row{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--teal-d,#0a6b62);font-weight:700;margin-top:4px;}
+    .cf-accuracy-dot{width:6px;height:6px;border-radius:50%;background:var(--teal,#0c8a7e);flex-shrink:0;animation:cfDotPulse 1.2s ease-in-out infinite;}
+    @keyframes cfDotPulse{0%,100%{opacity:0.35;}50%{opacity:1;}}
     .cf-close-btn{border:none;background:var(--border-l,#eef2f5);border-radius:8px;padding:8px;cursor:pointer;display:flex;color:var(--muted,#5b6b7c);flex-shrink:0;}
     .cf-close-btn:hover{background:var(--border,#dde4ea);}
     .cf-map-wrap{position:relative;flex-shrink:0;}
@@ -165,6 +242,7 @@ const injectClinicFinderStyles = () => {
     .cf-state-text{font-size:13px;color:var(--muted,#5b6b7c);line-height:1.55;}
     .cf-retry-btn{margin-top:6px;padding:11px 22px;border-radius:10px;border:none;font-weight:600;font-size:14px;cursor:pointer;background:linear-gradient(160deg,var(--teal,#0c8a7e) 0%,var(--teal-d,#0a6b62) 100%);color:#fff;}
     .cf-directions-btn{display:block;width:100%;text-align:center;padding:13px 18px;border-radius:10px;font-weight:600;font-size:14px;text-decoration:none;background:linear-gradient(160deg,var(--teal,#0c8a7e) 0%,var(--teal-d,#0a6b62) 100%);color:#fff;margin-bottom:14px;box-sizing:border-box;}
+    .cf-updating-banner{display:flex;align-items:center;gap:9px;padding:9px 12px;margin-bottom:12px;background:var(--teal-xl,#eefcfa);border:1px solid var(--teal-l,#bdf0ea);border-radius:10px;font-size:12px;font-weight:600;color:var(--teal-dd,#074d47);}
     .cf-list{display:flex;flex-direction:column;gap:8px;}
     .cf-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border,#dde4ea);border-radius:14px;}
     .cf-item.nearest{border-color:var(--teal,#0c8a7e);background:var(--teal-xl,#eefcfa);}
@@ -174,7 +252,9 @@ const injectClinicFinderStyles = () => {
     .cf-item-dist{font-size:12px;font-weight:800;color:var(--teal-d,#0a6b62);white-space:nowrap;}
     .cf-item-directions{border:none;background:var(--border-l,#eef2f5);color:var(--ink-2,#1a2a3c);border-radius:8px;padding:7px 12px;font-size:11px;font-weight:700;cursor:pointer;text-decoration:none;white-space:nowrap;}
     .cf-item-directions:hover{background:var(--border,#dde4ea);}
-    .cf-user-dot{width:16px;height:16px;border-radius:50%;background:#2f6fed;border:3px solid #fff;box-shadow:0 0 0 2px rgba(47,111,237,0.45);cursor:grab;}
+    .cf-user-dot{position:relative;z-index:1;width:16px;height:16px;border-radius:50%;background:#2f6fed;border:3px solid #fff;box-shadow:0 0 0 2px rgba(47,111,237,0.45);cursor:grab;}
+    .cf-user-marker.refining .cf-user-dot::after{content:'';position:absolute;inset:-11px;border-radius:50%;background:rgba(47,111,237,0.35);animation:cfLocatePulse 1.6s ease-out infinite;z-index:-1;}
+    @keyframes cfLocatePulse{0%{transform:scale(0.4);opacity:0.8;}100%{transform:scale(2.4);opacity:0;}}
     .cf-badge-nearest{display:inline-flex;padding:2px 8px;border-radius:99px;background:var(--teal,#0c8a7e);color:#fff;font-size:9px;font-weight:800;text-transform:uppercase;letter-spacing:0.05em;margin-left:8px;}
     .cf-spinner{width:34px;height:34px;border-radius:50%;border:3px solid var(--border,#dde4ea);border-top-color:var(--teal,#0c8a7e);animation:cfSpin 0.8s linear infinite;}
     .cf-spinner-sm{width:16px;height:16px;border-width:2px;flex-shrink:0;}
@@ -234,61 +314,44 @@ export default function ClinicFinder({ onClose }) {
   const [errorMsg, setErrorMsg] = useState("");
   const [position, setPosition] = useState(null);
   const [accuracy, setAccuracy] = useState(null);
+  const [refining, setRefining] = useState(false);
+  const [resultsUpdating, setResultsUpdating] = useState(false);
   const [clinics, setClinics] = useState([]);
 
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
-  const markersLayer = useRef(null);
+  const clinicLayerRef = useRef(null);
+  const userMarkerRef = useRef(null);
+  const accuracyCircleRef = useRef(null);
+  const refineHandleRef = useRef(null);
+  const lastSearchedPosRef = useRef(null);
+  const skipNextAnimationRef = useRef(true);
+  const statusRef = useRef(status);
+  const handleManualPositionRef = useRef(() => {});
 
   useEffect(() => { injectClinicFinderStyles(); }, []);
+  useEffect(() => { statusRef.current = status; }, [status]);
 
-  // ── Acquire the most accurate device location available ──
-  const getLocation = useCallback(() => {
-    setStatus("locating");
-    setErrorMsg("");
-    setClinics([]);
+  // ── Clinic search (foreground = blocking UI, background = silent refresh) ──
+  const runClinicSearch = useCallback(async (lat, lon, { background = false } = {}) => {
+    lastSearchedPosRef.current = { lat, lon };
 
-    getBestPosition()
-      .then(({ lat, lon, accuracy: acc }) => {
-        setPosition({ lat, lon });
-        setAccuracy(acc);
-        setStatus("searching");
-      })
-      .catch((geoErr) => {
-        console.error("ClinicFinder: geolocation error:", geoErr.message);
-        setStatus("error");
-        setErrorMsg(
-          geoErr.code === 1
-            ? "Location access was denied. Enable location permissions in your browser settings and try again."
-            : "Could not determine your location. Check your device's location settings and try again."
-        );
-      });
-  }, []);
+    if (background) {
+      setResultsUpdating(true);
+    } else {
+      setStatus("searching");
+      setErrorMsg("");
+      setClinics([]);
+    }
 
-  useEffect(() => { getLocation(); }, [getLocation]);
-
-  // ── Manual correction: dragging the pin re-searches from that exact spot ──
-  const handleManualPosition = useCallback((lat, lon) => {
-    setPosition({ lat, lon });
-    setAccuracy(null); // a manually placed pin is treated as user-confirmed
-    setClinics([]);
-    setStatus("searching");
-  }, []);
-
-  // ── Search for clinics whenever we have a position to search from ──
-  useEffect(() => {
-    if (status !== "searching" || !position) return;
-    let cancelled = false;
-
-    const run = async () => {
-      try {
-        const places = await fetchNearbyClinics(position.lat, position.lon);
-        if (cancelled) return;
-        setClinics(places);
-        setStatus("ready");
-      } catch (err) {
-        if (cancelled) return;
-        console.error("ClinicFinder: search failed:", err.message);
+    try {
+      const places = await fetchNearbyClinics(lat, lon);
+      setClinics(places);
+      setStatus("ready");
+      setErrorMsg("");
+    } catch (err) {
+      console.error("ClinicFinder: search failed:", err.message);
+      if (!background) {
         setStatus("error");
         if (err.status === 404) {
           setErrorMsg("No hospitals, clinics, or pharmacies were found within 6 km of this location.");
@@ -298,15 +361,98 @@ export default function ClinicFinder({ onClose }) {
           setErrorMsg("We couldn't load nearby clinics right now. Please check your connection and try again.");
         }
       }
-    };
+      // A background refresh triggered by GPS refinement fails silently —
+      // the previously loaded results stay on screen instead of being
+      // replaced with an error the person didn't ask for.
+    } finally {
+      if (background) setResultsUpdating(false);
+    }
+  }, []);
 
-    run();
-    return () => { cancelled = true; };
-  }, [status, position]);
+  // ── Acquire device location: fast fix first, then background refinement ──
+  const getLocation = useCallback(() => {
+    if (refineHandleRef.current) {
+      refineHandleRef.current.stop();
+      refineHandleRef.current = null;
+    }
 
-  // ── Map lifecycle: create once, destroy on unmount only ──
+    setStatus("locating");
+    setErrorMsg("");
+    setClinics([]);
+    setRefining(false);
+    setAccuracy(null);
+    skipNextAnimationRef.current = true;
+
+    getFastPosition()
+      .then(({ lat, lon, accuracy: acc }) => {
+        setPosition({ lat, lon });
+        setAccuracy(acc);
+        runClinicSearch(lat, lon);
+
+        // Keep refining quietly in the background so the pin settles onto
+        // the person's exact position, the way Google Maps / Uber do.
+        setRefining(true);
+        refineHandleRef.current = startRefinement({
+          startAccuracy: acc,
+          onImprove: ({ lat: rLat, lon: rLon, accuracy: rAcc }) => {
+            skipNextAnimationRef.current = false;
+            setPosition({ lat: rLat, lon: rLon });
+            setAccuracy(rAcc);
+
+            const last = lastSearchedPosRef.current;
+            const movedM = last ? distanceMetres(last.lat, last.lon, rLat, rLon) : Infinity;
+            if (movedM > MOVE_RESEARCH_THRESHOLD_M) {
+              runClinicSearch(rLat, rLon, { background: statusRef.current === "ready" });
+            }
+          },
+          onDone: () => setRefining(false),
+        });
+      })
+      .catch((geoErr) => {
+        setRefining(false);
+        setStatus("error");
+        if (geoErr.code === "unsupported") {
+          setErrorMsg("Location services are not supported on this device or browser.");
+        } else if (geoErr.code === 1) {
+          setErrorMsg("Location access was denied. Enable location permissions for this site in your browser settings and try again.");
+        } else {
+          setErrorMsg("Could not determine your location. Check your device's location settings and try again.");
+        }
+      });
+  }, [runClinicSearch]);
+
+  useEffect(() => { getLocation(); }, [getLocation]);
+
+  // ── Manual correction: dragging the pin overrides refinement entirely ──
+  const handleManualPosition = useCallback((lat, lon) => {
+    if (refineHandleRef.current) {
+      refineHandleRef.current.stop();
+      refineHandleRef.current = null;
+    }
+    setRefining(false);
+    skipNextAnimationRef.current = true;
+    setPosition({ lat, lon });
+    setAccuracy(null);
+    runClinicSearch(lat, lon);
+  }, [runClinicSearch]);
+
+  useEffect(() => { handleManualPositionRef.current = handleManualPosition; }, [handleManualPosition]);
+
+  const retrySearch = () => {
+    if (position) {
+      runClinicSearch(position.lat, position.lon);
+    } else {
+      getLocation();
+    }
+  };
+
+  // ── Stop any in-flight refinement and tear down the map on unmount ──
   useEffect(() => {
     return () => {
+      if (refineHandleRef.current) {
+        refineHandleRef.current.stop();
+        refineHandleRef.current = null;
+      }
       if (mapInstance.current) {
         mapInstance.current.remove();
         mapInstance.current = null;
@@ -314,79 +460,121 @@ export default function ClinicFinder({ onClose }) {
     };
   }, []);
 
-  // ── Render/update markers whenever position, accuracy, or results change ──
+  // ── Create the map + user marker once, then glide the marker on every
+  //    subsequent position update instead of recreating it ──
   useEffect(() => {
     if (!position || !mapRef.current) return;
 
     if (!mapInstance.current) {
       mapInstance.current = L.map(mapRef.current, { zoomControl: true }).setView(
-        [position.lat, position.lon], 15
+        [position.lat, position.lon], 16
       );
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         maxZoom: 19,
         attribution: "&copy; OpenStreetMap contributors",
       }).addTo(mapInstance.current);
-      markersLayer.current = L.layerGroup().addTo(mapInstance.current);
+
+      clinicLayerRef.current = L.layerGroup().addTo(mapInstance.current);
+
+      const marker = L.marker([position.lat, position.lon], {
+        icon: USER_ICON,
+        draggable: true,
+        autoPan: true,
+        zIndexOffset: 1000,
+      }).addTo(mapInstance.current);
+
+      marker.on("dragend", (e) => {
+        const { lat, lng } = e.target.getLatLng();
+        handleManualPositionRef.current(lat, lng);
+      });
+
+      userMarkerRef.current = marker;
+      setTimeout(() => mapInstance.current?.invalidateSize(), 150);
+      return;
     }
 
-    setTimeout(() => mapInstance.current?.invalidateSize(), 150);
+    const marker = userMarkerRef.current;
+    if (!marker) return;
 
-    markersLayer.current.clearLayers();
-
-    const userMarker = L.marker([position.lat, position.lon], {
-      icon: USER_ICON,
-      draggable: true,
-      autoPan: true,
-    }).addTo(markersLayer.current);
-
-    userMarker.bindPopup(
-      accuracy
-        ? `Your location · accurate to ~${Math.round(accuracy)}m<br/><em>Drag to correct if needed</em>`
-        : `Your location<br/><em>Drag to correct if needed</em>`
-    );
-
-    userMarker.on("dragend", (e) => {
-      const { lat, lng } = e.target.getLatLng();
-      handleManualPosition(lat, lng);
-    });
-
-    if (accuracy && accuracy > 15) {
-      L.circle([position.lat, position.lon], {
-        radius: accuracy,
-        color: "#2f6fed",
-        weight: 1,
-        fillColor: "#2f6fed",
-        fillOpacity: 0.08,
-      }).addTo(markersLayer.current);
+    if (skipNextAnimationRef.current) {
+      marker.setLatLng([position.lat, position.lon]);
+      skipNextAnimationRef.current = false;
+    } else {
+      animateMarkerTo(marker, [position.lat, position.lon], 650);
+      mapInstance.current.flyTo(
+        [position.lat, position.lon],
+        mapInstance.current.getZoom(),
+        { duration: 0.65 }
+      );
     }
+  }, [position]);
 
-    if (status === "ready" && clinics.length > 0) {
+  // ── Pulsing halo while we're still locking onto the exact position ──
+  useEffect(() => {
+    const el = userMarkerRef.current?.getElement?.();
+    if (el) el.classList.toggle("refining", refining);
+  }, [refining, position]);
+
+  // ── Popup text reflects current accuracy / refinement state ──
+  useEffect(() => {
+    const marker = userMarkerRef.current;
+    if (!marker || !position) return;
+    const content = refining
+      ? "Pinpointing your exact location…<br/><em>Drag anytime to set it manually</em>"
+      : accuracy != null
+      ? `Your location · accurate to ~${Math.round(accuracy)}m<br/><em>Drag to correct if needed</em>`
+      : "Your location (set manually)<br/><em>Drag to adjust</em>";
+    marker.bindPopup(content);
+  }, [position, accuracy, refining]);
+
+  // ── Accuracy circle tracks the marker's current precision ──
+  useEffect(() => {
+    if (!mapInstance.current || !position) return;
+    if (accuracy && accuracy > 12) {
+      const latlng = [position.lat, position.lon];
+      if (accuracyCircleRef.current) {
+        accuracyCircleRef.current.setLatLng(latlng);
+        accuracyCircleRef.current.setRadius(accuracy);
+      } else {
+        accuracyCircleRef.current = L.circle(latlng, {
+          radius: accuracy,
+          color: "#2f6fed",
+          weight: 1,
+          fillColor: "#2f6fed",
+          fillOpacity: 0.08,
+          interactive: false,
+        }).addTo(mapInstance.current);
+      }
+    } else if (accuracyCircleRef.current) {
+      mapInstance.current.removeLayer(accuracyCircleRef.current);
+      accuracyCircleRef.current = null;
+    }
+  }, [position, accuracy]);
+
+  // ── Clinic markers + bounds fit — only when the results list itself changes ──
+  useEffect(() => {
+    if (!mapInstance.current || !clinicLayerRef.current) return;
+    clinicLayerRef.current.clearLayers();
+    if (status === "ready" && clinics.length > 0 && position) {
       clinics.forEach((c, i) => {
         L.marker([c.lat, c.lon])
-          .addTo(markersLayer.current)
+          .addTo(clinicLayerRef.current)
           .bindPopup(`<strong>${c.name}</strong><br/>${c.type}${i === 0 ? " · Nearest" : ""}`);
       });
       const bounds = L.latLngBounds([
         [position.lat, position.lon],
         ...clinics.slice(0, 8).map((c) => [c.lat, c.lon]),
       ]);
-      mapInstance.current.fitBounds(bounds, { padding: [32, 32] });
-    } else {
-      mapInstance.current.setView([position.lat, position.lon], mapInstance.current.getZoom() || 15);
+      mapInstance.current.fitBounds(bounds, { padding: [32, 32], animate: true, duration: 0.6 });
     }
-  }, [position, accuracy, status, clinics, handleManualPosition]);
+    // Intentionally excludes `position` — refits only when the results
+    // themselves change, not on every small GPS refinement tick, which
+    // would otherwise cause the map to jump around as accuracy improves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, clinics]);
 
   const nearest = clinics[0];
   const showMap = !!position;
-
-  const retrySearch = () => {
-    if (position) {
-      setClinics([]);
-      setStatus("searching");
-    } else {
-      getLocation();
-    }
-  };
 
   return (
     <div className="cf-overlay" onClick={onClose}>
@@ -395,8 +583,24 @@ export default function ClinicFinder({ onClose }) {
           <div>
             <div className="cf-title">Nearby Clinics & Hospitals</div>
             <div className="cf-sub">
-              {status === "ready" ? `${clinics.length} facilities found nearby` : "Finding facilities near you"}
+              {status === "ready"
+                ? `${clinics.length} facilities found nearby`
+                : status === "locating"
+                ? "Finding your location"
+                : status === "searching"
+                ? "Finding facilities near you"
+                : ""}
             </div>
+            {position && status !== "error" && (refining || accuracy != null) && (
+              <div className="cf-accuracy-row">
+                {refining && <span className="cf-accuracy-dot" />}
+                {refining
+                  ? "Refining your exact location…"
+                  : accuracy != null
+                  ? `Accurate to ~${Math.round(accuracy)}m`
+                  : "Location set manually"}
+              </div>
+            )}
           </div>
           <button onClick={onClose} aria-label="Close" className="cf-close-btn">
             <CloseIcon />
@@ -409,8 +613,8 @@ export default function ClinicFinder({ onClose }) {
             <button
               className="cf-recenter-btn"
               onClick={getLocation}
-              aria-label="Use my current device location"
-              title="Use my current device location"
+              aria-label="Refresh my current device location"
+              title="Refresh my current device location"
             >
               <CrosshairIcon />
             </button>
@@ -421,7 +625,9 @@ export default function ClinicFinder({ onClose }) {
           <div className="cf-hint">
             <InfoIcon />
             <div className="cf-hint-text">
-              Drag the blue pin on the map to your exact location for the most accurate results.
+              {refining
+                ? "We're locking onto your exact position — the pin settles automatically."
+                : "Drag the blue pin on the map to your exact location for the most accurate results."}
             </div>
           </div>
         )}
@@ -430,7 +636,7 @@ export default function ClinicFinder({ onClose }) {
           {status === "locating" && (
             <div className="cf-state">
               <div className="cf-spinner" />
-              <div className="cf-state-text">Getting your precise location...</div>
+              <div className="cf-state-text">Getting your location...</div>
             </div>
           )}
 
@@ -452,8 +658,15 @@ export default function ClinicFinder({ onClose }) {
 
           {status === "ready" && (
             <>
+              {resultsUpdating && (
+                <div className="cf-updating-banner">
+                  <div className="cf-spinner cf-spinner-sm" />
+                  Updating results for your exact location…
+                </div>
+              )}
+
               {nearest && (
-                <a
+                
                   href={directionsUrl(position.lat, position.lon, nearest.lat, nearest.lon)}
                   target="_blank"
                   rel="noopener noreferrer"
@@ -477,7 +690,7 @@ export default function ClinicFinder({ onClose }) {
                     </div>
                     <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 6 }}>
                       <div className="cf-item-dist">{c.distanceKm.toFixed(1)} km</div>
-                      <a
+                      
                         href={directionsUrl(position.lat, position.lon, c.lat, c.lon)}
                         target="_blank"
                         rel="noopener noreferrer"
