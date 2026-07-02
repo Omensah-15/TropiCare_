@@ -1,6 +1,6 @@
 # TropiCare
 
-An AI symptom checker that delivers early tropical disease risk assessment, personalized recommendations, and intelligent symptom triage for faster identification by patients and clinicians.
+An AI symptom checker built to help patients and clinicians identify tropical diseases faster with clear risk levels and personalised recommendations.
 
 **LIVE APP:** **[TropiCare](https://tropi-care.vercel.app/)**
 
