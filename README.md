@@ -39,9 +39,6 @@ An AI health assessment platform that supports early tropical disease risk asses
 </table>
 
 ---
-![image alt](https://github.com/Omensah-15/TropiCare_/blob/71ec727e57e15c25276751c517ccf1a67cf1aff5/assets/clinicfinder_snap.png)
-> For Medium and High risk results, locate nearby hospitals and clinics with one tap and get directions.
----
 
 ![image alt](https://github.com/Omensah-15/TropiCare_/blob/56523bc5213ed47d35315f4aa111a40b6a2908e8/assets/mobileview.png)
 > Mobile View
