@@ -1035,6 +1035,13 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
 # server controls its own timeouts, retries, and caching. Results are
 # cached in Redis per rounded coordinate so repeat lookups near the same
 # location do not re-hit the upstream data source.
+#
+# Search radius is split by facility type: hospitals are far sparser than
+# clinics and pharmacies, so they are searched over a wider radius. A
+# single shared radius previously meant hospitals several kilometres away
+# were silently missed while pharmacies close by dominated the results —
+# this fixes that by giving each category its own search distance and
+# merging everything into one ranked list at the end.
 # -----------------------------------------------------------------
 
 CLINIC_DATA_SOURCES: List[str] = [
@@ -1042,22 +1049,33 @@ CLINIC_DATA_SOURCES: List[str] = [
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.osm.ch/api/interpreter",
 ]
-CLINIC_SEARCH_RADIUS_M = 6000
-CLINIC_SOURCE_TIMEOUT_S = 12
-CLINIC_CACHE_TTL_S = 21600  # 6 hours
+HOSPITAL_SEARCH_RADIUS_M = 15000   # hospitals are sparser — search further out
+LOCAL_SEARCH_RADIUS_M    = 6000    # clinics, doctors' offices, pharmacies
+CLINIC_SOURCE_TIMEOUT_S  = 12
+CLINIC_CACHE_TTL_S       = 21600   # 6 hours
+
+# Terms that reliably indicate government/public ownership in OSM data for
+# Ghanaian and West African facilities (Ministry of Health, regional/district
+# hospitals, teaching hospitals run by public universities, etc).
+_GOV_OPERATOR_TYPE_TERMS = {"government", "public", "national", "state", "municipal"}
+_GOV_OPERATOR_NAME_HINTS = (
+    "ministry of health", "moh", "government", "municipal", "district assembly",
+    "regional hospital", "district hospital", "teaching hospital", "national health",
+)
+_PRIVATE_OPERATOR_TYPE_TERMS = {"private", "ngo", "religious", "community", "cooperative"}
 
 
-def _build_clinic_query(lat: float, lon: float, radius_m: int) -> str:
+def _build_clinic_query(lat: float, lon: float, hospital_radius_m: int, local_radius_m: int) -> str:
     return (
-        f'[out:json][timeout:20];('
-        f'node["amenity"="hospital"](around:{radius_m},{lat},{lon});'
-        f'way["amenity"="hospital"](around:{radius_m},{lat},{lon});'
-        f'node["amenity"="clinic"](around:{radius_m},{lat},{lon});'
-        f'way["amenity"="clinic"](around:{radius_m},{lat},{lon});'
-        f'node["amenity"="doctors"](around:{radius_m},{lat},{lon});'
-        f'node["amenity"="pharmacy"](around:{radius_m},{lat},{lon});'
-        f'node["healthcare"="pharmacy"](around:{radius_m},{lat},{lon});'
-        f');out center 40;'
+        f'[out:json][timeout:25];('
+        f'node["amenity"="hospital"](around:{hospital_radius_m},{lat},{lon});'
+        f'way["amenity"="hospital"](around:{hospital_radius_m},{lat},{lon});'
+        f'node["amenity"="clinic"](around:{local_radius_m},{lat},{lon});'
+        f'way["amenity"="clinic"](around:{local_radius_m},{lat},{lon});'
+        f'node["amenity"="doctors"](around:{local_radius_m},{lat},{lon});'
+        f'node["amenity"="pharmacy"](around:{local_radius_m},{lat},{lon});'
+        f'node["healthcare"="pharmacy"](around:{local_radius_m},{lat},{lon});'
+        f');out center 60;'
     )
 
 
@@ -1092,7 +1110,7 @@ async def _query_clinic_source(
 
 
 async def _fetch_clinic_elements(lat: float, lon: float) -> List[dict]:
-    query = _build_clinic_query(lat, lon, CLINIC_SEARCH_RADIUS_M)
+    query = _build_clinic_query(lat, lon, HOSPITAL_SEARCH_RADIUS_M, LOCAL_SEARCH_RADIUS_M)
     async with aiohttp.ClientSession() as session:
         for source in CLINIC_DATA_SOURCES:
             elements = await _query_clinic_source(session, source, query)
@@ -1110,6 +1128,38 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
         + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2) ** 2
     )
     return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def _classify_facility(tags: dict) -> str:
+    """
+    Maps raw OSM tags to a clean, user-facing facility category. Hospitals
+    are further split into Government / Private where OSM ownership tags
+    (or well-known operator name patterns used in Ghanaian OSM data) make
+    that determination possible; otherwise they fall back to a neutral
+    "Hospital" label rather than guessing.
+    """
+    amenity    = tags.get("amenity")
+    healthcare = tags.get("healthcare")
+
+    if amenity == "hospital":
+        operator_type = (tags.get("operator:type") or tags.get("ownership") or "").strip().lower()
+        operator_name = (tags.get("operator") or tags.get("name") or "").strip().lower()
+
+        if operator_type in _GOV_OPERATOR_TYPE_TERMS:
+            return "Government Hospital"
+        if operator_type in _PRIVATE_OPERATOR_TYPE_TERMS:
+            return "Private Hospital"
+        if any(hint in operator_name for hint in _GOV_OPERATOR_NAME_HINTS):
+            return "Government Hospital"
+        return "Hospital"
+
+    if amenity == "clinic":
+        return "Clinic"
+    if amenity == "doctors":
+        return "Doctor's Office"
+    if amenity == "pharmacy" or healthcare == "pharmacy":
+        return "Pharmacy"
+    return "Health Facility"
 
 
 def _extract_clinic_places_raw(elements: List[dict]) -> List[dict]:
@@ -1138,23 +1188,12 @@ def _extract_clinic_places_raw(elements: List[dict]) -> List[dict]:
 
         tags = el.get("tags", {})
         name = tags.get("name") or tags.get("name:en") or "Unnamed facility"
-        amenity = tags.get("amenity")
-        healthcare = tags.get("healthcare")
-
-        if amenity == "hospital":
-            facility_type = "Hospital"
-        elif amenity == "clinic":
-            facility_type = "Clinic"
-        elif amenity == "doctors":
-            facility_type = "Doctor's Office"
-        elif amenity == "pharmacy" or healthcare == "pharmacy":
-            facility_type = "Pharmacy"
-        else:
-            facility_type = "Health Facility"
+        facility_type = _classify_facility(tags)
 
         address = ", ".join(
             p for p in (tags.get("addr:street"), tags.get("addr:city") or tags.get("addr:suburb")) if p
         )
+        phone = tags.get("phone") or tags.get("contact:phone") or ""
 
         dedupe_key = f"{name}-{round(lat, 5)}-{round(lon, 5)}"
         if dedupe_key in seen:
@@ -1166,6 +1205,7 @@ def _extract_clinic_places_raw(elements: List[dict]) -> List[dict]:
             "name":    name,
             "type":    facility_type,
             "address": address,
+            "phone":   phone,
             "lat":     lat,
             "lon":     lon,
         })
@@ -1174,14 +1214,18 @@ def _extract_clinic_places_raw(elements: List[dict]) -> List[dict]:
 
 
 def _rank_places_by_distance(
-    places: List[dict], user_lat: float, user_lon: float, limit: int = 15
+    places: List[dict], user_lat: float, user_lon: float, limit: int = 20
 ) -> List[dict]:
     """
     Computes distance from the exact coordinates of this specific request
     and sorts by it. Called on every request — cache hit or miss — so
     "nearest" is always correct for wherever the person actually is right
     now, never a stale distance from whatever coordinates first populated
-    the cache.
+    the cache. Hospitals are searched over a wider radius than local
+    facilities (see HOSPITAL_SEARCH_RADIUS_M / LOCAL_SEARCH_RADIUS_M above),
+    so a hospital further away can still legitimately outrank it here —
+    everything is ranked purely by actual distance, exactly like Google
+    Maps / Uber do, rather than grouped by category first.
     """
     ranked = [
         {**p, "distance_km": round(_haversine_km(user_lat, user_lon, p["lat"], p["lon"]), 2)}
@@ -1843,7 +1887,8 @@ async def analyze(
 #
 # See the "CLINIC FINDER (server-side proxy)" section above for why this
 # proxies to the upstream data source rather than the frontend calling it
-# directly.
+# directly, and for why hospitals use a wider search radius than clinics
+# and pharmacies.
 # -----------------------------------------------------------------
 
 @app.get("/api/v1/clinics/nearby")
@@ -1857,7 +1902,7 @@ async def clinics_nearby(
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
         raise HTTPException(status_code=400, detail="Invalid coordinates")
 
-    cache_key = f"clinics:elements:{round(lat, 2)}:{round(lon, 2)}"
+    cache_key = f"clinics:elements:v2:{round(lat, 2)}:{round(lon, 2)}"
     cached = await cache_get(cache_key, key_type="clinics")
 
     raw_places: Optional[List[dict]] = None
@@ -1876,14 +1921,14 @@ async def clinics_nearby(
     if not raw_places:
         raise HTTPException(
             status_code=404,
-            detail="No hospitals, clinics, or pharmacies were found within 6 km of this location.",
+            detail="No hospitals, clinics, or pharmacies were found near this location.",
         )
 
     # Distance is always computed fresh against this request's exact
     # coordinates, whether the facility list came from cache or a live
     # fetch, so "nearest" is never stale relative to where the person
     # actually is right now.
-    ranked = _rank_places_by_distance(raw_places, lat, lon, limit=15)
+    ranked = _rank_places_by_distance(raw_places, lat, lon, limit=20)
     return {"places": ranked}
 
 
