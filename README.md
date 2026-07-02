@@ -1,6 +1,6 @@
 # TropiCare
 
-AI health assessment platform that analyzes symptoms, predicts tropical disease risk, delivers personalized guidance, generates shareable health reports, and connects users to nearby healthcare facilities.
+AI health assessment platform that analyzes symptoms, predicts tropical disease risk, delivers personalized guidance, generates shareable health reports, and connects users to nearby healthcare facilities for timely, informed healthcare decisions.
 
 **LIVE APP:** **[TropiCare](https://tropi-care.vercel.app/)**
 
