@@ -34,7 +34,7 @@ An AI health assessment platform that supports early tropical disease risk asses
 
   <tr>
     <td colspan="2" align="center" style="padding-top:12px;">
-      <strong>One-tap access to nearby clinics and hospitals with real-time directions.</strong>
+      Instantly find nearby clinics and hospitals with real-time navigation.</strong>
     </td>
   </tr>
 </table>
