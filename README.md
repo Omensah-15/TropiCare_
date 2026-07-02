@@ -13,6 +13,7 @@ An AI health assessment platform that supports early tropical disease risk asses
 </div> 
 
 ---
+#### Clinic Finder & Navigation
 <table align="center">
   <tr>
     <td align="center">
