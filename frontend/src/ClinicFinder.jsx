@@ -55,30 +55,78 @@ const USER_ICON = L.divIcon({
 // ─────────────────────────────────────────────
 // LOCATION ACQUISITION CONSTANTS
 // ─────────────────────────────────────────────
-const FAST_FIX_TIMEOUT_MS = 8000;      // how long we wait for the first usable fix
-const FAST_FIX_MAX_AGE_MS = 8000;      // accept a recent cached fix for a fast first paint
-const REFINE_WINDOW_MS = 12000;        // how long we keep listening for a better fix
-const REFINE_TARGET_ACCURACY_M = 15;   // stop refining once we're this precise
-const MOVE_RESEARCH_THRESHOLD_M = 35;  // only re-fetch clinics if the correction moved this far
+const FAST_FIX_TIMEOUT_MS = 7000;        // how long we wait for the first high-accuracy fix
+const FAST_FIX_MAX_AGE_MS = 5000;        // accept a recent cached fix for a fast first paint
+const FALLBACK_FIX_TIMEOUT_MS = 6000;    // second attempt, network/Wi-Fi based, for devices with no GPS lock
+const REFINE_WINDOW_MS = 16000;          // how long we keep listening for a better fix
+const REFINE_TARGET_ACCURACY_M = 10;     // stop refining once we're this precise
+const MOVE_RESEARCH_THRESHOLD_M = 35;    // only re-fetch clinics if the correction moved this far
+const MAX_PLAUSIBLE_JUMP_M = 3000;       // ignore a refinement fix that teleports further than this
+                                          // in one tick unless it comes with a genuinely tight accuracy —
+                                          // this is what stops the pin from jumping across town on a
+                                          // noisy Wi-Fi/cell reading
 
 // ─────────────────────────────────────────────
 // GEOLOCATION HELPERS
 // ─────────────────────────────────────────────
-function getFastPosition() {
+
+/** True when the runtime can legally use the Geolocation API at all. */
+function geolocationEnvironmentOk() {
+  if (!navigator.geolocation) return false;
+  // Browsers only expose geolocation on HTTPS (or localhost during dev).
+  if (window.isSecureContext === false) return false;
+  return true;
+}
+
+function getPositionOnce(options) {
   return new Promise((resolve, reject) => {
-    if (!navigator.geolocation) {
-      reject(Object.assign(new Error("Geolocation is not supported."), { code: "unsupported" }));
-      return;
-    }
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         const { latitude, longitude, accuracy } = pos.coords;
         resolve({ lat: latitude, lon: longitude, accuracy });
       },
       (err) => reject(err),
-      { enableHighAccuracy: true, timeout: FAST_FIX_TIMEOUT_MS, maximumAge: FAST_FIX_MAX_AGE_MS }
+      options
     );
   });
+}
+
+/**
+ * Resolves the first usable fix as fast as possible. Tries a high-accuracy
+ * GPS read first (best on phones); if that fails or times out for a reason
+ * other than the person denying permission, it immediately falls back to a
+ * network/Wi-Fi based read, which is what most laptops and desktops rely on
+ * since they have no GPS radio at all. This mirrors how Google Maps and
+ * Uber degrade gracefully across device types instead of just failing.
+ */
+async function getFastPosition() {
+  if (!geolocationEnvironmentOk()) {
+    const reason = !navigator.geolocation ? "unsupported" : "insecure";
+    throw Object.assign(new Error("Geolocation is not available."), { code: reason });
+  }
+
+  try {
+    return await getPositionOnce({
+      enableHighAccuracy: true,
+      timeout: FAST_FIX_TIMEOUT_MS,
+      maximumAge: FAST_FIX_MAX_AGE_MS,
+    });
+  } catch (err) {
+    // Permission denial should surface immediately — retrying will not help.
+    if (err.code === 1) throw err;
+
+    // Any other failure (timeout, unavailable GPS radio, indoor signal loss)
+    // — fall back once to a coarser, network-based fix before giving up.
+    try {
+      return await getPositionOnce({
+        enableHighAccuracy: false,
+        timeout: FALLBACK_FIX_TIMEOUT_MS,
+        maximumAge: 120000,
+      });
+    } catch (fallbackErr) {
+      throw fallbackErr.code ? fallbackErr : err;
+    }
+  }
 }
 
 /**
@@ -88,13 +136,15 @@ function getFastPosition() {
  * reached or the time window elapses. Returns a handle with `.stop()` so
  * the caller can cancel it early (e.g. on manual drag or unmount).
  */
-function startRefinement({ startAccuracy, onImprove, onDone }) {
+function startRefinement({ startAccuracy, startLat, startLon, onImprove, onDone }) {
   if (!navigator.geolocation) {
     onDone();
     return { stop: () => {} };
   }
 
   let best = startAccuracy;
+  let lastLat = startLat;
+  let lastLon = startLon;
   let finished = false;
   let watchId = null;
 
@@ -110,13 +160,23 @@ function startRefinement({ startAccuracy, onImprove, onDone }) {
   watchId = navigator.geolocation.watchPosition(
     (pos) => {
       const { latitude, longitude, accuracy } = pos.coords;
-      if (accuracy < best - 1) {
-        best = accuracy;
-        onImprove({ lat: latitude, lon: longitude, accuracy });
-        if (accuracy <= REFINE_TARGET_ACCURACY_M) {
-          clearTimeout(timer);
-          finish();
-        }
+      if (!(accuracy > 0) || accuracy >= best - 1) return;
+
+      // Reject readings that teleport an implausible distance in one tick
+      // unless the reading itself is genuinely precise — this is what
+      // keeps a stray Wi-Fi/cell estimate from yanking the pin across town.
+      const jumpedM = distanceMetres(lastLat, lastLon, latitude, longitude);
+      if (jumpedM > MAX_PLAUSIBLE_JUMP_M && accuracy > REFINE_TARGET_ACCURACY_M * 2) {
+        return;
+      }
+
+      best = accuracy;
+      lastLat = latitude;
+      lastLon = longitude;
+      onImprove({ lat: latitude, lon: longitude, accuracy });
+      if (accuracy <= REFINE_TARGET_ACCURACY_M) {
+        clearTimeout(timer);
+        finish();
       }
     },
     () => {
@@ -306,6 +366,58 @@ const InfoIcon = () => (
   </svg>
 );
 
+const HospitalIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+    strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+    <rect x="3" y="8" width="18" height="13" rx="1.5" />
+    <path d="M8 21V11" /><path d="M16 21V11" />
+    <path d="M12 21V8" /><path d="M9.5 4.5h5" /><path d="M12 2v5" />
+    <path d="M10.5 12.5h3M12 11v3" />
+  </svg>
+);
+
+const PharmacyIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+    strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+    <path d="M10.5 20.5a4.5 4.5 0 01-6.36-6.36l8.14-8.14a4.5 4.5 0 116.36 6.36l-3.14 3.14" />
+    <line x1="9" y1="13" x2="14" y2="18" />
+  </svg>
+);
+
+const DoctorIcon = () => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+    strokeLinecap="round" strokeLinejoin="round" width="18" height="18">
+    <path d="M6 4v5a4 4 0 008 0V4" />
+    <path d="M18 8v3a6 6 0 01-12 0V8" />
+    <circle cx="19" cy="6" r="2" />
+    <line x1="10" y1="20" x2="14" y2="20" />
+  </svg>
+);
+
+/**
+ * Visual identity per facility category — icon, tint, and short label —
+ * so the list reads at a glance the way Google Maps / Uber place pins do.
+ * Government and private hospitals get distinct colours so users can tell
+ * them apart immediately without reading the subtitle.
+ */
+function getFacilityStyle(type) {
+  switch (type) {
+    case "Government Hospital":
+      return { Icon: HospitalIcon, color: "var(--blue-d, #1d54c4)", bg: "var(--blue-l, #eaf1ff)" };
+    case "Private Hospital":
+      return { Icon: HospitalIcon, color: "var(--purple-d, #5f3fd0)", bg: "var(--purple-l, #f1ecfe)" };
+    case "Hospital":
+      return { Icon: HospitalIcon, color: "var(--red-d, #c22f2f)", bg: "var(--red-l, #fdecec)" };
+    case "Pharmacy":
+      return { Icon: PharmacyIcon, color: "var(--green-d, #16793f)", bg: "var(--green-l, #e9f9ee)" };
+    case "Doctor's Office":
+      return { Icon: DoctorIcon, color: "var(--amber-d, #b9740a)", bg: "var(--amber-l, #fef3e0)" };
+    case "Clinic":
+    default:
+      return { Icon: PinIcon, color: "var(--teal-d, #0a6b62)", bg: "var(--teal-xl, #eefcfa)" };
+  }
+}
+
 // ─────────────────────────────────────────────
 // COMPONENT
 // ─────────────────────────────────────────────
@@ -354,7 +466,7 @@ export default function ClinicFinder({ onClose }) {
       if (!background) {
         setStatus("error");
         if (err.status === 404) {
-          setErrorMsg("No hospitals, clinics, or pharmacies were found within 6 km of this location.");
+          setErrorMsg("No hospitals, clinics, or pharmacies were found near this location.");
         } else if (err.status === 401) {
           setErrorMsg("Your session has expired. Please sign in again and retry.");
         } else {
@@ -394,6 +506,8 @@ export default function ClinicFinder({ onClose }) {
         setRefining(true);
         refineHandleRef.current = startRefinement({
           startAccuracy: acc,
+          startLat: lat,
+          startLon: lon,
           onImprove: ({ lat: rLat, lon: rLon, accuracy: rAcc }) => {
             skipNextAnimationRef.current = false;
             setPosition({ lat: rLat, lon: rLon });
@@ -413,8 +527,14 @@ export default function ClinicFinder({ onClose }) {
         setStatus("error");
         if (geoErr.code === "unsupported") {
           setErrorMsg("Location services are not supported on this device or browser.");
+        } else if (geoErr.code === "insecure") {
+          setErrorMsg("Location requires a secure connection. Please reload the app over HTTPS.");
         } else if (geoErr.code === 1) {
-          setErrorMsg("Location access was denied. Enable location permissions for this site in your browser settings and try again.");
+          setErrorMsg("Location access was denied. Enable location permissions for this site in your browser or device settings, then try again.");
+        } else if (geoErr.code === 2) {
+          setErrorMsg("Your device could not determine a location fix. Check that location services are turned on and try again.");
+        } else if (geoErr.code === 3) {
+          setErrorMsg("Finding your location is taking longer than expected. Check your signal and try again.");
         } else {
           setErrorMsg("Could not determine your location. Check your device's location settings and try again.");
         }
@@ -676,9 +796,11 @@ export default function ClinicFinder({ onClose }) {
                 </a>
               )}
               <div className="cf-list">
-                {clinics.map((c, i) => (
+                {clinics.map((c, i) => {
+                  const { Icon: TypeIcon, color, bg } = getFacilityStyle(c.type);
+                  return (
                   <div key={c.id} className={`cf-item${i === 0 ? " nearest" : ""}`}>
-                    <div className="cf-item-icon"><PinIcon /></div>
+                    <div className="cf-item-icon" style={{ background: bg, color }}><TypeIcon /></div>
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div className="cf-item-name">
                         {c.name}
@@ -700,7 +822,8 @@ export default function ClinicFinder({ onClose }) {
                       </a>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </>
           )}
