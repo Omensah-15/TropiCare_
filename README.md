@@ -62,6 +62,14 @@ Example visualization showing how model confidence changes as symptoms are added
 
 ---
 
+## 🧭 Why TropiCare Exists
+
+In much of West Africa, the gap between the first symptom and access to clinical opinion is often days rather than hours. In that window, treatable conditions such as malaria and typhoid can quickly become severe.
+
+TropiCare is built to close this gap through a guided, adaptive symptom assessment that delivers a clear risk level and next-step guidance within minutes. It supports both patients and frontline staff in making early decisions and connects users directly to the nearest clinic or hospital for timely care.
+
+---
+
 ## Author
 
 **Mensah Obed**  
