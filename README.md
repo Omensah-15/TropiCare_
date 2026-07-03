@@ -55,6 +55,7 @@ Example visualization showing how model confidence changes as symptoms are added
 </div>
 
 Seamless mobile experience for guided assessments, predictions, and nearby healthcare access on the go.
+
 ---
 
 ## Author
