@@ -13,12 +13,12 @@ An AI health assessment platform that supports early tropical disease risk asses
 </div> 
 
 ---
-
-![image alt](https://github.com/Omensah-15/TropiCare_/blob/742e89a8fcd4d17dc565a75e3810b2deb7285b09/assets/confidence_evolution.png)
-> users gets to see the line chart of how the model confidence shift when symptoms are added
+### Confidence Evolution
+![Confidence evolution chart](https://github.com/Omensah-15/TropiCare_/raw/742e89a8fcd4d17dc565a75e3810b2deb7285b09/assets/confidence_evolution.png)
+> Example visualization showing how model confidence changes as symptoms are added during an assessment.
 
 ---
-#### Clinic Finder & Navigation
+### Clinic Finder & Navigation
 <table align="center">
   <tr>
     <td align="center">
