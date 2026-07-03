@@ -72,5 +72,7 @@ TropiCare is built to close this gap through a guided, adaptive symptom assessme
 
 ## Author
 
-**Mensah Obed**  
-[Email](mailto:heavenzlebron7@gmail.com) · [LinkedIn](https://www.linkedin.com/in/obed-mensah-87001237b)
+**Mensah Obed**
+
+[![Email](https://img.shields.io/badge/Email-heavenzlebron7%40gmail.com-red?style=for-the-badge&logo=gmail)](mailto:heavenzlebron7@gmail.com)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Obed_Mensah-blue?style=for-the-badge&logo=linkedin)](https://www.linkedin.com/in/obed-mensah-87001237b)
