@@ -54,6 +54,7 @@ Example visualization showing how model confidence changes as symptoms are added
   <img src="https://github.com/Omensah-15/TropiCare_/raw/56523bc5213ed47d35315f4aa111a40b6a2908e8/assets/mobileview.png" width="250">
 </div>
 
+Seamless mobile experience for guided assessments, predictions, and healthcare access on the go.
 ---
 
 ## Author
