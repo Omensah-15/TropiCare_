@@ -11,7 +11,8 @@ An AI health assessment platform that supports early tropical disease risk asses
 <div align="center">
   <img src="https://github.com/Omensah-15/TropiCare_/blob/ff7db26f79df2122a79a1f1cc54e2e9bd108abcf/assets/demovid.gif" alt="Demo" width="800">
 </div> 
-
+![image alt](https://github.com/Omensah-15/TropiCare_/blob/56523bc5213ed47d35315f4aa111a40b6a2908e8/assets/mobileview.png)
+> Mobile View
 ---
 #### Clinic Finder & Navigation
 <table align="center">
