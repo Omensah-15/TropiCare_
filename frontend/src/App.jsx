@@ -56,7 +56,13 @@ const api = {
       const message = err.detail || err.error || `HTTP ${res.status}`;
       const thrown = new Error(message);
       thrown.status = res.status;
-      thrown.retryAfter = parseInt(res.headers.get("Retry-After") || "0", 10) || null;
+      // Retry-After is not a CORS-safelisted response header, so it will
+      // only be readable here once the backend explicitly exposes it via
+      // Access-Control-Expose-Headers (see main.py CORS config). If it is
+      // ever missing (older deploy, proxy stripping headers, etc.) we fall
+      // back to null and the caller applies a safe, conservative default.
+      const retryAfterHeader = res.headers.get("Retry-After");
+      thrown.retryAfter = retryAfterHeader ? parseInt(retryAfterHeader, 10) || null : null;
       throw thrown;
     }
     return res.json();
@@ -1437,7 +1443,7 @@ export default function App() {
   const renderPage = () => {
     switch (page) {
       case "home":
-        return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} toast={toast} />;
+        return <HomeScreen user={user} onStart={startAssessment} onNav={setPage} toast={toast} onUserUpdate={updateUser} />;
       case "assessment":
         return <AssessmentLanding onStart={startAssessment} />;
       case "records":
@@ -1470,7 +1476,7 @@ export default function App() {
       case "mydata":
         return <MyDataScreen onBack={() => setPage("profile")} toast={toast} />;
       default:
-        return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} toast={toast} />;
+        return <HomeScreen user={user} onStart={startAssessment} onNav={setPage} toast={toast} onUserUpdate={updateUser} />;
     }
   };
 
@@ -1649,56 +1655,95 @@ function AuthScreen({ onLogin, toast }) {
 // ─────────────────────────────────────────────
 // RESEND COOLDOWN HOOK
 //
-// The backend rate-limits /auth/resend-verification to 3/hour. Without a
-// client-side cooldown, an impatient double- or triple-click reliably
-// burns through that allowance in seconds and then just spams 429s with
-// nothing to show for it. This starts a fixed cooldown the moment a
-// resend is attempted (success or failure) so the button disables itself
-// and shows a countdown instead of inviting more clicks, and it also
-// honours the server's Retry-After header when a 429 does happen.
+// The backend rate-limits /auth/resend-verification to 3/hour. This hook
+// persists the "next allowed send" timestamp in localStorage (rather than
+// only in React state) so a page reload, remount, or navigation away and
+// back can never reset the visible cooldown and let someone click through
+// to the server again before the server's own window has actually
+// elapsed. That mismatch was the real cause of repeated 429s: a client
+// cooldown that resets independently of the server's window just produces
+// another 429 every time it expires. A ref-based "in flight" lock also
+// blocks a second click (or a rapid double click) from ever reaching the
+// network while a request is already pending.
 // ─────────────────────────────────────────────
-function useResendCooldown(defaultSeconds = 60) {
-  const [remaining, setRemaining] = useState(0);
+function useResendCooldown(storageKey, defaultSeconds = 3600) {
+  const getStoredUntil = () => {
+    const raw = localStorage.getItem(storageKey);
+    const until = raw ? parseInt(raw, 10) : 0;
+    return Number.isFinite(until) ? until : 0;
+  };
+
+  const computeRemaining = () => Math.max(0, Math.ceil((getStoredUntil() - Date.now()) / 1000));
+
+  const [remaining, setRemaining] = useState(computeRemaining);
 
   useEffect(() => {
     if (remaining <= 0) return;
-    const t = setInterval(() => setRemaining((r) => Math.max(0, r - 1)), 1000);
+    const t = setInterval(() => setRemaining(computeRemaining()), 1000);
     return () => clearInterval(t);
-  }, [remaining]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [remaining > 0]);
 
   const start = useCallback((seconds) => {
-    setRemaining(seconds && seconds > 0 ? seconds : defaultSeconds);
-  }, [defaultSeconds]);
+    const secs = seconds && seconds > 0 ? seconds : defaultSeconds;
+    localStorage.setItem(storageKey, String(Date.now() + secs * 1000));
+    setRemaining(secs);
+  }, [storageKey, defaultSeconds]);
 
   return [remaining, start];
 }
 
 // ─────────────────────────────────────────────
 // EMAIL VERIFICATION BANNER
+//
+// Dismissal is persisted per-user in localStorage so clicking the X hides
+// the banner for good — it will not reappear on navigation, reload, or a
+// fresh login on the same device — and it also disappears automatically
+// the moment `emailVerified` flips to true (handled by the caller, which
+// only renders this component while unverified).
 // ─────────────────────────────────────────────
-function VerifyEmailBanner({ toast }) {
-  const [dismissed, setDismissed] = useState(false);
+function VerifyEmailBanner({ toast, userId }) {
+  const dismissKey = `tc_verify_dismissed_${userId || "anon"}`;
+  const cooldownKey = `tc_verify_cooldown_${userId || "anon"}`;
+
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem(dismissKey) === "1");
   const [sending,   setSending]   = useState(false);
-  const [cooldown,  startCooldown] = useResendCooldown(60);
+  const [cooldown,  startCooldown] = useResendCooldown(cooldownKey, 3600);
+  const inFlightRef = useRef(false);
 
   if (dismissed) return null;
 
+  const dismiss = () => {
+    localStorage.setItem(dismissKey, "1");
+    setDismissed(true);
+  };
+
   const resend = async () => {
+    // Ref-based lock closes the window a double-click or slow re-render
+    // could otherwise sneak a second request through.
+    if (inFlightRef.current || cooldown > 0) return;
+    inFlightRef.current = true;
     setSending(true);
     try {
       await api.post("/auth/resend-verification", {});
       toast("Verification email sent. Check your inbox.");
-      startCooldown(60);
+      startCooldown(3600);
     } catch (e) {
       if (e.status === 429) {
         toast("Too many requests. Please wait before trying again.");
-        startCooldown(e.retryAfter || 900);
+        // The server enforces a 1 hour window for this endpoint. If the
+        // Retry-After header could not be read (e.g. an older deployed
+        // backend that has not yet exposed it via CORS), fall back to the
+        // full hour rather than a short guess that would just produce
+        // another 429 a few minutes later.
+        startCooldown(e.retryAfter || 3600);
       } else {
         toast(e.message || "Could not send verification email. Try again later.");
         startCooldown(60);
       }
     } finally {
       setSending(false);
+      inFlightRef.current = false;
     }
   };
 
@@ -1706,7 +1751,7 @@ function VerifyEmailBanner({ toast }) {
   const label = sending
     ? "Sending..."
     : cooldown > 0
-      ? `Resend in ${cooldown}s`
+      ? `Resend in ${formatCooldown(cooldown)}`
       : "Resend email";
 
   return (
@@ -1717,7 +1762,7 @@ function VerifyEmailBanner({ toast }) {
         {label}
       </button>
       <button
-        onClick={() => setDismissed(true)}
+        onClick={dismiss}
         className="icon-btn"
         aria-label="Dismiss"
         style={{ border: "none", background: "transparent", padding: 4, cursor: "pointer", display: "flex" }}>
@@ -1727,33 +1772,68 @@ function VerifyEmailBanner({ toast }) {
   );
 }
 
+function formatCooldown(totalSeconds) {
+  if (totalSeconds >= 60) {
+    const mins = Math.ceil(totalSeconds / 60);
+    return `${mins}m`;
+  }
+  return `${totalSeconds}s`;
+}
+
 // ─────────────────────────────────────────────
 // HOME SCREEN
 // ─────────────────────────────────────────────
-function HomeScreen({ userId, user, onStart, onNav, toast }) {
+function HomeScreen({ user, onStart, onNav, toast, onUserUpdate }) {
   const [records,  setRecords]  = useState([]);
   const [profile,  setProfile]  = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const userId = user?.id;
+
+  const loadData = useCallback(() => {
     setLoading(true);
     setError(false);
 
-    Promise.all([
+    return Promise.all([
       api.get("/user/profile").catch(() => null),
       api.get("/patient/history?limit=3").catch(() => null),
     ]).then(([profileData, historyData]) => {
-      if (cancelled || _loggingOut) return;
+      if (_loggingOut) return;
       setProfile(profileData);
       setRecords(Array.isArray(historyData) ? historyData : []);
       setLoading(false);
       if (!profileData && !historyData) setError(true);
+      if (profileData && onUserUpdate) {
+        onUserUpdate({ email_verified: !!profileData.email_verified });
+      }
     });
+  }, [onUserUpdate]);
 
+  useEffect(() => {
+    let cancelled = false;
+    loadData();
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
+
+  // If the person verifies their email in another tab (via the emailed
+  // link) and comes back to this one, re-check their profile as soon as
+  // the tab regains focus so the verify banner disappears without
+  // requiring a manual reload.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && !_loggingOut) {
+        loadData();
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [loadData]);
 
   // Use profile API counts for accuracy (never limited by fetch page size)
   const totalAssessments = profile?.assessment_count ?? records.length;
@@ -1780,7 +1860,7 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
         <div className="avatar">{(user?.name || "P")[0].toUpperCase()}</div>
       </div>
 
-      {!loading && !emailVerified && <VerifyEmailBanner toast={toast} />}
+      {!loading && !emailVerified && <VerifyEmailBanner toast={toast} userId={userId} />}
 
       {/* Hero */}
       <div className="hero-card">
@@ -2818,16 +2898,32 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout, onUserUpdate }) 
   };
 
   // -- Email verification -----------------------------------------
+  // Shares the same persisted, server-window-aware cooldown as the
+  // home-screen banner (keyed by user id) so the two entry points never
+  // disagree about whether a resend is currently allowed.
   const [resending, setResending] = useState(false);
+  const [emailCooldown, startEmailCooldown] = useResendCooldown(`tc_verify_cooldown_${user?.id || "anon"}`, 3600);
+  const emailResendInFlight = useRef(false);
+
   const resendVerification = async () => {
+    if (emailResendInFlight.current || emailCooldown > 0) return;
+    emailResendInFlight.current = true;
     setResending(true);
     try {
       await api.post("/auth/resend-verification", {});
       toast("Verification email sent. Check your inbox.");
+      startEmailCooldown(3600);
     } catch (e) {
-      toast(e.message || "Could not send verification email. Try again later.");
+      if (e.status === 429) {
+        toast("Too many requests. Please wait before trying again.");
+        startEmailCooldown(e.retryAfter || 3600);
+      } else {
+        toast(e.message || "Could not send verification email. Try again later.");
+        startEmailCooldown(60);
+      }
     } finally {
       setResending(false);
+      emailResendInFlight.current = false;
     }
   };
 
@@ -2884,6 +2980,13 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout, onUserUpdate }) 
     { icon: "shield",   color: "var(--purple)", bg: "var(--purple-l)", label: "Encrypted in transit",   desc: "All data between your device and our servers is protected using HTTPS encryption." },
     { icon: "trash",    color: "var(--red)",    bg: "var(--red-l)",    label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
   ];
+
+  const emailResendDisabled = resending || emailCooldown > 0;
+  const emailResendLabel = resending
+    ? "Sending..."
+    : emailCooldown > 0
+      ? `Resend in ${formatCooldown(emailCooldown)}`
+      : "Resend verification email";
 
   return (
     <div>
@@ -3038,13 +3141,14 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout, onUserUpdate }) 
                 {!p.email_verified && (
                   <button
                     onClick={resendVerification}
-                    disabled={resending}
+                    disabled={emailResendDisabled}
                     style={{
                       border: "none", background: "none", color: "var(--teal-d)",
-                      fontSize: 12, fontWeight: 700, cursor: "pointer", padding: 0, marginTop: 4,
-                      fontFamily: "var(--font)", textDecoration: "underline",
+                      fontSize: 12, fontWeight: 700, cursor: emailResendDisabled ? "default" : "pointer",
+                      padding: 0, marginTop: 4, fontFamily: "var(--font)", textDecoration: "underline",
+                      opacity: emailResendDisabled ? 0.6 : 1,
                     }}>
-                    {resending ? "Sending..." : "Resend verification email"}
+                    {emailResendLabel}
                   </button>
                 )}
               </div>
