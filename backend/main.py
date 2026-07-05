@@ -89,6 +89,8 @@ try:
 except ImportError:
     AIOREDIS_AVAILABLE = False
 
+from email_service import send_verification_email
+
 load_dotenv()
 
 # -----------------------------------------------------------------
@@ -123,6 +125,24 @@ class Settings(BaseSettings):
     db_pool_max: int = 20
 
     max_body_size: int = 5 * 1024 * 1024
+
+    # -- Email verification (SMTP) --------------------------------
+    # Defaults target Gmail SMTP with an App Password. Swapping to any
+    # other free SMTP provider (e.g. Brevo) only requires changing these
+    # env vars — no code changes needed.
+    smtp_host: str        = "smtp.gmail.com"
+    smtp_port: int        = 587
+    smtp_user: str        = ""
+    smtp_password: str    = ""
+    smtp_from_name: str   = "TropiCare"
+    smtp_from_email: str  = ""
+    frontend_url: str     = "https://tropicare.vercel.app"
+    email_verification_expire_hours: int = 24
+
+    # -- Login brute-force protection (long window, per email) ----
+    login_lockout_threshold: int        = 10
+    login_lockout_window_seconds: int   = 1800   # 30 minutes
+    login_lockout_cooldown_seconds: int = 900    # 15 minutes
 
     @property
     def origins_list(self) -> list[str]:
@@ -184,6 +204,15 @@ CLINIC_SOURCE_ERRORS = Counter(
     "tropicare_clinic_source_errors_total",
     "Clinic data source failures",
     ["source", "reason"],
+)
+EMAIL_SEND_RESULTS = Counter(
+    "tropicare_email_send_total",
+    "Verification email send attempts",
+    ["result"],
+)
+LOGIN_LOCKOUTS = Counter(
+    "tropicare_login_lockouts_total",
+    "Long-window account lockouts triggered",
 )
 
 # -----------------------------------------------------------------
@@ -297,6 +326,14 @@ class UserModel(Base):
     age        = Column(String(10), nullable=True)
     gender     = Column(String(20), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # -- Email verification --------------------------------------
+    # These three columns are picked up automatically at startup by
+    # run_schema_migrations(), which ALTER TABLEs any ORM column missing
+    # from the live database. No manual migration is required.
+    email_verified              = Column(Boolean, default=False)
+    verification_token          = Column(String(128), nullable=True, index=True)
+    verification_token_expires  = Column(DateTime, nullable=True)
 
 
 class DiagnosisModel(Base):
@@ -1323,10 +1360,151 @@ def verify_pw(pw: str, stored: str) -> bool:
 
 
 # -----------------------------------------------------------------
-# RATE LIMITER
+# PASSWORD STRENGTH (shared validation — defense in depth)
+#
+# The frontend renders a live strength meter with the same rules, but this
+# server-side check is the actual gate: registration and password-change
+# both call this before hashing, so the two entry points can never drift
+# out of sync with each other or be bypassed by a client that skips the
+# frontend check entirely.
 # -----------------------------------------------------------------
 
-limiter = Limiter(key_func=get_remote_address, enabled=settings.enable_rate_limiting)
+_SPECIAL_CHARS = set("!@#$%^&*()_+-=[]{};':\"\\|,.<>/?")
+
+
+def validate_password_strength(pw: str) -> None:
+    if len(pw) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters long")
+    if not any(c.islower() for c in pw):
+        raise HTTPException(status_code=400, detail="Password must contain at least one lowercase letter")
+    if not any(c.isupper() for c in pw):
+        raise HTTPException(status_code=400, detail="Password must contain at least one uppercase letter")
+    if not any(c.isdigit() for c in pw):
+        raise HTTPException(status_code=400, detail="Password must contain at least one number")
+    if not any(c in _SPECIAL_CHARS for c in pw):
+        raise HTTPException(status_code=400, detail="Password must contain at least one special character")
+
+
+# -----------------------------------------------------------------
+# EMAIL VERIFICATION HELPERS
+# -----------------------------------------------------------------
+
+def _generate_verification_token() -> str:
+    return secrets.token_urlsafe(32)
+
+
+def _send_verification_email_task(user_id: int, email: str, name: str, token: str) -> None:
+    """
+    Runs in a FastAPI BackgroundTasks worker thread. Never raises: any
+    failure is logged and metriced so registration itself is never
+    affected by a flaky or unconfigured SMTP provider.
+    """
+    try:
+        sent = send_verification_email(
+            to_email=email,
+            to_name=name,
+            token=token,
+            frontend_url=settings.frontend_url,
+            smtp_host=settings.smtp_host,
+            smtp_port=settings.smtp_port,
+            smtp_user=settings.smtp_user,
+            smtp_password=settings.smtp_password,
+            smtp_from_name=settings.smtp_from_name,
+            smtp_from_email=settings.smtp_from_email,
+        )
+        EMAIL_SEND_RESULTS.labels(result="sent" if sent else "skipped").inc()
+    except Exception as e:
+        EMAIL_SEND_RESULTS.labels(result="error").inc()
+        logger.warning({"event": "verification_email_task_error", "user_id": user_id, "error": str(e)})
+
+
+def _issue_verification_token(user: "UserModel", db: Session) -> str:
+    token = _generate_verification_token()
+    user.verification_token = token
+    user.verification_token_expires = datetime.utcnow() + timedelta(
+        hours=settings.email_verification_expire_hours
+    )
+    db.commit()
+    return token
+
+
+# -----------------------------------------------------------------
+# LOGIN BRUTE-FORCE PROTECTION (long window, per email)
+#
+# This is a second, independent layer on top of the existing short-window
+# per-email Redis limiter (_check_password_rate_limit, 3/60s) and the
+# existing per-IP slowapi limiter (100/hour on /auth/login). Attackers
+# rotating IPs or waiting out the short window are still caught here:
+# 10 failed attempts for the same email within a 30 minute window trigger
+# a 15 minute cooldown for that email specifically. Fails open (skips
+# silently) if Redis is unavailable, exactly like the existing limiter,
+# so a Redis outage can never lock out every user.
+# -----------------------------------------------------------------
+
+async def _check_login_lockout(email: str) -> None:
+    r = await get_redis()
+    if r is None:
+        return
+    cooldown_key = f"login_lockout:{email}"
+    try:
+        if await r.get(cooldown_key):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many failed attempts. Try again in 15 minutes.",
+                headers={"Retry-After": str(settings.login_lockout_cooldown_seconds)},
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+
+async def _record_failed_login(email: str) -> None:
+    r = await get_redis()
+    if r is None:
+        return
+    fail_key = f"login_fail_count:{email}"
+    cooldown_key = f"login_lockout:{email}"
+    try:
+        count = await r.incr(fail_key)
+        if count == 1:
+            await r.expire(fail_key, settings.login_lockout_window_seconds)
+        if count >= settings.login_lockout_threshold:
+            await r.setex(cooldown_key, settings.login_lockout_cooldown_seconds, "1")
+            LOGIN_LOCKOUTS.inc()
+            logger.warning({"event": "login_lockout_triggered", "email": email})
+    except Exception:
+        pass
+
+
+async def _clear_login_lockout(email: str) -> None:
+    r = await get_redis()
+    if r is None:
+        return
+    try:
+        await r.delete(f"login_fail_count:{email}")
+        await r.delete(f"login_lockout:{email}")
+        await r.delete(f"pw_attempts:{email}")
+    except Exception:
+        pass
+
+
+# -----------------------------------------------------------------
+# RATE LIMITER
+#
+# FIX: `headers_enabled=True` was missing. Without it, slowapi never adds
+# `Retry-After` / `X-RateLimit-*` response headers, so the frontend had no
+# reliable way to know how long to actually wait before a rate-limited
+# endpoint (like /auth/resend-verification, limited to 3/hour) would accept
+# another request. It fell back to a short, guessed cooldown, which expired
+# long before the real 1-hour server-side window did — so the user would
+# click "resend" again, get another 429, wait the same short guessed time,
+# click again, and so on. This is what produced the repeated 429 loop.
+# Enabling headers here, together with exposing them via CORS below, lets
+# the client read the server's real remaining wait time every time.
+# -----------------------------------------------------------------
+
+limiter = Limiter(key_func=get_remote_address, enabled=settings.enable_rate_limiting, headers_enabled=True)
 
 
 # -----------------------------------------------------------------
@@ -1416,8 +1594,18 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # When a specific origin list is provided via ALLOWED_ORIGINS env var,
 # use it with credentials. When it is literally "*", switch to
 # allow_credentials=False so browsers do not reject the preflight.
+#
+# FIX: `expose_headers` was missing entirely. By default, a cross-origin
+# fetch() can only read a small CORS-safelisted set of response headers
+# (Content-Type, Content-Length, etc.) — "Retry-After" is NOT in that
+# list. That meant `res.headers.get("Retry-After")` in the frontend's api
+# client always silently returned null, no matter what the server sent.
+# Combined with `headers_enabled=True` on the limiter above, exposing
+# these headers here is what actually lets the client read the server's
+# true rate-limit window instead of guessing.
 # -----------------------------------------------------------------
 _origins = settings.origins_list
+_expose_headers = ["Retry-After", "X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining", "X-RateLimit-Reset"]
 if _origins == ["*"]:
     app.add_middleware(
         CORSMiddleware,
@@ -1425,6 +1613,7 @@ if _origins == ["*"]:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=_expose_headers,
     )
 else:
     app.add_middleware(
@@ -1433,6 +1622,7 @@ else:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=_expose_headers,
     )
 
 Instrumentator().instrument(app).expose(app, endpoint="/metrics")
@@ -1539,7 +1729,7 @@ async def request_middleware(request: Request, call_next):
 
 
 # -----------------------------------------------------------------
-# PASSWORD RATE LIMITING
+# PASSWORD RATE LIMITING (short window, per email — unchanged)
 # -----------------------------------------------------------------
 
 async def _check_password_rate_limit(email: str) -> None:
@@ -1639,38 +1829,113 @@ async def health_startup():
 
 @app.post("/api/v1/auth/register", status_code=201)
 @limiter.limit("100/hour")
-async def register(request: Request, req: RegisterRequest, db: Session = Depends(get_db)):
+async def register(
+    request: Request,
+    req: RegisterRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
     if db.query(UserModel).filter(UserModel.email == req.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
+
+    validate_password_strength(req.password)
+
     user = UserModel(
         email=_sanitize(req.email),
         name=_sanitize(req.name),
         pw_hash=hash_pw(req.password),
         age=req.age,
         gender=req.gender,
+        email_verified=False,
     )
     db.add(user)
     db.commit()
     db.refresh(user)
+
+    # Verification email is sent as a background job so registration
+    # always succeeds instantly even if SMTP is down or misconfigured.
+    token = _issue_verification_token(user, db)
+    background_tasks.add_task(
+        _send_verification_email_task, user.id, user.email, user.name, token
+    )
+
     return {
         "access_token": create_token(user.id),
         "token_type":   "bearer",
-        "user":         {"id": user.id, "email": user.email, "name": user.name},
+        "user": {
+            "id": user.id, "email": user.email, "name": user.name,
+            "email_verified": user.email_verified,
+        },
     }
 
 
 @app.post("/api/v1/auth/login")
 @limiter.limit("100/hour")
 async def login(request: Request, req: LoginRequest, db: Session = Depends(get_db)):
+    await _check_login_lockout(req.email)
     await _check_password_rate_limit(req.email)
+
     user = db.query(UserModel).filter(UserModel.email == req.email).first()
     if not user or not user.pw_hash or not verify_pw(req.password, user.pw_hash):
+        await _record_failed_login(req.email)
         raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    await _clear_login_lockout(req.email)
+
     return {
         "access_token": create_token(user.id),
         "token_type":   "bearer",
-        "user":         {"id": user.id, "email": user.email, "name": user.name},
+        "user": {
+            "id": user.id, "email": user.email, "name": user.name,
+            "email_verified": bool(user.email_verified),
+        },
     }
+
+
+@app.get("/api/v1/auth/verify-email")
+async def verify_email(token: str, db: Session = Depends(get_db)):
+    user = db.query(UserModel).filter(UserModel.verification_token == token).first()
+
+    if not user:
+        return JSONResponse(
+            status_code=400,
+            content={"verified": False, "message": "Verification link is invalid or has already been used."},
+        )
+
+    if not user.verification_token_expires or user.verification_token_expires < datetime.utcnow():
+        return JSONResponse(
+            status_code=400,
+            content={"verified": False, "message": "Verification link expired or invalid."},
+        )
+
+    user.email_verified = True
+    user.verification_token = None
+    user.verification_token_expires = None
+    db.commit()
+
+    return {"verified": True, "message": "Email verified successfully."}
+
+
+@app.post("/api/v1/auth/resend-verification")
+@limiter.limit("3/hour")
+async def resend_verification(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if user.email_verified:
+        return {"message": "Email is already verified."}
+
+    token = _issue_verification_token(user, db)
+    background_tasks.add_task(
+        _send_verification_email_task, user.id, user.email, user.name, token
+    )
+    return {"message": "Verification email sent."}
 
 
 # -----------------------------------------------------------------
@@ -2064,6 +2329,7 @@ async def get_profile(
         "joined_at":        u.created_at.isoformat(),
         "assessment_count": count,
         "high_risk_count":  high,
+        "email_verified":   bool(u.email_verified),
     }
     await cache_set(cache_key, json.dumps(result), ttl=300)
     return result
@@ -2097,8 +2363,7 @@ async def change_password(
         raise HTTPException(status_code=404, detail="User not found")
     if not u.pw_hash or not verify_pw(req.current_password, u.pw_hash):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-    if len(req.new_password) < 8:
-        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    validate_password_strength(req.new_password)
     u.pw_hash = hash_pw(req.new_password)
     db.commit()
     return {"message": "Password updated successfully"}
