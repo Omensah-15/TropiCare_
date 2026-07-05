@@ -53,7 +53,11 @@ const api = {
         api.onUnauthorized();
       }
       const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${res.status}`);
+      const message = err.detail || err.error || `HTTP ${res.status}`;
+      const thrown = new Error(message);
+      thrown.status = res.status;
+      thrown.retryAfter = parseInt(res.headers.get("Retry-After") || "0", 10) || null;
+      throw thrown;
     }
     return res.json();
   },
@@ -1643,11 +1647,39 @@ function AuthScreen({ onLogin, toast }) {
 }
 
 // ─────────────────────────────────────────────
+// RESEND COOLDOWN HOOK
+//
+// The backend rate-limits /auth/resend-verification to 3/hour. Without a
+// client-side cooldown, an impatient double- or triple-click reliably
+// burns through that allowance in seconds and then just spams 429s with
+// nothing to show for it. This starts a fixed cooldown the moment a
+// resend is attempted (success or failure) so the button disables itself
+// and shows a countdown instead of inviting more clicks, and it also
+// honours the server's Retry-After header when a 429 does happen.
+// ─────────────────────────────────────────────
+function useResendCooldown(defaultSeconds = 60) {
+  const [remaining, setRemaining] = useState(0);
+
+  useEffect(() => {
+    if (remaining <= 0) return;
+    const t = setInterval(() => setRemaining((r) => Math.max(0, r - 1)), 1000);
+    return () => clearInterval(t);
+  }, [remaining]);
+
+  const start = useCallback((seconds) => {
+    setRemaining(seconds && seconds > 0 ? seconds : defaultSeconds);
+  }, [defaultSeconds]);
+
+  return [remaining, start];
+}
+
+// ─────────────────────────────────────────────
 // EMAIL VERIFICATION BANNER
 // ─────────────────────────────────────────────
 function VerifyEmailBanner({ toast }) {
   const [dismissed, setDismissed] = useState(false);
   const [sending,   setSending]   = useState(false);
+  const [cooldown,  startCooldown] = useResendCooldown(60);
 
   if (dismissed) return null;
 
@@ -1656,19 +1688,33 @@ function VerifyEmailBanner({ toast }) {
     try {
       await api.post("/auth/resend-verification", {});
       toast("Verification email sent. Check your inbox.");
+      startCooldown(60);
     } catch (e) {
-      toast(e.message || "Could not send verification email. Try again later.");
+      if (e.status === 429) {
+        toast("Too many requests. Please wait before trying again.");
+        startCooldown(e.retryAfter || 900);
+      } else {
+        toast(e.message || "Could not send verification email. Try again later.");
+        startCooldown(60);
+      }
     } finally {
       setSending(false);
     }
   };
 
+  const disabled = sending || cooldown > 0;
+  const label = sending
+    ? "Sending..."
+    : cooldown > 0
+      ? `Resend in ${cooldown}s`
+      : "Resend email";
+
   return (
     <div className="verify-banner">
       <Icon name="mail" size={16} color="var(--amber)" />
       <div className="verify-banner-text">Verify your email to secure your account.</div>
-      <button className="btn btn-secondary btn-sm" onClick={resend} disabled={sending}>
-        {sending ? "Sending..." : "Resend email"}
+      <button className="btn btn-secondary btn-sm" onClick={resend} disabled={disabled}>
+        {label}
       </button>
       <button
         onClick={() => setDismissed(true)}
