@@ -53,17 +53,7 @@ const api = {
         api.onUnauthorized();
       }
       const err = await res.json().catch(() => ({}));
-      const message = err.detail || err.error || `HTTP ${res.status}`;
-      const thrown = new Error(message);
-      thrown.status = res.status;
-      // Retry-After is not a CORS-safelisted response header, so it will
-      // only be readable here once the backend explicitly exposes it via
-      // Access-Control-Expose-Headers (see main.py CORS config). If it is
-      // ever missing (older deploy, proxy stripping headers, etc.) we fall
-      // back to null and the caller applies a safe, conservative default.
-      const retryAfterHeader = res.headers.get("Retry-After");
-      thrown.retryAfter = retryAfterHeader ? parseInt(retryAfterHeader, 10) || null : null;
-      throw thrown;
+      throw new Error(err.detail || `HTTP ${res.status}`);
     }
     return res.json();
   },
@@ -441,8 +431,6 @@ const injectStyles = () => {
     :root[data-theme="dark"] .theme-preview-swatch.selected { border-color:var(--teal-d); box-shadow:0 0 0 2px rgba(20,184,166,0.2); }
     :root[data-theme="dark"] .stat-card { background:var(--surface); border-color:var(--border); }
     :root[data-theme="dark"] .empty-state-card { background:var(--surface); border-color:var(--border); }
-    :root[data-theme="dark"] .verify-banner { background:var(--amber-l); border-color:#4a3a1a; }
-    :root[data-theme="dark"] .verify-banner-text { color:var(--amber-d); }
 
     /* ── Base styles ─────────────────────── */
     html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;}
@@ -654,9 +642,6 @@ const injectStyles = () => {
     .score-bar-pct{font-size:12px;color:var(--muted);width:30px;text-align:right;}
     .disclaimer{display:flex;gap:10px;align-items:flex-start;background:var(--amber-l);border:1px solid #f3cf8f;border-radius:var(--radius-s);padding:12px 14px;}
     .disclaimer p{font-size:12px;color:#7a4a09;line-height:1.55;}
-    .verify-banner{display:flex;gap:10px;align-items:center;background:var(--amber-l);border:1px solid #f3cf8f;border-radius:var(--radius-s);padding:12px 14px;margin:0 24px 16px;}
-    @media(max-width:767px){.verify-banner{margin:0 16px 14px;}}
-    .verify-banner-text{font-size:12px;color:#7a4a09;line-height:1.5;flex:1;}
     .search-wrap{position:relative;margin-bottom:12px;}
     .search-icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted-l);pointer-events:none;}
     .search-input{width:100%;padding:12px 14px 12px 40px;border:1.5px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:14px;color:var(--ink);background:var(--surface);outline:none;transition:border-color var(--t-fast),box-shadow var(--t-fast);min-height:46px;}
@@ -1035,7 +1020,6 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "refresh":   return <svg {...p}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>;
     case "download":  return <svg {...p}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
     case "map":       return <svg {...p}><path d="M9 20l-6-3V4l6 3 6-3 6 3v13l-6-3-6 3z"/><line x1="9" y1="7" x2="9" y2="20"/><line x1="15" y1="4" x2="15" y2="17"/></svg>;
-    case "mail":      return <svg {...p}><path d="M4 4h16a2 2 0 012 2v12a2 2 0 01-2 2H4a2 2 0 01-2-2V6a2 2 0 012-2z"/><polyline points="22,6 12,13 2,6"/></svg>;
     default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
@@ -1063,76 +1047,6 @@ function RecBubble({ icon, label, text, accent }) {
         <div className="rec-bubble-label" style={{ color: accent }}>{label}</div>
         <div className="rec-bubble-text">{text}</div>
       </div>
-    </div>
-  );
-}
-
-// ─────────────────────────────────────────────
-// PASSWORD STRENGTH METER
-//
-// Self-contained scoring, no new dependency. Mirrors the server-side rules
-// in validate_password_strength (main.py) so client and server agree:
-// length, character variety, and a penalty for common weak patterns
-// (repeated characters, sequential digits, or a password that just
-// restates the email's local part). Reused in both AuthScreen's
-// registration field and PrivacySecurityScreen's change-password field.
-// ─────────────────────────────────────────────
-function scorePasswordStrength(pw, emailLocalPart) {
-  if (!pw) return { score: 0, tier: "Weak", label: "Enter a password", color: "var(--red)", pct: 0 };
-
-  let score = 0;
-  if (pw.length >= 8)  score += 1;
-  if (pw.length >= 12) score += 1;
-  if (/[a-z]/.test(pw)) score += 1;
-  if (/[A-Z]/.test(pw)) score += 1;
-  if (/[0-9]/.test(pw)) score += 1;
-  if (/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(pw)) score += 1;
-
-  const isAllSameChar = /^(.)\1+$/.test(pw);
-  const isSequentialDigits = /0123|1234|2345|3456|4567|5678|6789/.test(pw);
-  const matchesEmailLocal = emailLocalPart && pw.toLowerCase() === emailLocalPart.toLowerCase();
-  if (isAllSameChar || isSequentialDigits || matchesEmailLocal) {
-    score = Math.max(0, score - 3);
-  }
-
-  const missing = [];
-  if (pw.length < 8) missing.push("length");
-  if (!/[A-Z]/.test(pw)) missing.push("an uppercase letter");
-  if (!/[0-9]/.test(pw)) missing.push("a number");
-  if (!/[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?]/.test(pw)) missing.push("a symbol");
-
-  let tier, color;
-  if (score <= 2)      { tier = "Weak";   color = "var(--red)";   }
-  else if (score <= 3) { tier = "Fair";   color = "var(--amber)"; }
-  else if (score <= 5) { tier = "Good";   color = "var(--blue)";  }
-  else                 { tier = "Strong"; color = "var(--green)"; }
-
-  let label;
-  if (tier === "Strong") {
-    label = "Strong — meets all recommendations";
-  } else if (missing.length > 0) {
-    const hint = missing.slice(0, 2).join(" and ");
-    label = `${tier} — add ${hint}`;
-  } else {
-    label = `${tier} password`;
-  }
-
-  const pct = Math.min(100, Math.round((score / 6) * 100));
-  return { score, tier, label, color, pct };
-}
-
-function PasswordStrengthMeter({ password, emailLocalPart }) {
-  const { label, color, pct } = scorePasswordStrength(password, emailLocalPart);
-  if (!password) return null;
-  return (
-    <div style={{ marginTop: 8, marginBottom: 14 }}>
-      <div className="prog-track">
-        <div
-          className="prog-fill"
-          style={{ width: `${pct}%`, background: color }}
-        />
-      </div>
-      <div style={{ fontSize: 12, fontWeight: 600, color, marginTop: 6 }}>{label}</div>
     </div>
   );
 }
@@ -1223,28 +1137,6 @@ export default function App() {
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
-  // ── Email verification link handler ───────
-  // If the person opens the app from the verification email
-  // (…/?verify=<token>), confirm the token against the backend once,
-  // toast the result, and strip the query string so a page refresh
-  // never re-triggers the same verification call.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const verifyToken = params.get("verify");
-    if (!verifyToken) return;
-
-    api.get(`/auth/verify-email?token=${encodeURIComponent(verifyToken)}`)
-      .then(() => toast("Email verified successfully."))
-      .catch(() => toast("Verification link expired or invalid."))
-      .finally(() => {
-        const url = new URL(window.location.href);
-        url.searchParams.delete("verify");
-        window.history.replaceState({}, "", url.toString());
-      });
-    // Runs once on initial mount only — this is a one-time link handler.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
   const login = (u) => {
     _loggingOut = false;
     api.setToken(u.token);
@@ -1272,18 +1164,6 @@ export default function App() {
     setNotif("");
     setTimeout(() => toast("Signed out successfully."), 50);
   }, [toast]);
-
-  // Keeps the top-level `user` object (and localStorage) in sync when a
-  // child screen updates profile fields or verification status, so every
-  // screen reflects the same state without requiring a full reload.
-  const updateUser = useCallback((patch) => {
-    setUser((prev) => {
-      if (!prev) return prev;
-      const next = { ...prev, ...patch };
-      Store.set(USER_KEY, next);
-      return next;
-    });
-  }, []);
 
   useEffect(() => {
     api.onUnauthorized = () => {
@@ -1443,13 +1323,13 @@ export default function App() {
   const renderPage = () => {
     switch (page) {
       case "home":
-        return <HomeScreen user={user} onStart={startAssessment} onNav={setPage} toast={toast} onUserUpdate={updateUser} />;
+        return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
       case "assessment":
         return <AssessmentLanding onStart={startAssessment} />;
       case "records":
         return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
       case "profile":
-        return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} onUserUpdate={updateUser} />;
+        return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
       case "settings":
         return (
           <SettingsScreen
@@ -1462,21 +1342,13 @@ export default function App() {
           />
         );
       case "privacy":
-        return (
-          <PrivacySecurityScreen
-            onBack={() => setPage("profile")}
-            toast={toast}
-            user={user}
-            onLogout={logout}
-            onUserUpdate={updateUser}
-          />
-        );
+        return <PrivacySecurityScreen onBack={() => setPage("profile")} toast={toast} user={user} onLogout={logout} />;
       case "about":
         return <AboutScreen onBack={() => setPage("profile")} />;
       case "mydata":
         return <MyDataScreen onBack={() => setPage("profile")} toast={toast} />;
       default:
-        return <HomeScreen user={user} onStart={startAssessment} onNav={setPage} toast={toast} onUserUpdate={updateUser} />;
+        return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
     }
   };
 
@@ -1567,17 +1439,12 @@ function AuthScreen({ onLogin, toast }) {
         data = await api.post("/auth/login", { email: email.trim(), password: pw });
       }
       onLogin({ ...data.user, token: data.access_token });
-      if (mode === "register") {
-        toast("Account created. Check your email to verify your address.");
-      }
     } catch (e) {
       toast(e.message || "Something went wrong. Please try again.");
     } finally {
       setLoading(false);
     }
   };
-
-  const emailLocalPart = email.includes("@") ? email.split("@")[0] : email;
 
   return (
     <div className="auth-wrap">
@@ -1638,9 +1505,6 @@ function AuthScreen({ onLogin, toast }) {
                 <Icon name={showPw ? "eyeOff" : "eye"} size={17} />
               </button>
             </div>
-            {mode === "register" && (
-              <PasswordStrengthMeter password={pw} emailLocalPart={emailLocalPart} />
-            )}
           </div>
           <button className="btn btn-primary btn-full btn-lg mt-2" onClick={submit} disabled={loading}>
             {loading ? "Please wait..." : mode === "login" ? "Sign In" : "Create Account"}
@@ -1653,193 +1517,37 @@ function AuthScreen({ onLogin, toast }) {
 }
 
 // ─────────────────────────────────────────────
-// RESEND COOLDOWN HOOK
-//
-// The backend rate-limits /auth/resend-verification to 3/hour. This hook
-// persists the "next allowed send" timestamp in localStorage (rather than
-// only in React state) so a page reload, remount, or navigation away and
-// back can never reset the visible cooldown and let someone click through
-// to the server again before the server's own window has actually
-// elapsed. That mismatch was the real cause of repeated 429s: a client
-// cooldown that resets independently of the server's window just produces
-// another 429 every time it expires. A ref-based "in flight" lock also
-// blocks a second click (or a rapid double click) from ever reaching the
-// network while a request is already pending.
-// ─────────────────────────────────────────────
-function useResendCooldown(storageKey, defaultSeconds = 3600) {
-  const getStoredUntil = () => {
-    const raw = localStorage.getItem(storageKey);
-    const until = raw ? parseInt(raw, 10) : 0;
-    return Number.isFinite(until) ? until : 0;
-  };
-
-  const computeRemaining = () => Math.max(0, Math.ceil((getStoredUntil() - Date.now()) / 1000));
-
-  const [remaining, setRemaining] = useState(computeRemaining);
-
-  useEffect(() => {
-    if (remaining <= 0) return;
-    const t = setInterval(() => setRemaining(computeRemaining()), 1000);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [remaining > 0]);
-
-  const start = useCallback((seconds) => {
-    const secs = seconds && seconds > 0 ? seconds : defaultSeconds;
-    localStorage.setItem(storageKey, String(Date.now() + secs * 1000));
-    setRemaining(secs);
-  }, [storageKey, defaultSeconds]);
-
-  return [remaining, start];
-}
-
-// ─────────────────────────────────────────────
-// EMAIL VERIFICATION BANNER
-//
-// Dismissal is persisted per-user in localStorage so clicking the X hides
-// the banner for good — it will not reappear on navigation, reload, or a
-// fresh login on the same device — and it also disappears automatically
-// the moment `emailVerified` flips to true (handled by the caller, which
-// only renders this component while unverified).
-// ─────────────────────────────────────────────
-function VerifyEmailBanner({ toast, userId }) {
-  const dismissKey = `tc_verify_dismissed_${userId || "anon"}`;
-  const cooldownKey = `tc_verify_cooldown_${userId || "anon"}`;
-
-  const [dismissed, setDismissed] = useState(() => localStorage.getItem(dismissKey) === "1");
-  const [sending,   setSending]   = useState(false);
-  const [cooldown,  startCooldown] = useResendCooldown(cooldownKey, 3600);
-  const inFlightRef = useRef(false);
-
-  if (dismissed) return null;
-
-  const dismiss = () => {
-    localStorage.setItem(dismissKey, "1");
-    setDismissed(true);
-  };
-
-  const resend = async () => {
-    // Ref-based lock closes the window a double-click or slow re-render
-    // could otherwise sneak a second request through.
-    if (inFlightRef.current || cooldown > 0) return;
-    inFlightRef.current = true;
-    setSending(true);
-    try {
-      await api.post("/auth/resend-verification", {});
-      toast("Verification email sent. Check your inbox.");
-      startCooldown(3600);
-    } catch (e) {
-      if (e.status === 429) {
-        toast("Too many requests. Please wait before trying again.");
-        // The server enforces a 1 hour window for this endpoint. If the
-        // Retry-After header could not be read (e.g. an older deployed
-        // backend that has not yet exposed it via CORS), fall back to the
-        // full hour rather than a short guess that would just produce
-        // another 429 a few minutes later.
-        startCooldown(e.retryAfter || 3600);
-      } else {
-        toast(e.message || "Could not send verification email. Try again later.");
-        startCooldown(60);
-      }
-    } finally {
-      setSending(false);
-      inFlightRef.current = false;
-    }
-  };
-
-  const disabled = sending || cooldown > 0;
-  const label = sending
-    ? "Sending..."
-    : cooldown > 0
-      ? `Resend in ${formatCooldown(cooldown)}`
-      : "Resend email";
-
-  return (
-    <div className="verify-banner">
-      <Icon name="mail" size={16} color="var(--amber)" />
-      <div className="verify-banner-text">Verify your email to secure your account.</div>
-      <button className="btn btn-secondary btn-sm" onClick={resend} disabled={disabled}>
-        {label}
-      </button>
-      <button
-        onClick={dismiss}
-        className="icon-btn"
-        aria-label="Dismiss"
-        style={{ border: "none", background: "transparent", padding: 4, cursor: "pointer", display: "flex" }}>
-        <Icon name="x" size={14} color="var(--amber-d)" />
-      </button>
-    </div>
-  );
-}
-
-function formatCooldown(totalSeconds) {
-  if (totalSeconds >= 60) {
-    const mins = Math.ceil(totalSeconds / 60);
-    return `${mins}m`;
-  }
-  return `${totalSeconds}s`;
-}
-
-// ─────────────────────────────────────────────
 // HOME SCREEN
 // ─────────────────────────────────────────────
-function HomeScreen({ user, onStart, onNav, toast, onUserUpdate }) {
+function HomeScreen({ userId, user, onStart, onNav }) {
   const [records,  setRecords]  = useState([]);
   const [profile,  setProfile]  = useState(null);
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState(false);
 
-  const userId = user?.id;
-
-  const loadData = useCallback(() => {
+  useEffect(() => {
+    let cancelled = false;
     setLoading(true);
     setError(false);
 
-    return Promise.all([
+    Promise.all([
       api.get("/user/profile").catch(() => null),
       api.get("/patient/history?limit=3").catch(() => null),
     ]).then(([profileData, historyData]) => {
-      if (_loggingOut) return;
+      if (cancelled || _loggingOut) return;
       setProfile(profileData);
       setRecords(Array.isArray(historyData) ? historyData : []);
       setLoading(false);
       if (!profileData && !historyData) setError(true);
-      if (profileData && onUserUpdate) {
-        onUserUpdate({ email_verified: !!profileData.email_verified });
-      }
     });
-  }, [onUserUpdate]);
 
-  useEffect(() => {
-    let cancelled = false;
-    loadData();
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId]);
-
-  // If the person verifies their email in another tab (via the emailed
-  // link) and comes back to this one, re-check their profile as soon as
-  // the tab regains focus so the verify banner disappears without
-  // requiring a manual reload.
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === "visible" && !_loggingOut) {
-        loadData();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", onVisible);
-    return () => {
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", onVisible);
-    };
-  }, [loadData]);
 
   // Use profile API counts for accuracy (never limited by fetch page size)
   const totalAssessments = profile?.assessment_count ?? records.length;
   const highRiskCount    = profile?.high_risk_count  ?? records.filter((r) => r.risk === "High").length;
   const lastCheck        = records[0] ? fmtDate(records[0].created_at) : "None";
-  const emailVerified    = profile?.email_verified ?? user?.email_verified ?? true;
 
   const stats = [
     { label: "Assessments", val: loading ? "..." : totalAssessments, icon: "activity", color: "var(--teal)"  },
@@ -1859,8 +1567,6 @@ function HomeScreen({ user, onStart, onNav, toast, onUserUpdate }) {
         </div>
         <div className="avatar">{(user?.name || "P")[0].toUpperCase()}</div>
       </div>
-
-      {!loading && !emailVerified && <VerifyEmailBanner toast={toast} userId={userId} />}
 
       {/* Hero */}
       <div className="hero-card">
@@ -2568,7 +2274,7 @@ function RecordDetail({ record, onBack, toast }) {
 // ─────────────────────────────────────────────
 // PROFILE SCREEN
 // ─────────────────────────────────────────────
-function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
+function ProfileScreen({ user, onLogout, onNav, toast }) {
   const [editing, setEditing] = useState(false);
   const [name,    setName]    = useState(user?.name   || "");
   const [age,     setAge]     = useState(user?.age    || "");
@@ -2591,7 +2297,8 @@ function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
       const data = await api.put("/user/profile", { name: name.trim(), age, gender });
       if (_loggingOut) return;
       setProfile((prev) => ({ ...prev, ...data }));
-      if (onUserUpdate) onUserUpdate({ name: name.trim(), age, gender });
+      const existing = Store.get(USER_KEY) || {};
+      Store.set(USER_KEY, { ...existing, name: name.trim(), age, gender });
       toast("Profile updated.");
       setEditing(false);
     } catch (e) {
@@ -2844,90 +2551,7 @@ function MyDataScreen({ onBack, toast }) {
 // ─────────────────────────────────────────────
 // PRIVACY & SECURITY SCREEN
 // ─────────────────────────────────────────────
-function PrivacySecurityScreen({ onBack, toast, user, onLogout, onUserUpdate }) {
-  // Personal info comes from the live profile endpoint (same source of
-  // truth ProfileScreen uses) merged over the user prop, so this screen
-  // never shows stale data if it was updated elsewhere.
-  const [profile, setProfile] = useState({});
-  useEffect(() => {
-    let cancelled = false;
-    api.get("/user/profile")
-      .then((d) => { if (!cancelled && !_loggingOut) setProfile(d); })
-      .catch(() => { if (!cancelled && !_loggingOut) setProfile(user || {}); });
-    return () => { cancelled = true; };
-  }, []);
-  const p = { ...user, ...profile };
-
-  // -- Personal information (name/age/gender) --------------------
-  const [infoExpanded, setInfoExpanded] = useState(false);
-  const [name,   setName]   = useState(p.name   || "");
-  const [age,    setAge]    = useState(p.age    || "");
-  const [gender, setGender] = useState(p.gender || "");
-  const [infoSaving, setInfoSaving] = useState(false);
-
-  useEffect(() => {
-    if (!infoExpanded) {
-      setName(p.name || "");
-      setAge(p.age || "");
-      setGender(p.gender || "");
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile]);
-
-  const saveInfo = async () => {
-    if (!name.trim()) { toast("Name cannot be empty."); return; }
-    setInfoSaving(true);
-    try {
-      const data = await api.put("/user/profile", { name: name.trim(), age, gender });
-      setProfile((prev) => ({ ...prev, ...data }));
-      if (onUserUpdate) onUserUpdate({ name: name.trim(), age, gender });
-      toast("Personal information updated.");
-      setInfoExpanded(false);
-    } catch (e) {
-      toast(e.message || "Could not save. Check your connection.");
-    } finally {
-      setInfoSaving(false);
-    }
-  };
-
-  const cancelInfoEdit = () => {
-    setName(p.name || "");
-    setAge(p.age || "");
-    setGender(p.gender || "");
-    setInfoExpanded(false);
-  };
-
-  // -- Email verification -----------------------------------------
-  // Shares the same persisted, server-window-aware cooldown as the
-  // home-screen banner (keyed by user id) so the two entry points never
-  // disagree about whether a resend is currently allowed.
-  const [resending, setResending] = useState(false);
-  const [emailCooldown, startEmailCooldown] = useResendCooldown(`tc_verify_cooldown_${user?.id || "anon"}`, 3600);
-  const emailResendInFlight = useRef(false);
-
-  const resendVerification = async () => {
-    if (emailResendInFlight.current || emailCooldown > 0) return;
-    emailResendInFlight.current = true;
-    setResending(true);
-    try {
-      await api.post("/auth/resend-verification", {});
-      toast("Verification email sent. Check your inbox.");
-      startEmailCooldown(3600);
-    } catch (e) {
-      if (e.status === 429) {
-        toast("Too many requests. Please wait before trying again.");
-        startEmailCooldown(e.retryAfter || 3600);
-      } else {
-        toast(e.message || "Could not send verification email. Try again later.");
-        startEmailCooldown(60);
-      }
-    } finally {
-      setResending(false);
-      emailResendInFlight.current = false;
-    }
-  };
-
-  // -- Password change ---------------------------------------------
+function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
   const [currentPw,     setCurrentPw]     = useState("");
   const [newPw,         setNewPw]         = useState("");
   const [confirmPw,     setConfirmPw]     = useState("");
@@ -2938,8 +2562,6 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout, onUserUpdate }) 
   const [pwExpanded,    setPwExpanded]    = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
-
-  const emailLocalPart = (p.email || "").includes("@") ? p.email.split("@")[0] : p.email;
 
   const changePassword = async () => {
     if (!currentPw || !newPw || !confirmPw) { toast("Please fill in all password fields."); return; }
@@ -2981,13 +2603,6 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout, onUserUpdate }) 
     { icon: "trash",    color: "var(--red)",    bg: "var(--red-l)",    label: "Right to delete",        desc: "You can permanently delete your account and all associated data at any time." },
   ];
 
-  const emailResendDisabled = resending || emailCooldown > 0;
-  const emailResendLabel = resending
-    ? "Sending..."
-    : emailCooldown > 0
-      ? `Resend in ${formatCooldown(emailCooldown)}`
-      : "Resend verification email";
-
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
@@ -2998,54 +2613,6 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout, onUserUpdate }) 
         <div className="t-display">Privacy & Security</div>
       </div>
       <div className="page-body">
-
-        {/* Personal Information */}
-        <div className="sec-section">
-          <div className="sec-section-title">Personal Information</div>
-          <div className="card card-p">
-            <div className="sec-row" style={{ paddingTop: 0 }}>
-              <div className="sec-row-icon" style={{ background: "var(--teal-xl)" }}>
-                <Icon name="user" size={16} color="var(--teal)" />
-              </div>
-              <div className="sec-row-body">
-                <div className="sec-row-label">Name, Age & Gender</div>
-                <div className="sec-row-hint">
-                  {[p.name, p.age && `${p.age} yrs`, p.gender].filter(Boolean).join(" · ") || "Not set"}
-                </div>
-              </div>
-              <button
-                className={`btn btn-sm ${infoExpanded ? "btn-secondary" : "btn-outline"}`}
-                onClick={() => (infoExpanded ? cancelInfoEdit() : setInfoExpanded(true))}>
-                {infoExpanded ? "Cancel" : "Edit"}
-              </button>
-            </div>
-
-            {infoExpanded && (
-              <div className="sec-field-wrap">
-                <div className="field">
-                  <label className="field-label">Full Name</label>
-                  <input className="field-input" value={name} onChange={(e) => setName(e.target.value)} />
-                </div>
-                <div className="grid-2">
-                  <div className="field">
-                    <label className="field-label">Age</label>
-                    <input className="field-input" type="number" value={age} onChange={(e) => setAge(e.target.value)} />
-                  </div>
-                  <div className="field">
-                    <label className="field-label">Gender</label>
-                    <select className="field-input field-select" value={gender} onChange={(e) => setGender(e.target.value)}>
-                      <option value="">Select</option>
-                      <option>Male</option><option>Female</option><option>Other</option>
-                    </select>
-                  </div>
-                </div>
-                <button className="btn btn-primary btn-full" onClick={saveInfo} disabled={infoSaving}>
-                  {infoSaving ? "Saving..." : "Save Changes"}
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
 
         {/* Account Security */}
         <div className="sec-section">
@@ -3093,7 +2660,6 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout, onUserUpdate }) 
                       <Icon name={showNew ? "eyeOff" : "eye"} size={16} />
                     </button>
                   </div>
-                  <PasswordStrengthMeter password={newPw} emailLocalPart={emailLocalPart} />
                 </div>
                 <div className="field">
                   <label className="field-label">Confirm New Password</label>
@@ -3109,6 +2675,22 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout, onUserUpdate }) 
                   </div>
                 </div>
 
+                {newPw.length > 0 && (
+                  <div style={{
+                    display: "flex", alignItems: "center", gap: 8, marginBottom: 10,
+                    padding: "8px 12px", borderRadius: 8,
+                    background: newPw.length < 8 ? "var(--red-l)" : "var(--green-l)",
+                    border: `1px solid ${newPw.length < 8 ? "var(--red-d)" : "var(--green-d)"}`,
+                  }}>
+                    <Icon name={newPw.length < 8 ? "alert" : "check"} size={13}
+                      color={newPw.length < 8 ? "var(--red)" : "var(--green)"} />
+                    <span style={{ fontSize: 12, fontWeight: 600, color: newPw.length < 8 ? "var(--red-d)" : "var(--green-d)" }}>
+                      {newPw.length < 8
+                        ? `${8 - newPw.length} more character${8 - newPw.length !== 1 ? "s" : ""} needed`
+                        : "Password length is good"}
+                    </span>
+                  </div>
+                )}
                 {confirmPw.length > 0 && (
                   <div style={{
                     display: "flex", alignItems: "center", gap: 8, marginBottom: 14,
@@ -3137,24 +2719,9 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout, onUserUpdate }) 
               </div>
               <div className="sec-row-body">
                 <div className="sec-row-label">Email Address</div>
-                <div className="sec-row-hint">{p.email || "—"}</div>
-                {!p.email_verified && (
-                  <button
-                    onClick={resendVerification}
-                    disabled={emailResendDisabled}
-                    style={{
-                      border: "none", background: "none", color: "var(--teal-d)",
-                      fontSize: 12, fontWeight: 700, cursor: emailResendDisabled ? "default" : "pointer",
-                      padding: 0, marginTop: 4, fontFamily: "var(--font)", textDecoration: "underline",
-                      opacity: emailResendDisabled ? 0.6 : 1,
-                    }}>
-                    {emailResendLabel}
-                  </button>
-                )}
+                <div className="sec-row-hint">{user?.email || "—"}</div>
               </div>
-              <span className={`badge ${p.email_verified ? "badge-teal" : "badge-Medium"}`} style={{ fontSize: 10 }}>
-                {p.email_verified ? "Verified" : "Unverified"}
-              </span>
+              <span className="badge badge-teal" style={{ fontSize: 10 }}>Verified</span>
             </div>
           </div>
         </div>
