@@ -745,13 +745,69 @@ def score_disease(disease: str, answers: dict) -> float:
 
 
 def get_next_question(answers: dict, asked: list) -> Optional[dict]:
+    """
+    Root cause of "everything except Malaria gets low confidence":
+    this previously drained the #1-ranked disease's ENTIRE unasked symptom
+    list before ever asking about the #2 candidate. Malaria's symptom list
+    is the largest (14) and overlaps heavily with nearly every other
+    febrile illness (fever, headache, fatigue, malaise, vomiting...), so
+    almost any early "yes" answer -- regardless of the person's actual
+    condition -- put Malaria in the #1 slot. It then absorbed most or all
+    of the fixed 15-question budget for itself, leaving every other
+    candidate (Typhoid, Dengue, TB, the Hepatitis variants, Pneumonia,
+    Jaundice, Diabetes...) with only 1-4 of their own symptoms ever asked.
+    A disease that is 90%+ unasked looks like "no evidence" to both the
+    scoring fallback and the trained ML model, so those diseases were
+    structurally locked into low confidence almost regardless of the
+    person's real answers -- while Malaria, riding on shared symptoms,
+    consistently ended up with a near-complete feature profile and a
+    comparatively strong score even when it wasn't the actual condition.
+
+    A pure fair-share round robin across all 6 candidates for the whole
+    session was tried and rejected: it spread the 15-question budget so
+    thin across shifting candidates that even the TRUE underlying disease
+    could only ever get 2-4 of its own symptoms confirmed, capping
+    everyone's confidence low instead of just Malaria's rivals.
+
+    Fix: taper the candidate pool size as the session progresses, mirroring
+    how a real differential diagnosis actually works -- broad screening
+    first, then narrowing to build real depth on the leading hypotheses:
+      - First 6 questions:  pool of 6 candidates (broad differential)
+      - Next 5 questions:   pool of 3 candidates (narrowing)
+      - Remaining questions: pool of 2 candidates (deep confirmation)
+    Within whichever pool is active, the candidate with the FEWEST of its
+    own symptoms asked so far goes next (ties keep score-rank order via
+    Python's stable sort), so nobody -- including a large-symptom-list
+    disease like Malaria -- can monopolize the pool's share of questions
+    the way the old code let the #1 slot monopolize the entire budget.
+    """
     ranked = sorted(DISEASE_SYMPTOM_MAP.keys(), key=lambda d: score_disease(d, answers), reverse=True)
-    for disease in ranked[:6]:
-        for sym in DISEASE_SYMPTOM_MAP[disease]:
+
+    n_asked = len(asked)
+    if n_asked < 6:
+        pool_size = 6
+    elif n_asked < 11:
+        pool_size = 3
+    else:
+        pool_size = 2
+    top = ranked[:pool_size]
+
+    def asked_count(d: str) -> int:
+        return sum(1 for s in DISEASE_SYMPTOM_MAP[d] if s in asked)
+
+    def has_unasked(d: str) -> bool:
+        return any(s not in asked for s in DISEASE_SYMPTOM_MAP[d])
+
+    candidates = [d for d in top if has_unasked(d)]
+    if candidates:
+        candidates.sort(key=asked_count)
+        chosen_disease = candidates[0]
+        for sym in DISEASE_SYMPTOM_MAP[chosen_disease]:
             if sym not in asked:
                 q = Q_INDEX.get(sym)
                 if q:
                     return q
+
     for q in ALL_QUESTIONS:
         if q["id"] not in asked:
             return q
