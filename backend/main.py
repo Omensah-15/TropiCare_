@@ -717,12 +717,56 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
     return None
 
 
-def compute_score_snapshot(answers: dict) -> Dict[str, float]:
+def _disease_confidence(disease: str, answers: dict, asked: Optional[list] = None) -> float:
+    """
+    Confidence for a disease from confirmed vs. denied symptoms, used by the
+    non-ML scoring fallback and by the trajectory snapshot.
+
+    Previously this divided confirmed symptoms by the FULL symptom list
+    length for the disease (yes_count / len(symptoms)). That structurally
+    under-scored diseases with long symptom lists (e.g. Malaria has 14
+    tracked symptoms, so confirming 6 strong ones only scored 6/14 = 0.43)
+    while ignoring which symptoms had actually been asked. This version
+    normalises against symptoms that were actually asked (when supplied)
+    and blends the positive-match ratio with a coverage term, so a strong
+    partial match on a long-list disease is no longer scored lower than a
+    weaker match on a short one.
+    """
+    symptoms = DISEASE_SYMPTOM_MAP.get(disease, [])
+    if not symptoms:
+        return 0.0
+
+    relevant = [s for s in symptoms if s in asked] if asked else [s for s in symptoms if s in answers]
+    if not relevant:
+        return 0.0
+
+    yes = sum(1 for s in relevant if answers.get(s) is True)
+    if yes == 0:
+        return 0.0
+
+    match_ratio = yes / len(relevant)
+    coverage    = min(len(relevant) / len(symptoms), 1.0)
+
+    # Match ratio dominates; coverage refines confidence upward as more of
+    # the disease's picture has been checked, rather than gating it.
+    confidence = match_ratio * (0.65 + 0.35 * coverage)
+    return round(min(0.95, max(0.10, confidence)), 4)
+
+
+def compute_score_snapshot(answers: dict, asked: Optional[list] = None) -> Dict[str, float]:
     ensemble = LOADED_MODELS.get("sctd_ensemble")
     le       = LOADED_MODELS.get("sctd_label_encoder")
     cols     = LOADED_MODELS.get("sctd_feature_columns")
 
-    if ensemble and le and cols:
+    # IMPORTANT: use `is not None`, not truthiness. `cols` is typically a
+    # pandas Index / numpy array saved straight from a DataFrame's columns;
+    # evaluating `bool(cols)` on an array with more than one element raises
+    # ValueError ("truth value of an array... is ambiguous") *inside this
+    # if-condition itself*, before the try/except below can catch it. That
+    # crashed this function on every call even when all three models were
+    # loaded and healthy, which silently forced every request onto the
+    # scoring fallback below.
+    if ensemble is not None and le is not None and cols is not None:
         try:
             feature_cols = list(cols)
             vec = np.array(
@@ -734,21 +778,21 @@ def compute_score_snapshot(answers: dict) -> Dict[str, float]:
                 for i, p in enumerate(proba)
             }
         except Exception as e:
-            logger.warning({"event": "snapshot_ml_failed", "error": str(e)})
+            logger.warning(
+                {"event": "snapshot_ml_failed", "error": str(e), "error_type": type(e).__name__},
+                exc_info=True,
+            )
 
-    snapshot: Dict[str, float] = {}
-    for d, syms in DISEASE_SYMPTOM_MAP.items():
-        yc = sum(1 for s in syms if answers.get(s) is True)
-        tc = max(len(syms), 1)
-        snapshot[d] = round(min(0.95, yc / tc), 4) if yc else 0.0
-    return snapshot
+    return {d: _disease_confidence(d, answers, asked) for d in DISEASE_SYMPTOM_MAP}
 
 
 def predict_with_ml(answers: dict) -> dict:
     ensemble = LOADED_MODELS.get("sctd_ensemble")
     le       = LOADED_MODELS.get("sctd_label_encoder")
     cols     = LOADED_MODELS.get("sctd_feature_columns")
-    risk_map = LOADED_MODELS.get("sctd_risk_classification") or RISK_MAP
+    risk_map = LOADED_MODELS.get("sctd_risk_classification")
+    if risk_map is None:
+        risk_map = RISK_MAP
 
     yes_count = sum(1 for v in answers.values() if v is True)
 
@@ -761,7 +805,13 @@ def predict_with_ml(answers: dict) -> dict:
             "method":     "insufficient_evidence",
         }
 
-    if ensemble and le and cols:
+    # See the note in compute_score_snapshot() above: `cols` (and sometimes
+    # `ensemble`/`le`, depending on how they were serialised) can be a
+    # pandas/numpy object for which `bool(...)` is ambiguous rather than
+    # simply falsy. Using `is not None` avoids that crash so this function
+    # never silently drops into the scoring fallback below just because a
+    # boolean check on a loaded, healthy model raised an exception.
+    if ensemble is not None and le is not None and cols is not None:
         try:
             feature_cols = list(cols)
             vec = np.array(
@@ -793,7 +843,10 @@ def predict_with_ml(answers: dict) -> dict:
                 "method":     "ml",
             }
         except Exception as e:
-            logger.warning({"event": "ml_predict_failed", "error": str(e)})
+            logger.warning(
+                {"event": "ml_predict_failed", "error": str(e), "error_type": type(e).__name__},
+                exc_info=True,
+            )
 
     scores        = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -808,15 +861,10 @@ def predict_with_ml(answers: dict) -> dict:
             "method":     "insufficient_evidence",
         }
 
-    syms         = DISEASE_SYMPTOM_MAP.get(best_disease, [])
-    yes_for_best = sum(1 for s in syms if answers.get(s) is True)
-    confidence   = min(0.95, max(0.10, yes_for_best / max(len(syms), 1)))
-
-    all_scores: Dict[str, float] = {}
-    for d, _ in sorted_scores[:8]:
-        yc = sum(1 for s in DISEASE_SYMPTOM_MAP.get(d, []) if answers.get(s) is True)
-        tc = max(len(DISEASE_SYMPTOM_MAP.get(d, [])), 1)
-        all_scores[d] = round(min(0.95, max(0.01, yc / tc)), 4)
+    confidence = _disease_confidence(best_disease, answers)
+    all_scores: Dict[str, float] = {
+        d: _disease_confidence(d, answers) for d, _ in sorted_scores[:8]
+    }
 
     return {
         "disease":    best_disease,
@@ -1377,8 +1425,22 @@ async def lifespan(app: FastAPI):
     _scheduler.add_job(_cleanup_stale_sessions, "interval", hours=1, id="session_cleanup")
     _scheduler.start()
 
-    model_keys = list(LOADED_MODELS.keys()) or ["none - using scoring engine"]
-    logger.info({"event": "startup", "ml_models": model_keys, "openrouter": bool(settings.openrouter_api_key)})
+    model_keys    = list(LOADED_MODELS.keys())
+    required_keys = {"sctd_ensemble", "sctd_label_encoder", "sctd_feature_columns"}
+    missing_keys  = sorted(required_keys - set(model_keys))
+    if missing_keys:
+        logger.error({
+            "event":   "ml_models_incomplete",
+            "found":   model_keys or ["none - using scoring engine"],
+            "missing": missing_keys,
+            "impact":  "Every diagnosis will use the symptom-scoring fallback, not the trained ensemble.",
+        })
+    logger.info({
+        "event":       "startup",
+        "ml_models":   model_keys or ["none - using scoring engine"],
+        "ml_ready":    not missing_keys,
+        "openrouter":  bool(settings.openrouter_api_key),
+    })
 
     yield
 
@@ -1569,10 +1631,14 @@ async def _check_password_rate_limit(email: str) -> None:
 
 @app.get("/api/v1/health")
 async def health():
+    required = {"sctd_ensemble", "sctd_label_encoder", "sctd_feature_columns"}
+    found    = set(LOADED_MODELS.keys())
     return {
         "status":             "healthy",
         "timestamp":          datetime.utcnow().isoformat(),
-        "ml_models":          list(LOADED_MODELS.keys()),
+        "ml_models":          list(found),
+        "ml_ready":           required.issubset(found),
+        "ml_missing":         sorted(required - found),
         "openrouter_enabled": bool(settings.openrouter_api_key),
         "openrouter_model":   settings.openrouter_model,
     }
@@ -1733,7 +1799,7 @@ async def next_question(
         asked.append(req.question_id)
 
     trajectory = _load_json(s.trajectory, [])
-    snapshot   = compute_score_snapshot(answers)
+    snapshot   = compute_score_snapshot(answers, asked)
     top_scores = dict(sorted(snapshot.items(), key=lambda x: x[1], reverse=True)[:6])
     trajectory.append({
         "step":    len(asked),
