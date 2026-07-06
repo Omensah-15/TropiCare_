@@ -3,7 +3,7 @@
  * Backend: FastAPI (tropicare.onrender.com)
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
 import { generateTropiCareReport } from "./pdfReport.js";
 import ClinicFinder from "./ClinicFinder.jsx";
@@ -210,6 +210,43 @@ function scoreDisease(disease, answers) {
   return score;
 }
 
+// ─────────────────────────────────────────────
+// DISEASE CONFIDENCE (mirrors the backend's _disease_confidence exactly,
+// so offline results never disagree with what the server would compute)
+// ─────────────────────────────────────────────
+//
+// Previously confidence was yes_count / full_symptom_list_length for the
+// disease. That structurally under-scored diseases with long symptom
+// lists — Malaria has 14 tracked symptoms, so confirming 6 strong ones
+// only scored 6/14 = 0.43 — and ignored which symptoms had actually been
+// asked, which matters a lot here since the assessment caps at 15
+// adaptive questions and rarely reaches every symptom for every disease.
+// This normalises against symptoms actually asked (when supplied) and
+// blends the positive-match ratio with a coverage term, so a strong
+// partial match on a long-list disease is no longer scored lower than a
+// weaker match on a short one.
+function diseaseConfidence(disease, answers, asked = null) {
+  const symptoms = DISEASE_SYMPTOM_MAP[disease] || [];
+  if (symptoms.length === 0) return 0;
+
+  const relevant = asked
+    ? symptoms.filter((s) => asked.includes(s))
+    : symptoms.filter((s) => s in answers);
+
+  if (relevant.length === 0) return 0;
+
+  const yes = relevant.filter((s) => answers[s] === true).length;
+  if (yes === 0) return 0;
+
+  const matchRatio = yes / relevant.length;
+  const coverage    = Math.min(relevant.length / symptoms.length, 1);
+
+  // Match ratio dominates; coverage refines confidence upward as more of
+  // the disease's picture has been checked, rather than gating it.
+  const confidence = matchRatio * (0.65 + 0.35 * coverage);
+  return Math.round(Math.min(0.95, Math.max(0.10, confidence)) * 10000) / 10000;
+}
+
 function getNextQuestionOffline(answers, asked) {
   const ranked = Object.keys(DISEASE_SYMPTOM_MAP)
     .map((d) => ({ d, sc: scoreDisease(d, answers) }))
@@ -230,12 +267,10 @@ function getNextQuestionOffline(answers, asked) {
 // ─────────────────────────────────────────────
 // OFFLINE CONFIDENCE SNAPSHOT
 // ─────────────────────────────────────────────
-function computeOfflineSnapshot(answers) {
+function computeOfflineSnapshot(answers, asked = null) {
   const snapshot = {};
   Object.keys(DISEASE_SYMPTOM_MAP).forEach((d) => {
-    const syms = DISEASE_SYMPTOM_MAP[d];
-    const yes  = syms.filter((s) => answers[s] === true).length;
-    snapshot[d] = yes ? Math.round(Math.min(0.95, yes / Math.max(syms.length, 1)) * 10000) / 10000 : 0;
+    snapshot[d] = diseaseConfidence(d, answers, asked);
   });
   return snapshot;
 }
@@ -243,7 +278,7 @@ function computeOfflineSnapshot(answers) {
 // ─────────────────────────────────────────────
 // OFFLINE PREDICTION
 // ─────────────────────────────────────────────
-function predictOffline(answers) {
+function predictOffline(answers, asked = null) {
   const yesCount = Object.values(answers).filter((v) => v === true).length;
 
   if (yesCount < 2) {
@@ -262,11 +297,9 @@ function predictOffline(answers) {
 
   const sorted = Object.keys(DISEASE_SYMPTOM_MAP)
     .map((d) => {
-      const syms = DISEASE_SYMPTOM_MAP[d] || [];
-      const yes  = syms.filter((s) => answers[s] === true).length;
       const sc   = scoreDisease(d, answers);
-      const conf = Math.min(0.95, Math.max(0.10, yes / Math.max(syms.length, 1)));
-      return { d, sc, conf, yes };
+      const conf = diseaseConfidence(d, answers, asked);
+      return { d, sc, conf };
     })
     .sort((a, b) => b.sc - a.sc);
 
@@ -1212,7 +1245,7 @@ export default function App() {
     setAsked(newAsked);
 
     // Build a local trajectory snapshot for every answer (PDF report fallback)
-    const snapshotScores = computeOfflineSnapshot(newAnswers);
+    const snapshotScores = computeOfflineSnapshot(newAnswers, newAsked);
     const top6 = Object.fromEntries(
       Object.entries(snapshotScores).sort((a, b) => b[1] - a[1]).slice(0, 6)
     );
@@ -1221,7 +1254,7 @@ export default function App() {
       { step: prev.length + 1, symptom: currentQ.id, answer: val, scores: top6 },
     ]);
 
-    if (newAsked.length >= MAX_Q) { finishAssessment(newAnswers); return; }
+    if (newAsked.length >= MAX_Q) { finishAssessment(newAnswers, newAsked); return; }
 
     let next = null;
     if (sessionId) {
@@ -1230,7 +1263,7 @@ export default function App() {
           question_id: currentQ.id, answer: val,
         });
         if (_loggingOut) return;
-        if (res.completed) { finishAssessment(newAnswers); return; }
+        if (res.completed) { finishAssessment(newAnswers, newAsked); return; }
         next = res.next_question;
       } catch {
         next = getNextQuestionOffline(newAnswers, newAsked);
@@ -1240,12 +1273,12 @@ export default function App() {
     }
 
     if (_loggingOut) return;
-    if (!next) { finishAssessment(newAnswers); return; }
+    if (!next) { finishAssessment(newAnswers, newAsked); return; }
     setCurrentQ(next);
     setQIdx(qIdx + 1);
   };
 
-  const finishAssessment = async (finalAnswers) => {
+  const finishAssessment = async (finalAnswers, finalAsked = asked) => {
     setAssActive(false);
     setAnalyzing(true);
     await new Promise((r) => setTimeout(r, 2400));
@@ -1265,7 +1298,7 @@ export default function App() {
       }
     }
 
-    if (!pred) pred = predictOffline(finalAnswers);
+    if (!pred) pred = predictOffline(finalAnswers, finalAsked);
     if (_loggingOut) return;
 
     // Backend trajectory takes priority over local snapshot
