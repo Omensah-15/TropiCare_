@@ -237,13 +237,56 @@ function animateMarkerTo(marker, toLatLng, duration = 650) {
 
 // ─────────────────────────────────────────────
 // API
+//
+// The backend races 3 upstream mirrors with an 18s internal budget and its
+// own app-wide request timeout sits at 30s, returning a 504 if that budget
+// is exceeded. This client-side fetch is given a matching timeout — long
+// enough to never cut off a request the backend would have finished, short
+// enough to fail fast if the network itself is the problem — plus a small
+// bounded retry for the specific failure modes that are transient (network
+// blips, 5xx, and the backend's own 504) so a single bad mirror or a brief
+// connectivity hiccup self-heals instead of surfacing as an error the
+// person has to notice and tap through.
 // ─────────────────────────────────────────────
-async function fetchNearbyClinics(lat, lon) {
+const FETCH_TIMEOUT_MS = 25000;   // stays above the backend's 18s clinic budget, below its 30s hard cutoff
+const FETCH_MAX_RETRIES = 2;      // total of 3 attempts
+const FETCH_RETRY_BASE_MS = 1200; // backoff: ~1.2s, then ~2.4s
+
+function isRetryableError(error) {
+  // Network failure (offline, DNS, connection reset) or our own abort-on-timeout.
+  if (error.name === "AbortError" || error.name === "TypeError") return true;
+  // Backend/app-wide timeout, or a transient upstream/server failure.
+  if (error.status === 504 || (error.status >= 500 && error.status < 600)) return true;
+  return false;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchNearbyClinicsOnce(lat, lon) {
   const token = localStorage.getItem(TOKEN_KEY);
-  const res = await fetch(
-    `${API_BASE}/clinics/nearby?lat=${lat}&lon=${lon}`,
-    { headers: token ? { Authorization: `Bearer ${token}` } : {} }
-  );
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(
+      `${API_BASE}/clinics/nearby?lat=${lat}&lon=${lon}`,
+      {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: controller.signal,
+      }
+    );
+  } catch (err) {
+    // AbortError (our own timeout) or a raw network TypeError both land here.
+    const error = err.name === "AbortError"
+      ? Object.assign(new Error("Request timed out"), { name: "AbortError" })
+      : err;
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -262,6 +305,31 @@ async function fetchNearbyClinics(lat, lon) {
     lon: p.lon,
     distanceKm: p.distance_km,
   }));
+}
+
+/**
+ * Wraps fetchNearbyClinicsOnce with bounded retry-with-backoff for
+ * transient failures only. Auth errors (401), not-found (404), and other
+ * 4xx responses are not retryable — retrying them would just waste time
+ * before showing the same outcome — so they fail immediately on the
+ * first attempt.
+ */
+async function fetchNearbyClinics(lat, lon, { onRetry } = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= FETCH_MAX_RETRIES; attempt++) {
+    try {
+      return await fetchNearbyClinicsOnce(lat, lon);
+    } catch (err) {
+      lastError = err;
+      const isLastAttempt = attempt === FETCH_MAX_RETRIES;
+      if (isLastAttempt || !isRetryableError(err)) {
+        throw err;
+      }
+      if (onRetry) onRetry(attempt + 1);
+      await sleep(FETCH_RETRY_BASE_MS * Math.pow(2, attempt));
+    }
+  }
+  throw lastError;
 }
 
 function directionsUrl(originLat, originLon, destLat, destLon) {
@@ -424,6 +492,7 @@ function getFacilityStyle(type) {
 export default function ClinicFinder({ onClose }) {
   const [status, setStatus] = useState("locating"); // locating | searching | ready | error
   const [errorMsg, setErrorMsg] = useState("");
+  const [searchNote, setSearchNote] = useState("");
   const [position, setPosition] = useState(null);
   const [accuracy, setAccuracy] = useState(null);
   const [refining, setRefining] = useState(false);
@@ -453,22 +522,38 @@ export default function ClinicFinder({ onClose }) {
     } else {
       setStatus("searching");
       setErrorMsg("");
+      setSearchNote("");
       setClinics([]);
     }
 
     try {
-      const places = await fetchNearbyClinics(lat, lon);
+      const places = await fetchNearbyClinics(lat, lon, {
+        // A transient failure (network blip, 5xx, backend 504) is being
+        // retried automatically — surface that quietly instead of the
+        // person staring at an unexplained delay past the usual load time.
+        onRetry: (attempt) => {
+          if (!background) {
+            setSearchNote(`Connection is slow, retrying (attempt ${attempt + 1} of 3)...`);
+          }
+        },
+      });
       setClinics(places);
       setStatus("ready");
       setErrorMsg("");
+      setSearchNote("");
     } catch (err) {
       console.error("ClinicFinder: search failed:", err.message);
       if (!background) {
         setStatus("error");
+        setSearchNote("");
         if (err.status === 404) {
           setErrorMsg("No hospitals, clinics, or pharmacies were found near this location.");
         } else if (err.status === 401) {
           setErrorMsg("Your session has expired. Please sign in again and retry.");
+        } else if (err.name === "AbortError") {
+          setErrorMsg("Finding clinics is taking longer than expected. Please try again.");
+        } else if (err.status >= 500) {
+          setErrorMsg("The clinic search service is temporarily unavailable. Please try again in a moment.");
         } else {
           setErrorMsg("We couldn't load nearby clinics right now. Please check your connection and try again.");
         }
@@ -763,7 +848,7 @@ export default function ClinicFinder({ onClose }) {
           {status === "searching" && (
             <div className="cf-inline-loading">
               <div className="cf-spinner cf-spinner-sm" />
-              Searching for nearby clinics...
+              {searchNote || "Searching for nearby clinics..."}
             </div>
           )}
 
