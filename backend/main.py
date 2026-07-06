@@ -563,6 +563,47 @@ DISEASE_SYMPTOM_MAP: Dict[str, List[str]] = {
     "Drug Reaction":          ["itching","skin_rash","red_spots_over_body","fatigue","nausea","diarrhoea"],
 }
 
+# -----------------------------------------------------------------
+# SYMPTOM SPECIFICITY WEIGHTS
+#
+# Root cause of the confidence imbalance: a symptom like "fatigue" or
+# "headache" appears in well over half of DISEASE_SYMPTOM_MAP, while a
+# symptom like "polyuria" or "blurred_vision" appears only under Diabetes.
+# Both were previously worth an identical +3 when confirmed. That let any
+# disease built mostly from common, overlapping symptoms (Malaria has 14
+# symptoms, nearly all of them shared with several other febrile illnesses)
+# accumulate score from confirmations that are only weakly diagnostic,
+# while a disease defined by a small set of narrow, specific symptoms
+# (Diabetes) could only earn the same +3 per confirmation despite each of
+# its symptoms being far more informative on its own. The same flat
+# weighting fed get_next_question()'s ranking, so a disease built from
+# common symptoms would keep surfacing in the top-6 far more often purely
+# from overlap, not from being genuinely well-supported -- crowding out
+# the specific follow-up questions a narrower disease like Diabetes needs
+# in order to build up a comparable confidence score within the 15-question
+# cap.
+#
+# SYMPTOM_WEIGHT gives each symptom an inverse-frequency weight based on
+# how many diseases in DISEASE_SYMPTOM_MAP list it (1.0 for a symptom
+# unique to one disease, dropping toward ~0.05-0.15 for symptoms shared
+# across a dozen or more). This is applied to confirmed-symptom scoring
+# only (see score_disease and _disease_confidence below) -- denied-symptom
+# scoring is left untouched, preserving the existing "+3 confirmed / -1
+# denied" model used in the adaptive-engine explanation. The effect is
+# that confirming a highly distinguishing symptom now counts far more
+# toward both question ranking and final confidence than confirming a
+# generic one, which is what actually differentiates diseases in practice.
+# -----------------------------------------------------------------
+
+_SYMPTOM_DISEASE_COUNT: Dict[str, int] = {}
+for _disease_syms in DISEASE_SYMPTOM_MAP.values():
+    for _sym in _disease_syms:
+        _SYMPTOM_DISEASE_COUNT[_sym] = _SYMPTOM_DISEASE_COUNT.get(_sym, 0) + 1
+
+SYMPTOM_WEIGHT: Dict[str, float] = {
+    sym: round(1.0 / count, 4) for sym, count in _SYMPTOM_DISEASE_COUNT.items()
+}
+
 ALL_QUESTIONS: List[Dict[str, str]] = [
     {"id":"high_fever","question":"Do you have a high fever?","category":"General"},
     {"id":"mild_fever","question":"Do you have a mild fever?","category":"General"},
@@ -697,7 +738,7 @@ def score_disease(disease: str, answers: dict) -> float:
     score = 0.0
     for symptom in DISEASE_SYMPTOM_MAP.get(disease, []):
         if answers.get(symptom) is True:
-            score += 3.0
+            score += 3.0 * SYMPTOM_WEIGHT.get(symptom, 1.0)
         elif answers.get(symptom) is False:
             score -= 1.0
     return score
@@ -731,6 +772,17 @@ def _disease_confidence(disease: str, answers: dict, asked: Optional[list] = Non
     and blends the positive-match ratio with a coverage term, so a strong
     partial match on a long-list disease is no longer scored lower than a
     weaker match on a short one.
+
+    The match ratio is further weighted by SYMPTOM_WEIGHT (see definition
+    above). Without this, a disease built mostly from generic, widely
+    shared symptoms (fatigue, headache, fever) scored identically to one
+    built from narrow, highly specific symptoms (polyuria, blurred_vision)
+    for the same yes/no split -- which is what let common-symptom diseases
+    end up with an inflated confidence relative to narrower ones like
+    Diabetes even when the actual evidence was weaker. Confirming a
+    specific symptom now moves the ratio more than confirming a generic
+    one, and denying a specific symptom counts more heavily against it too,
+    since both are weighted in the same denominator.
     """
     symptoms = DISEASE_SYMPTOM_MAP.get(disease, [])
     if not symptoms:
@@ -740,16 +792,34 @@ def _disease_confidence(disease: str, answers: dict, asked: Optional[list] = Non
     if not relevant:
         return 0.0
 
-    yes = sum(1 for s in relevant if answers.get(s) is True)
-    if yes == 0:
+    weight_total = sum(SYMPTOM_WEIGHT.get(s, 1.0) for s in relevant)
+    if weight_total <= 0:
         return 0.0
 
-    match_ratio = yes / len(relevant)
+    matched_weight = sum(
+        SYMPTOM_WEIGHT.get(s, 1.0) for s in relevant if answers.get(s) is True
+    )
+    if matched_weight == 0:
+        return 0.0
+
+    match_ratio = matched_weight / weight_total
     coverage    = min(len(relevant) / len(symptoms), 1.0)
 
-    # Match ratio dominates; coverage refines confidence upward as more of
-    # the disease's picture has been checked, rather than gating it.
-    confidence = match_ratio * (0.65 + 0.35 * coverage)
+    # Coverage previously used a 0.65 floor ("0.65 + 0.35*coverage"), so a
+    # disease that had barely been probed -- say two generic symptoms like
+    # fatigue and high_fever, both confirmed, out of a 14-symptom list --
+    # could still show ~70% confidence purely because match_ratio was 1.0
+    # on that tiny, low-coverage sample. That is exactly how a disease like
+    # Malaria (many symptoms, most shared broadly) could end up looking
+    # artificially well-supported from incidental overlap, while a disease
+    # actually built from strong, specific evidence but modest coverage
+    # scored no higher. The factor below scales from a low floor at near-
+    # zero coverage up toward 1.0 as more of the disease's own symptom list
+    # is actually covered, so confidence tracks how much real evidence was
+    # gathered, not just the ratio within whatever small sample happened to
+    # be asked.
+    coverage_factor = min(1.0, 0.25 + 0.75 * coverage)
+    confidence = match_ratio * coverage_factor
     return round(min(0.95, max(0.10, confidence)), 4)
 
 
