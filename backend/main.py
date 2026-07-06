@@ -1084,22 +1084,50 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
 # cached in Redis per rounded coordinate so repeat lookups near the same
 # location do not re-hit the upstream data source.
 #
-# Search radius is split by facility type: hospitals are far sparser than
-# clinics and pharmacies, so they are searched over a wider radius. A
-# single shared radius previously meant hospitals several kilometres away
-# were silently missed while pharmacies close by dominated the results —
-# this fixes that by giving each category its own search distance and
-# merging everything into one ranked list at the end.
-# -----------------------------------------------------------------
+# ---------------------------------------------------------------------
+# FIX #1 — reliability / "keeps needing a manual retry":
+# The previous implementation tried the 3 mirrors strictly one after the
+# other, each with its own timeout. In the worst case that is
+# len(CLINIC_DATA_SOURCES) * CLINIC_SOURCE_TIMEOUT_S seconds — with the
+# original values, 3 * 12s = 36s — which is LONGER than the 30s app-wide
+# request timeout enforced in `request_middleware`. That meant a single
+# slow or unreachable mirror could cause the whole request to be killed
+# with a 504 before the other, perfectly healthy mirrors ever got a turn,
+# surfacing as an error the user then had to manually retry. All mirrors
+# are now raced concurrently with one shared deadline
+# (CLINIC_OVERALL_TIMEOUT_S) safely under the app-wide timeout, so the
+# request succeeds as soon as the first mirror responds and a slow mirror
+# can never block a healthy one.
+#
+# FIX #2 — "skips clinics close by and finds ones far away":
+# Hospitals were searched over a 15km radius while clinics, doctors'
+# offices, and pharmacies were only searched over 6km. That meant a
+# pharmacy 7km away was invisible to the query entirely, while a hospital
+# 12km away was still fetched and could legitimately show up as
+# "Nearest" — not because it actually was closer, but because the truly
+# closer facility was never even requested. On top of that, both
+# categories were combined into a single Overpass query with one shared
+# `out center 60` cap, so in hospital-dense areas the hospital results
+# alone could exhaust that cap before a single clinic or pharmacy was
+# ever added to the output. Both categories now search the SAME radius,
+# in two separately labelled result sets with their own `out` limits, so
+# neither category can starve the other and nothing genuinely close to
+# the user is silently excluded. Final ordering is still computed purely
+# by real distance in `_rank_places_by_distance`, exactly like Google
+# Maps / Uber.
+# ---------------------------------------------------------------------
 
 CLINIC_DATA_SOURCES: List[str] = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.osm.ch/api/interpreter",
 ]
-HOSPITAL_SEARCH_RADIUS_M = 15000   # hospitals are sparser — search further out
-LOCAL_SEARCH_RADIUS_M    = 6000    # clinics, doctors' offices, pharmacies
-CLINIC_SOURCE_TIMEOUT_S  = 12
+HOSPITAL_SEARCH_RADIUS_M = 15000   # both categories now share one radius (see FIX #2 above)
+LOCAL_SEARCH_RADIUS_M    = 15000
+HOSPITAL_OUT_LIMIT       = 40      # each category gets its own guaranteed slice of results
+LOCAL_OUT_LIMIT          = 60
+CLINIC_SOURCE_TIMEOUT_S  = 12      # per-mirror HTTP timeout
+CLINIC_OVERALL_TIMEOUT_S = 18      # total budget racing all mirrors — stays under the 30s app timeout
 CLINIC_CACHE_TTL_S       = 21600   # 6 hours
 
 # Terms that reliably indicate government/public ownership in OSM data for
@@ -1114,16 +1142,28 @@ _PRIVATE_OPERATOR_TYPE_TERMS = {"private", "ngo", "religious", "community", "coo
 
 
 def _build_clinic_query(lat: float, lon: float, hospital_radius_m: int, local_radius_m: int) -> str:
+    """
+    Builds two separately-labelled, separately-capped result sets — hospitals
+    and "local" facilities (clinics, doctors' offices, pharmacies) — instead
+    of one combined query sharing a single `out` limit. See FIX #2 above for
+    why a shared cap silently dropped nearby local facilities in
+    hospital-dense areas.
+    """
     return (
-        f'[out:json][timeout:25];('
+        f'[out:json][timeout:25];'
+        f'('
         f'node["amenity"="hospital"](around:{hospital_radius_m},{lat},{lon});'
         f'way["amenity"="hospital"](around:{hospital_radius_m},{lat},{lon});'
+        f')->.hospitals;'
+        f'('
         f'node["amenity"="clinic"](around:{local_radius_m},{lat},{lon});'
         f'way["amenity"="clinic"](around:{local_radius_m},{lat},{lon});'
         f'node["amenity"="doctors"](around:{local_radius_m},{lat},{lon});'
         f'node["amenity"="pharmacy"](around:{local_radius_m},{lat},{lon});'
         f'node["healthcare"="pharmacy"](around:{local_radius_m},{lat},{lon});'
-        f');out center 60;'
+        f')->.local;'
+        f'.hospitals out center {HOSPITAL_OUT_LIMIT};'
+        f'.local out center {LOCAL_OUT_LIMIT};'
     )
 
 
@@ -1158,12 +1198,51 @@ async def _query_clinic_source(
 
 
 async def _fetch_clinic_elements(lat: float, lon: float) -> List[dict]:
+    """
+    Races all mirror data sources concurrently instead of trying them one at
+    a time (see FIX #1 above). Returns as soon as the first mirror produces
+    usable elements; any mirror still in flight at that point is cancelled.
+    Bounded by CLINIC_OVERALL_TIMEOUT_S regardless of how many mirrors are
+    configured, so this function can never itself become the reason a
+    request exceeds the app-wide 30s timeout.
+    """
     query = _build_clinic_query(lat, lon, HOSPITAL_SEARCH_RADIUS_M, LOCAL_SEARCH_RADIUS_M)
+
     async with aiohttp.ClientSession() as session:
-        for source in CLINIC_DATA_SOURCES:
-            elements = await _query_clinic_source(session, source, query)
-            if elements:
-                return elements
+        tasks: Dict[asyncio.Task, str] = {
+            asyncio.create_task(_query_clinic_source(session, source, query)): source
+            for source in CLINIC_DATA_SOURCES
+        }
+        loop = asyncio.get_event_loop()
+        deadline = loop.time() + CLINIC_OVERALL_TIMEOUT_S
+
+        try:
+            while tasks:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    break
+                done, _pending = await asyncio.wait(
+                    tasks.keys(), timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+                )
+                if not done:
+                    break
+                for task in done:
+                    source = tasks.pop(task)
+                    try:
+                        result = task.result()
+                    except Exception as e:
+                        CLINIC_SOURCE_ERRORS.labels(source=source, reason="task_error").inc()
+                        logger.warning({"event": "clinic_source_task_error", "source": source, "error": str(e)})
+                        result = None
+                    if result:
+                        for remaining_task in tasks:
+                            remaining_task.cancel()
+                        return result
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+
     return []
 
 
@@ -1269,11 +1348,10 @@ def _rank_places_by_distance(
     and sorts by it. Called on every request — cache hit or miss — so
     "nearest" is always correct for wherever the person actually is right
     now, never a stale distance from whatever coordinates first populated
-    the cache. Hospitals are searched over a wider radius than local
-    facilities (see HOSPITAL_SEARCH_RADIUS_M / LOCAL_SEARCH_RADIUS_M above),
-    so a hospital further away can still legitimately outrank it here —
-    everything is ranked purely by actual distance, exactly like Google
-    Maps / Uber do, rather than grouped by category first.
+    the cache. Both hospitals and local facilities are now fetched over the
+    same radius (see FIX #2 above), so ranking is purely by actual
+    distance — exactly like Google Maps / Uber do — with no category ever
+    silently excluded from consideration.
     """
     ranked = [
         {**p, "distance_km": round(_haversine_km(user_lat, user_lon, p["lat"], p["lon"]), 2)}
@@ -1953,8 +2031,7 @@ async def analyze(
 #
 # See the "CLINIC FINDER (server-side proxy)" section above for why this
 # proxies to the upstream data source rather than the frontend calling it
-# directly, and for why hospitals use a wider search radius than clinics
-# and pharmacies.
+# directly, and for the two reliability/coverage fixes applied there.
 # -----------------------------------------------------------------
 
 @app.get("/api/v1/clinics/nearby")
@@ -1968,7 +2045,12 @@ async def clinics_nearby(
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
         raise HTTPException(status_code=400, detail="Invalid coordinates")
 
-    cache_key = f"clinics:elements:v2:{round(lat, 2)}:{round(lon, 2)}"
+    # Cache key bumped to v3: the underlying query shape changed (equal
+    # radius for both categories, separately-capped result sets), so any
+    # entries written under the old v2 key/logic must never be served —
+    # they were generated with a query that could silently exclude nearby
+    # local facilities.
+    cache_key = f"clinics:elements:v3:{round(lat, 2)}:{round(lon, 2)}"
     cached = await cache_get(cache_key, key_type="clinics")
 
     raw_places: Optional[List[dict]] = None
