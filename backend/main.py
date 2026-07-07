@@ -943,29 +943,59 @@ def predict_with_ml(answers: dict) -> dict:
             vec = np.array(
                 [1.0 if answers.get(c, False) else 0.0 for c in feature_cols]
             ).reshape(1, -1)
-            proba      = ensemble.predict_proba(vec)[0]
-            idx        = int(np.argmax(proba))
-            confidence = float(proba[idx])
+            proba = ensemble.predict_proba(vec)[0]
+            idx   = int(np.argmax(proba))
 
-            if confidence < 0.15:
+            # ml_confidence is the raw softmax probability. It is used ONLY
+            # as an "is there enough signal at all" gate below -- it is
+            # NOT what gets shown to the person. The ensemble was trained
+            # on dense, mostly-complete symptom checklists, but the
+            # adaptive engine queries it with a sparse 15-of-79 partial
+            # vector every time, which is an input shape the model never
+            # calibrated its probabilities against. That mismatch is what
+            # made confidence look uniformly low for every disease except
+            # whichever one happened to dominate the fixed question
+            # budget (see get_next_question's docstring above). The ML
+            # model still picks WHICH disease (argmax over classes it was
+            # trained to discriminate is exactly what it's good at), but
+            # the CONFIDENCE shown uses _disease_confidence -- the same
+            # coverage- and specificity-weighted formula used by the
+            # scoring fallback -- which was built specifically to reason
+            # about partial answer sets correctly. Retraining the ensemble
+            # itself with symptom-masking augmentation (so its own
+            # probabilities are calibrated for sparse input) is the
+            # longer-term fix; this makes the numbers trustworthy in the
+            # meantime without waiting on that retrain.
+            ml_confidence = float(proba[idx])
+
+            if ml_confidence < 0.15:
                 return {
                     "disease":    None,
-                    "confidence": confidence,
+                    "confidence": ml_confidence,
                     "risk":       "None",
                     "all_scores": {},
                     "method":     "insufficient_evidence",
                 }
 
-            disease   = le.inverse_transform([idx])[0]
-            all_probs = {
-                le.inverse_transform([i])[0]: round(float(p), 4)
-                for i, p in enumerate(proba)
+            disease    = le.inverse_transform([idx])[0]
+            confidence = _disease_confidence(disease, answers)
+
+            # Same substitution for the "other possibilities" list: use ML
+            # probability only to decide which classes are worth showing,
+            # then display each one's calibrated, partial-answer-aware
+            # confidence rather than its raw softmax share.
+            top_indices = np.argsort(proba)[::-1][:8]
+            all_scores = {
+                le.inverse_transform([i])[0]: _disease_confidence(le.inverse_transform([i])[0], answers)
+                for i in top_indices
             }
+            all_scores = dict(sorted(all_scores.items(), key=lambda x: x[1], reverse=True))
+
             return {
                 "disease":    disease,
                 "confidence": confidence,
                 "risk":       risk_map.get(disease, "Medium"),
-                "all_scores": dict(sorted(all_probs.items(), key=lambda x: x[1], reverse=True)),
+                "all_scores": all_scores,
                 "method":     "ml",
             }
         except Exception as e:
