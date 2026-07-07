@@ -16,7 +16,7 @@ An AI health assessment platform that supports early tropical disease risk asses
 
 ## Confidence Evolution
 
-![Confidence evolution chart](https://github.com/Omensah-15/TropiCare_/raw/742e89a8fcd4d17dc565a75e3810b2deb7285b09/assets/confidence_evolution.png)
+![Confidence evolution chart](https://github.com/Omensah-15/TropiCare_/blob/5a85ec1383e21da46717b6438f1667a22e6a5957/assets/confidence_evolution.png)
 
 Example visualization showing how model confidence changes as symptoms are added during an assessment.
 
