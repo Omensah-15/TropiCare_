@@ -201,37 +201,10 @@ const ALL_QUESTIONS = [
 
 const Q_INDEX = Object.fromEntries(ALL_QUESTIONS.map((q) => [q.id, q]));
 
-// ─────────────────────────────────────────────
-// SYMPTOM SPECIFICITY WEIGHTS (mirrors the backend's SYMPTOM_WEIGHT exactly)
-//
-// A symptom like "fatigue" or "headache" appears in most of the diseases
-// below, while a symptom like "polyuria" or "blurred_vision" appears only
-// under Diabetes. Both were previously worth an identical +3 when
-// confirmed, which let a disease built mostly from common, overlapping
-// symptoms (Malaria has 14 symptoms, nearly all shared with several other
-// febrile illnesses) accumulate score from confirmations that are only
-// weakly diagnostic, while a disease defined by a small set of narrow,
-// specific symptoms (Diabetes) earned the same credit per confirmation
-// despite each symptom being far more informative on its own. This
-// inverse-frequency weight (1.0 for a symptom unique to one disease,
-// dropping toward ~0.05-0.15 for symptoms shared across a dozen or more)
-// is applied to confirmed-symptom scoring in both scoreDisease and
-// diseaseConfidence below.
-// ─────────────────────────────────────────────
-const SYMPTOM_WEIGHT = (() => {
-  const counts = {};
-  Object.values(DISEASE_SYMPTOM_MAP).forEach((syms) => {
-    syms.forEach((s) => { counts[s] = (counts[s] || 0) + 1; });
-  });
-  const weights = {};
-  Object.entries(counts).forEach(([s, c]) => { weights[s] = Math.round((1 / c) * 10000) / 10000; });
-  return weights;
-})();
-
 function scoreDisease(disease, answers) {
   let score = 0;
   for (const s of DISEASE_SYMPTOM_MAP[disease] || []) {
-    if (answers[s] === true)  score += 3 * (SYMPTOM_WEIGHT[s] ?? 1);
+    if (answers[s] === true)  score += 3;
     if (answers[s] === false) score -= 1;
   }
   return score;
@@ -242,27 +215,16 @@ function scoreDisease(disease, answers) {
 // so offline results never disagree with what the server would compute)
 // ─────────────────────────────────────────────
 //
-// Two compounding issues previously made every disease except Malaria
-// look under-confident:
-//
-// 1. Confirmed symptoms all counted equally regardless of how many
-//    diseases share them, so a disease built from common, overlapping
-//    symptoms (Malaria) could look as well-supported as one built from
-//    narrow, specific symptoms (Diabetes) for the same yes/no split. This
-//    is fixed by weighting the match ratio itself with SYMPTOM_WEIGHT:
-//    confirming a specific symptom now moves the ratio more than
-//    confirming a generic one, and denying a specific symptom counts more
-//    heavily against it too, since both are weighted in the denominator.
-//
-// 2. The coverage factor used a 0.65 floor ("0.65 + 0.35*coverage"), so a
-//    disease that had barely been probed -- two generic symptoms asked
-//    and both confirmed, out of a 14-symptom list -- could still show
-//    ~70% confidence purely because the match ratio on that tiny sample
-//    was 1.0. The factor below scales from a low floor at near-zero
-//    coverage up toward 1.0 as more of the disease's own symptom list is
-//    actually covered, so confidence tracks how much real evidence was
-//    gathered, not just the ratio within whatever small sample happened
-//    to be asked.
+// Previously confidence was yes_count / full_symptom_list_length for the
+// disease. That structurally under-scored diseases with long symptom
+// lists — Malaria has 14 tracked symptoms, so confirming 6 strong ones
+// only scored 6/14 = 0.43 — and ignored which symptoms had actually been
+// asked, which matters a lot here since the assessment caps at 15
+// adaptive questions and rarely reaches every symptom for every disease.
+// This normalises against symptoms actually asked (when supplied) and
+// blends the positive-match ratio with a coverage term, so a strong
+// partial match on a long-list disease is no longer scored lower than a
+// weaker match on a short one.
 function diseaseConfidence(disease, answers, asked = null) {
   const symptoms = DISEASE_SYMPTOM_MAP[disease] || [];
   if (symptoms.length === 0) return 0;
@@ -273,63 +235,26 @@ function diseaseConfidence(disease, answers, asked = null) {
 
   if (relevant.length === 0) return 0;
 
-  const weightTotal = relevant.reduce((sum, s) => sum + (SYMPTOM_WEIGHT[s] ?? 1), 0);
-  if (weightTotal <= 0) return 0;
+  const yes = relevant.filter((s) => answers[s] === true).length;
+  if (yes === 0) return 0;
 
-  const matchedWeight = relevant
-    .filter((s) => answers[s] === true)
-    .reduce((sum, s) => sum + (SYMPTOM_WEIGHT[s] ?? 1), 0);
-  if (matchedWeight === 0) return 0;
-
-  const matchRatio = matchedWeight / weightTotal;
+  const matchRatio = yes / relevant.length;
   const coverage    = Math.min(relevant.length / symptoms.length, 1);
 
-  const coverageFactor = Math.min(1, 0.25 + 0.75 * coverage);
-  const confidence = matchRatio * coverageFactor;
+  // Match ratio dominates; coverage refines confidence upward as more of
+  // the disease's picture has been checked, rather than gating it.
+  const confidence = matchRatio * (0.65 + 0.35 * coverage);
   return Math.round(Math.min(0.95, Math.max(0.10, confidence)) * 10000) / 10000;
 }
 
-// ─────────────────────────────────────────────
-// NEXT QUESTION (mirrors the backend's get_next_question exactly)
-// ─────────────────────────────────────────────
-//
-// Previously this drained the #1-ranked disease's ENTIRE unasked symptom
-// list before ever asking about the #2 candidate. Malaria's symptom list
-// is the largest (14) and overlaps heavily with nearly every other
-// febrile illness, so almost any early "yes" answer put Malaria in the #1
-// slot, which then absorbed most or all of the fixed 15-question budget
-// for itself — leaving every other candidate with only 1-4 of their own
-// symptoms ever asked, and therefore looking like "no evidence" almost
-// regardless of the person's real answers.
-//
-// A pure fair-share round robin across all 6 candidates for the whole
-// session was tried and rejected: it spread the budget so thin that even
-// the TRUE underlying disease could only get 2-4 of its own symptoms
-// confirmed. The fix tapers the candidate pool size as the session
-// progresses, mirroring a real differential diagnosis — broad screening
-// first, then narrowing to build real depth on the leading hypotheses:
-//   - First 6 questions:   pool of 6 candidates (broad differential)
-//   - Next 5 questions:    pool of 3 candidates (narrowing)
-//   - Remaining questions: pool of 2 candidates (deep confirmation)
-// Within whichever pool is active, the candidate with the fewest of its
-// own symptoms asked so far goes next.
 function getNextQuestionOffline(answers, asked) {
   const ranked = Object.keys(DISEASE_SYMPTOM_MAP)
     .map((d) => ({ d, sc: scoreDisease(d, answers) }))
     .sort((a, b) => b.sc - a.sc)
+    .slice(0, 6)
     .map((x) => x.d);
-
-  const nAsked = asked.length;
-  const poolSize = nAsked < 6 ? 6 : (nAsked < 11 ? 3 : 2);
-  const top = ranked.slice(0, poolSize);
-
-  const askedCount = (d) => (DISEASE_SYMPTOM_MAP[d] || []).filter((s) => asked.includes(s)).length;
-  const hasUnasked = (d) => (DISEASE_SYMPTOM_MAP[d] || []).some((s) => !asked.includes(s));
-
-  const candidates = top.filter(hasUnasked).sort((a, b) => askedCount(a) - askedCount(b));
-  if (candidates.length > 0) {
-    const chosen = candidates[0];
-    for (const sym of DISEASE_SYMPTOM_MAP[chosen] || []) {
+  for (const disease of ranked) {
+    for (const sym of DISEASE_SYMPTOM_MAP[disease] || []) {
       if (!asked.includes(sym)) {
         const q = Q_INDEX[sym];
         if (q) return q;
@@ -392,7 +317,15 @@ function predictOffline(answers, asked = null) {
     };
   }
 
-  const top  = sorted[0];
+  // sorted is ranked by raw weighted-match score (sc), which is only
+  // used above to decide whether there's enough signal to proceed at
+  // all. The headline result and the differential list must both be
+  // ranked by the same calibrated confidence (conf), or the primary
+  // diagnosis shown can end up lower-confidence than something listed
+  // underneath it as an "other possibility" — mirrors the same fix
+  // applied server-side in predict_with_ml / the scoring fallback.
+  const byConfidence = [...sorted].sort((a, b) => b.conf - a.conf);
+  const top  = byConfidence[0];
   const risk = RISK_MAP[top.d] || "Medium";
 
   return {
@@ -407,7 +340,7 @@ function predictOffline(answers, asked = null) {
       safety:    risk === "High" ? "Do not wait — seek medical attention today." : "",
     },
     all_scores: Object.fromEntries(
-      sorted.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])
+      byConfidence.slice(0, 6).map((x) => [x.d, parseFloat(x.conf.toFixed(4))])
     ),
     method: "offline-scoring",
   };
