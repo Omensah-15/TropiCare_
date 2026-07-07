@@ -880,35 +880,29 @@ def _disease_confidence(disease: str, answers: dict, asked: Optional[list] = Non
 
 
 def compute_score_snapshot(answers: dict, asked: Optional[list] = None) -> Dict[str, float]:
-    ensemble = LOADED_MODELS.get("sctd_ensemble")
-    le       = LOADED_MODELS.get("sctd_label_encoder")
-    cols     = LOADED_MODELS.get("sctd_feature_columns")
+    """
+    Powers the "Confidence Evolution" trajectory shown during the
+    interview (one snapshot recorded after every answered question).
 
-    # IMPORTANT: use `is not None`, not truthiness. `cols` is typically a
-    # pandas Index / numpy array saved straight from a DataFrame's columns;
-    # evaluating `bool(cols)` on an array with more than one element raises
-    # ValueError ("truth value of an array... is ambiguous") *inside this
-    # if-condition itself*, before the try/except below can catch it. That
-    # crashed this function on every call even when all three models were
-    # loaded and healthy, which silently forced every request onto the
-    # scoring fallback below.
-    if ensemble is not None and le is not None and cols is not None:
-        try:
-            feature_cols = list(cols)
-            vec = np.array(
-                [1.0 if answers.get(c, False) else 0.0 for c in feature_cols]
-            ).reshape(1, -1)
-            proba = ensemble.predict_proba(vec)[0]
-            return {
-                le.inverse_transform([i])[0]: round(float(p), 4)
-                for i, p in enumerate(proba)
-            }
-        except Exception as e:
-            logger.warning(
-                {"event": "snapshot_ml_failed", "error": str(e), "error_type": type(e).__name__},
-                exc_info=True,
-            )
+    This used to branch on whether the ML ensemble was loaded: if so, it
+    returned the ensemble's raw, uncalibrated predict_proba() values; if
+    not, it fell back to _disease_confidence(). That meant the trajectory
+    graph the person watches DURING the interview and the final result
+    screen at the END of it could be speaking two entirely different
+    numeric languages about the exact same answers -- raw ML softmax
+    output tops out wherever the model's own scale happens to land it,
+    while the final result (predict_with_ml, see below) reports the
+    calibrated, coverage-aware confidence. That mismatch is what could
+    make the evolution chart trend one disease up toward ~45-50% while
+    the final result showed a completely different ranking and scale a
+    moment later.
 
+    Always using _disease_confidence here -- the same formula the final
+    result now uses for every number it displays -- means the trajectory
+    the person watches build up during the interview and the result they
+    land on at the end are one continuous, consistent story instead of
+    two disconnected ones.
+    """
     return {d: _disease_confidence(d, answers, asked) for d in DISEASE_SYMPTOM_MAP}
 
 
