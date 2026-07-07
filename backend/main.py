@@ -971,9 +971,6 @@ def predict_with_ml(answers: dict) -> dict:
                     "method":     "insufficient_evidence",
                 }
 
-            disease    = le.inverse_transform([idx])[0]
-            confidence = _disease_confidence(disease, answers)
-
             # Same substitution for the "other possibilities" list: use ML
             # probability only to decide which classes are worth showing,
             # then display each one's calibrated, partial-answer-aware
@@ -984,6 +981,21 @@ def predict_with_ml(answers: dict) -> dict:
                 for i in top_indices
             }
             all_scores = dict(sorted(all_scores.items(), key=lambda x: x[1], reverse=True))
+
+            # The headline diagnosis must be whichever disease has the
+            # HIGHEST calibrated confidence -- the same number the
+            # differential list displays -- not just whichever class the
+            # raw ML softmax happened to rank first via argmax(proba).
+            # Those two rankings can disagree once _disease_confidence's
+            # coverage/specificity weighting is applied: a class with the
+            # single largest raw probability can still end up with a
+            # lower calibrated confidence than a class with stronger
+            # matched evidence, which previously let a lower-confidence
+            # disease be shown as the primary result while a
+            # higher-confidence one appeared underneath it in "other
+            # possibilities." Reading disease/confidence off the top of
+            # the already-sorted all_scores keeps the two in sync.
+            disease, confidence = next(iter(all_scores.items()))
 
             return {
                 "disease":    disease,
@@ -1011,10 +1023,18 @@ def predict_with_ml(answers: dict) -> dict:
             "method":     "insufficient_evidence",
         }
 
-    confidence = _disease_confidence(best_disease, answers)
+    # Same fix as the ML branch above: score_disease's raw weighted-match
+    # score is only used to shortlist which 8 diseases are worth showing
+    # at all. The headline diagnosis and its confidence must then come
+    # from the top of the CALIBRATED, confidence-sorted list below, not
+    # from whichever disease happened to have the highest raw score --
+    # those two orderings can differ once _disease_confidence's coverage
+    # weighting is applied.
     all_scores: Dict[str, float] = {
         d: _disease_confidence(d, answers) for d, _ in sorted_scores[:8]
     }
+    all_scores = dict(sorted(all_scores.items(), key=lambda x: x[1], reverse=True))
+    best_disease, confidence = next(iter(all_scores.items()))
 
     return {
         "disease":    best_disease,
