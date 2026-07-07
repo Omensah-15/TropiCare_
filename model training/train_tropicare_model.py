@@ -1,50 +1,5 @@
 """
 TropiCare — Disease Prediction Model Training Pipeline
-========================================================================
-Trains the soft-voting ensemble (Random Forest + XGBoost + Calibrated
-Logistic Regression) that main.py loads as `sctd_ensemble.pkl`.
-
-WHY THIS SCRIPT LOOKS DIFFERENT FROM A "TRAIN ON THE CSV DIRECTLY" SCRIPT
-------------------------------------------------------------------------
-A naive `train_test_split(df)` on this dataset will silently overfit to
-100% accuracy, and it isn't a code bug -- it's a property of the data.
-Across the 22 target diseases there are only ~172 UNIQUE symptom patterns
-total (a handful of distinct symptom combinations copy-pasted ~13x each
-to pad every disease to ~120 rows). A random row-level split puts near-
-identical or byte-for-byte identical rows in both train and test, so the
-model doesn't generalize -- it memorizes, and "test accuracy" becomes a
-measure of how well it copied the training set.
-
-This script fixes that at the source, in three steps that all serve one
-goal (a model that generalizes AND is properly calibrated for the
-partial-answer, adaptive-questioning way the app actually uses it):
-
-  1. DE-DUPLICATE to unique symptom patterns and split on THOSE (not rows),
-     so no pattern the model is tested on was ever seen, in any copy,
-     during training. This alone is what prevents the false 100%.
-
-  2. SYMPTOM-MASKING AUGMENTATION expands each unique pattern into many
-     partially-masked variants (randomly zeroing a fraction of its
-     positive symptoms, the same way a real user has only answered 15 of
-     ~79 possible questions when the app asks for a prediction). This
-     serves two purposes at once: it gives the tiny set of unique
-     patterns enough realistic diversity to train on, AND it teaches the
-     model what a genuinely SPARSE answer vector looks like -- which is
-     the actual root cause of the low-confidence-for-everything-but-
-     Malaria bug reported earlier (the model was trained on complete
-     checklists but queried with 15-of-79 partial vectors it had never
-     seen the shape of).
-
-  3. AN AUTOMATIC METRIC GUARD retrains with adjusted augmentation
-     strength / regularization if the held-out metrics land outside a
-     believable band (< 85% under-fit, or suspiciously close to 100%,
-     which almost always still means leakage somewhere) -- so the
-     exported model's reported numbers are trustworthy without a human
-     having to eyeball and re-run this by hand.
-
-CONFIG below is intentionally factored out so this script can be pointed
-at a different training CSV / disease set later without touching the
-pipeline logic.
 """
 
 from __future__ import annotations
