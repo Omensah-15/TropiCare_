@@ -3,22 +3,6 @@
  * Nearby clinic/hospital locator. Facility data is fetched through the
  * TropiCare backend (/api/v1/clinics/nearby), which proxies the upstream
  * map data source server-side.
- *
- * Location strategy (Google Maps / Uber pattern):
- *   1. FAST FIX — a single getCurrentPosition() call resolves almost
- *      immediately (often a cached Wi-Fi/cell estimate), so the map and
- *      clinic list appear right away instead of a blank loading screen.
- *   2. BACKGROUND REFINEMENT — a watchPosition() stream keeps listening
- *      after that fast fix lands. Every time a materially more accurate
- *      reading arrives, the pin is smoothly animated (glided, never
- *      snapped) to the corrected position. If the correction moves the
- *      person far enough that results would change, the clinic list is
- *      quietly re-fetched in the background without disturbing the view.
- *      Refinement stops once a genuinely precise fix is reached or a
- *      timeout elapses, so the GPS radio isn't left running forever.
- *   3. MANUAL OVERRIDE — the pin stays draggable at all times. Dragging
- *      it cancels background refinement immediately and treats the
- *      dropped position as authoritative.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
