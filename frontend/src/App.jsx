@@ -214,17 +214,6 @@ function scoreDisease(disease, answers) {
 // DISEASE CONFIDENCE (mirrors the backend's _disease_confidence exactly,
 // so offline results never disagree with what the server would compute)
 // ─────────────────────────────────────────────
-//
-// Previously confidence was yes_count / full_symptom_list_length for the
-// disease. That structurally under-scored diseases with long symptom
-// lists — Malaria has 14 tracked symptoms, so confirming 6 strong ones
-// only scored 6/14 = 0.43 — and ignored which symptoms had actually been
-// asked, which matters a lot here since the assessment caps at 15
-// adaptive questions and rarely reaches every symptom for every disease.
-// This normalises against symptoms actually asked (when supplied) and
-// blends the positive-match ratio with a coverage term, so a strong
-// partial match on a long-list disease is no longer scored lower than a
-// weaker match on a short one.
 function diseaseConfidence(disease, answers, asked = null) {
   const symptoms = DISEASE_SYMPTOM_MAP[disease] || [];
   if (symptoms.length === 0) return 0;
