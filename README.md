@@ -22,33 +22,9 @@ Example visualization showing how model confidence changes as symptoms are added
 
 ---
 
-## Clinic Finder & Navigation
+# Clinic Finder & Navigation
 
-<table align="center">
-  <tr>
-    <td align="center">
-      <img 
-        src="https://github.com/Omensah-15/TropiCare_/raw/699ccd37b5f6d041aba739c61b005da7c407ecaa/assets/Clinicfinder.jpg" 
-        width="300"
-      >
-    </td>
-    <td align="center">
-      <img 
-        src="https://github.com/Omensah-15/TropiCare_/raw/bb02bec0c6e378d9cc3a1aa3034d6d2475a10201/assets/Googlemap.jpg" 
-        width="300"
-      >
-    </td>
-  </tr>
-  <tr>
-    <td colspan="2" align="center" style="padding-top:12px;">
-      Instantly find nearby clinics and hospitals with real-time navigation.
-    </td>
-  </tr>
-</table>
-
----
-
-### Clinic Finder & Navigation Demo
+TropiCare helps users locate nearby healthcare facilities and navigate to them using integrated location services.
 
 <div align="center">
   <img src="https://github.com/Omensah-15/TropiCare_/raw/4690997ecda072192d2e3e43dd7a477bcd07606b/assets/clinifinder-navigation-demo.gif" alt="Demo" width="340">
