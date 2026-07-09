@@ -48,6 +48,14 @@ Example visualization showing how model confidence changes as symptoms are added
 
 ---
 
+### Clinic Finder & Navigation Demo
+
+<div align="center">
+  <img src="https://github.com/Omensah-15/TropiCare_/raw/4690997ecda072192d2e3e43dd7a477bcd07606b/assets/clinifinder-navigation-demo.gif" alt="Demo" width="800">
+</div>
+
+---
+
 ## Mobile View
 
 <div align="center">
