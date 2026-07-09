@@ -24,7 +24,7 @@ Built for West Africa, TropiCare bridges the gap between symptom onset and clini
 **Key capabilities:**
 
 - Adaptive symptom assessment
-- ML-based disease risk prediction
+- ML disease risk prediction
 - High / Medium / Low risk classification
 - AI-powered recommendations
 - Assessment history tracking
