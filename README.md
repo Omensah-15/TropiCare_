@@ -29,13 +29,13 @@ Example visualization showing how model confidence changes as symptoms are added
     <td align="center">
       <img 
         src="https://github.com/Omensah-15/TropiCare_/raw/699ccd37b5f6d041aba739c61b005da7c407ecaa/assets/Clinicfinder.jpg" 
-        width="340"
+        width="300"
       >
     </td>
     <td align="center">
       <img 
         src="https://github.com/Omensah-15/TropiCare_/raw/bb02bec0c6e378d9cc3a1aa3034d6d2475a10201/assets/Googlemap.jpg" 
-        width="340"
+        width="300"
       >
     </td>
   </tr>
