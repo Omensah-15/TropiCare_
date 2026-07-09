@@ -5,11 +5,11 @@ An AI health assessment platform that supports early tropical disease risk asses
 **LIVE APP:** [TropiCare](https://tropi-care.vercel.app/)
 
 ---
-
+https://github.com/Omensah-15/TropiCare_/blob/8135125c8155dc16b36e1b6429e58780e08a68e5/assets/tropicaredemo.gif
 ## Demo
 
 <div align="center">
-  <img src="https://github.com/Omensah-15/TropiCare_/raw/ff7db26f79df2122a79a1f1cc54e2e9bd108abcf/assets/demovid.gif" alt="Demo" width="800">
+  <img src="https://github.com/Omensah-15/TropiCare_/raw//8135125c8155dc16b36e1b6429e58780e08a68e5/assets/tropicaredemo.gif" alt="Demo" width="800">
 </div>
 
 ---
