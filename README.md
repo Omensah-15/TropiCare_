@@ -58,11 +58,12 @@ Model confidence changes dynamically as symptoms are added during an assessment.
 ## Clinic Finder & Navigation
 
 <div align="center">
-
-<img src="https://github.com/Omensah-15/TropiCare_/raw/4690997ecda072192d2e3e43dd7a477bcd07606b/assets/clinifinder-navigation-demo.gif"
-alt="Clinic Finder Navigation Demo"
-width="300">
-
+  <img
+    src="https://github.com/Omensah-15/TropiCare_/raw/4690997ecda072192d2e3e43dd7a477bcd07606b/assets/clinifinder-navigation-demo.gif"
+    alt="Clinic Finder Navigation Demo"
+    width="420"
+    style="max-height: 500px;"
+  />
 </div>
 
 ---
