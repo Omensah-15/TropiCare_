@@ -124,6 +124,24 @@ class Settings(BaseSettings):
 
     max_body_size: int = 5 * 1024 * 1024
 
+    # -------------------------------------------------------------
+    # SOCIAL SIGN-IN
+    # -------------------------------------------------------------
+    # google_client_id must match the OAuth 2.0 Web Client ID used by the
+    # frontend's Google Identity Services flow (see App.jsx GOOGLE_CLIENT_ID).
+    #
+    # facebook_app_id / facebook_app_secret come from developers.facebook.com;
+    # the secret is used server-side only, to validate tokens via the
+    # /debug_token endpoint. Never ship the secret to the frontend.
+    #
+    # apple_client_id is the Services ID (e.g. "com.tropicare.web") used by
+    # Sign in with Apple JS. Apple ID tokens are verified against Apple's
+    # published JWKS, so no Apple secret is needed here.
+    google_client_id: str    = ""
+    facebook_app_id: str     = ""
+    facebook_app_secret: str = ""
+    apple_client_id: str     = ""
+
     @property
     def origins_list(self) -> list[str]:
         raw = self.allowed_origins.strip()
@@ -290,13 +308,17 @@ def _on_checkout(dbapi_conn, conn_record, conn_proxy):
 
 class UserModel(Base):
     __tablename__ = "users"
-    id         = Column(Integer, primary_key=True, index=True)
-    email      = Column(String(255), unique=True, index=True, nullable=False)
-    name       = Column(String(255), nullable=False)
-    pw_hash    = Column(String(512), nullable=True)
-    age        = Column(String(10), nullable=True)
-    gender     = Column(String(20), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    id            = Column(Integer, primary_key=True, index=True)
+    email         = Column(String(255), unique=True, index=True, nullable=False)
+    name          = Column(String(255), nullable=False)
+    pw_hash       = Column(String(512), nullable=True)
+    age           = Column(String(10), nullable=True)
+    gender        = Column(String(20), nullable=True)
+    # Set the first time a user signs in via Google/Facebook/Apple.
+    # NULL for accounts created with an email + password only.
+    auth_provider = Column(String(20), nullable=True)
+    oauth_sub     = Column(String(255), nullable=True)
+    created_at    = Column(DateTime, default=datetime.utcnow)
 
 
 class DiagnosisModel(Base):
@@ -1548,6 +1570,19 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class GoogleAuthRequest(BaseModel):
+    access_token: str
+
+
+class FacebookAuthRequest(BaseModel):
+    access_token: str
+
+
+class AppleAuthRequest(BaseModel):
+    id_token: str
+    name: Optional[str] = None  # Apple only ever sends this on first authorization
+
+
 class AnswerRequest(BaseModel):
     question_id: str
     answer:      bool
@@ -1616,6 +1651,170 @@ def verify_pw(pw: str, stored: str) -> bool:
         return False
     except Exception:
         return False
+
+
+# -----------------------------------------------------------------
+# SOCIAL SIGN-IN HELPERS
+# -----------------------------------------------------------------
+# Google and Facebook use "access tokens": the frontend obtains one from the
+# provider's SDK and we exchange it, server-side, for the user's verified
+# profile by calling the provider's own API. Apple only issues a signed
+# "id_token" (a JWT), which we verify ourselves against Apple's published
+# public keys (JWKS) rather than calling an API for every login.
+# -----------------------------------------------------------------
+
+_JWKS_CACHE: Dict[str, Dict[str, Any]] = {}
+_JWKS_TTL_SECONDS = 3600
+
+
+async def _get_jwks(jwks_url: str) -> dict:
+    cached = _JWKS_CACHE.get(jwks_url)
+    if cached and (time.time() - cached["fetched_at"]) < _JWKS_TTL_SECONDS:
+        return cached["data"]
+    async with aiohttp.ClientSession() as s:
+        async with s.get(jwks_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            if resp.status != 200:
+                raise HTTPException(status_code=503, detail="Unable to reach identity provider. Please try again.")
+            data = await resp.json()
+    _JWKS_CACHE[jwks_url] = {"data": data, "fetched_at": time.time()}
+    return data
+
+
+async def _verify_oidc_id_token(id_token: str, jwks_url: str, issuers: set[str], audience: str) -> dict:
+    try:
+        header = jwt.get_unverified_header(id_token)
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Malformed identity token")
+
+    kid = header.get("kid")
+    jwks = await _get_jwks(jwks_url)
+    key = next((k for k in jwks.get("keys", []) if k.get("kid") == kid), None)
+
+    if key is None:
+        # Provider may have rotated its signing keys — refresh once and retry.
+        _JWKS_CACHE.pop(jwks_url, None)
+        jwks = await _get_jwks(jwks_url)
+        key = next((k for k in jwks.get("keys", []) if k.get("kid") == kid), None)
+
+    if key is None:
+        raise HTTPException(status_code=401, detail="Unable to verify identity token")
+
+    try:
+        payload = jwt.decode(
+            id_token,
+            key,
+            algorithms=[key.get("alg", "RS256")],
+            audience=audience,
+        )
+    except JWTError:
+        raise HTTPException(status_code=401, detail="Invalid or expired identity token")
+
+    if payload.get("iss") not in issuers:
+        raise HTTPException(status_code=401, detail="Identity token has an unexpected issuer")
+
+    return payload
+
+
+async def verify_google_access_token(access_token: str) -> dict:
+    if not settings.google_client_id:
+        raise HTTPException(status_code=503, detail="Google sign-in is not configured on the server")
+
+    async with aiohttp.ClientSession() as s:
+        async with s.get(
+            "https://oauth2.googleapis.com/tokeninfo",
+            params={"access_token": access_token},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            token_info = await resp.json()
+            if resp.status != 200 or token_info.get("aud") != settings.google_client_id:
+                raise HTTPException(status_code=401, detail="Invalid Google access token")
+
+        async with s.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            if resp.status != 200:
+                raise HTTPException(status_code=401, detail="Unable to fetch Google profile")
+            profile = await resp.json()
+
+    return profile
+
+
+async def verify_facebook_access_token(access_token: str) -> dict:
+    if not settings.facebook_app_id or not settings.facebook_app_secret:
+        raise HTTPException(status_code=503, detail="Facebook sign-in is not configured on the server")
+
+    app_token = f"{settings.facebook_app_id}|{settings.facebook_app_secret}"
+
+    async with aiohttp.ClientSession() as s:
+        async with s.get(
+            "https://graph.facebook.com/debug_token",
+            params={"input_token": access_token, "access_token": app_token},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            debug = (await resp.json()).get("data", {})
+            if not debug.get("is_valid") or str(debug.get("app_id")) != str(settings.facebook_app_id):
+                raise HTTPException(status_code=401, detail="Invalid Facebook access token")
+
+        async with s.get(
+            "https://graph.facebook.com/me",
+            params={"fields": "id,name,email", "access_token": access_token},
+            timeout=aiohttp.ClientTimeout(total=10),
+        ) as resp:
+            profile = await resp.json()
+            if "error" in profile:
+                raise HTTPException(status_code=401, detail="Unable to fetch Facebook profile")
+
+    return profile
+
+
+async def verify_apple_id_token(id_token: str) -> dict:
+    if not settings.apple_client_id:
+        raise HTTPException(status_code=503, detail="Apple sign-in is not configured on the server")
+
+    return await _verify_oidc_id_token(
+        id_token,
+        jwks_url="https://appleid.apple.com/auth/keys",
+        issuers={"https://appleid.apple.com"},
+        audience=settings.apple_client_id,
+    )
+
+
+def _oauth_token_response(user: "UserModel") -> dict:
+    return {
+        "access_token": create_token(user.id),
+        "token_type":   "bearer",
+        "user":         {"id": user.id, "email": user.email, "name": user.name},
+    }
+
+
+def _find_or_create_oauth_user(
+    db: Session, email: str, name: str, provider: str, oauth_sub: str
+) -> "UserModel":
+    clean_email = _sanitize(email.strip().lower())
+    clean_name  = _sanitize(name.strip()) if name and name.strip() else clean_email.split("@")[0]
+
+    user = db.query(UserModel).filter(UserModel.email == clean_email).first()
+    if user is None:
+        user = UserModel(
+            email=clean_email,
+            name=clean_name,
+            pw_hash=None,
+            auth_provider=provider,
+            oauth_sub=oauth_sub,
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    elif not user.auth_provider:
+        # Existing email/password account signing in with a provider for the
+        # first time — link the provider without touching their password.
+        user.auth_provider = provider
+        user.oauth_sub = oauth_sub
+        db.commit()
+
+    return user
 
 
 # -----------------------------------------------------------------
@@ -1985,6 +2184,72 @@ async def login(request: Request, req: LoginRequest, db: Session = Depends(get_d
         "token_type":   "bearer",
         "user":         {"id": user.id, "email": user.email, "name": user.name},
     }
+
+
+@app.post("/api/v1/auth/google")
+@limiter.limit("100/hour")
+async def auth_google(request: Request, req: GoogleAuthRequest, db: Session = Depends(get_db)):
+    profile = await verify_google_access_token(req.access_token)
+
+    if profile.get("email_verified") not in (True, "true"):
+        raise HTTPException(status_code=401, detail="Your Google email address is not verified")
+
+    email = profile.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="That Google account has no email address on file")
+
+    user = _find_or_create_oauth_user(
+        db,
+        email=email,
+        name=profile.get("name", ""),
+        provider="google",
+        oauth_sub=str(profile.get("sub", "")),
+    )
+    return _oauth_token_response(user)
+
+
+@app.post("/api/v1/auth/facebook")
+@limiter.limit("100/hour")
+async def auth_facebook(request: Request, req: FacebookAuthRequest, db: Session = Depends(get_db)):
+    profile = await verify_facebook_access_token(req.access_token)
+
+    email = profile.get("email")
+    if not email:
+        raise HTTPException(
+            status_code=400,
+            detail="That Facebook account has no verified email address. Please add one on Facebook, or sign in a different way.",
+        )
+
+    user = _find_or_create_oauth_user(
+        db,
+        email=email,
+        name=profile.get("name", ""),
+        provider="facebook",
+        oauth_sub=str(profile.get("id", "")),
+    )
+    return _oauth_token_response(user)
+
+
+@app.post("/api/v1/auth/apple")
+@limiter.limit("100/hour")
+async def auth_apple(request: Request, req: AppleAuthRequest, db: Session = Depends(get_db)):
+    payload = await verify_apple_id_token(req.id_token)
+
+    if payload.get("email_verified") == "false":
+        raise HTTPException(status_code=401, detail="Your Apple email address is not verified")
+
+    email = payload.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="That Apple account has no email address on file")
+
+    user = _find_or_create_oauth_user(
+        db,
+        email=email,
+        name=req.name or "",
+        provider="apple",
+        oauth_sub=str(payload.get("sub", "")),
+    )
+    return _oauth_token_response(user)
 
 
 # -----------------------------------------------------------------
