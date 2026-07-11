@@ -39,7 +39,7 @@ const API_BASE = "https://tropicare.onrender.com/api/v1";
 const GOOGLE_CLIENT_ID   = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com";
 const FACEBOOK_APP_ID    = "YOUR_FACEBOOK_APP_ID";
 const APPLE_CLIENT_ID    = "YOUR_APPLE_SERVICES_ID";
-const APPLE_REDIRECT_URI = "https://tropicare.vercel.app";
+const APPLE_REDIRECT_URI = "https://tropi-care.vercel.app";
 
 // A provider is only considered "live" once its placeholder has been
 // replaced with a real ID. Apple additionally requires a paid Apple
