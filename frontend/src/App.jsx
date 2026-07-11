@@ -1823,7 +1823,7 @@ function AuthScreen({ onLogin, toast }) {
             </button>
           </div>
           {!APPLE_ENABLED && (
-            <div className="auth-apple-note">Apple sign-in is coming soon</div>
+            <div className="auth-apple-note">...</div>
           )}
         </div>
         <div className="auth-foot">TropiCare · Symptom Checker for Tropical Diseases</div>
