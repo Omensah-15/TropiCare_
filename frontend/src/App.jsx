@@ -14,6 +14,83 @@ import ClinicFinder from "./ClinicFinder.jsx";
 const API_BASE = "https://tropicare.onrender.com/api/v1";
 
 // ─────────────────────────────────────────────
+// SOCIAL SIGN-IN CONFIG
+// -----------------------------------------------------------------
+// These three IDs are PUBLIC client identifiers — safe to ship in the
+// frontend bundle (they are not secrets; the matching secrets live only
+// in the backend's environment variables). Replace the placeholders
+// below with the real values once the developer apps are created:
+//
+//   GOOGLE_CLIENT_ID   -> Google Cloud Console > APIs & Services >
+//                         Credentials > OAuth 2.0 Client ID (Web application).
+//                         Add your Vercel domain under
+//                         "Authorized JavaScript origins".
+//   FACEBOOK_APP_ID    -> developers.facebook.com > My Apps > (your app) >
+//                         Settings > Basic > App ID. Add your Vercel
+//                         domain under Facebook Login > Settings >
+//                         "Allowed Domains for the JavaScript SDK".
+//   APPLE_CLIENT_ID    -> developer.apple.com > Certificates, Identifiers &
+//                         Profiles > Identifiers > Services IDs. This is
+//                         the Services ID string (e.g. "com.tropicare.web"),
+//                         NOT your app's Bundle ID.
+//   APPLE_REDIRECT_URI -> Must exactly match the "Return URL" configured
+//                         on that Services ID in the Apple Developer portal.
+// -----------------------------------------------------------------
+const GOOGLE_CLIENT_ID   = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com";
+const FACEBOOK_APP_ID    = "YOUR_FACEBOOK_APP_ID";
+const APPLE_CLIENT_ID    = "YOUR_APPLE_SERVICES_ID";
+const APPLE_REDIRECT_URI = "https://tropicare.vercel.app";
+
+// A provider is only considered "live" once its placeholder has been
+// replaced with a real ID. Apple additionally requires a paid Apple
+// Developer account, so it is deliberately shown as "coming soon" in the
+// UI until APPLE_CLIENT_ID is set — see the Apple button below.
+const GOOGLE_ENABLED   = !GOOGLE_CLIENT_ID.startsWith("YOUR_");
+const FACEBOOK_ENABLED = !FACEBOOK_APP_ID.startsWith("YOUR_");
+const APPLE_ENABLED    = !APPLE_CLIENT_ID.startsWith("YOUR_");
+
+const _loadedScripts = {};
+function loadScript(src) {
+  if (_loadedScripts[src]) return _loadedScripts[src];
+  _loadedScripts[src] = new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${src}"]`);
+    if (existing) {
+      existing.addEventListener("load", () => resolve());
+      existing.addEventListener("error", () => reject(new Error(`Failed to load ${src}`)));
+      if (existing.dataset.loaded === "true") resolve();
+      return;
+    }
+    const el = document.createElement("script");
+    el.src = src;
+    el.async = true;
+    el.defer = true;
+    el.onload = () => { el.dataset.loaded = "true"; resolve(); };
+    el.onerror = () => reject(new Error(`Failed to load ${src}`));
+    document.head.appendChild(el);
+  });
+  return _loadedScripts[src];
+}
+
+// Preloading these SDKs the moment the auth screen mounts (rather than on
+// click) matters for popup reliability: Google's and Facebook's sign-in
+// popups must open as a direct result of a user gesture, and a network
+// fetch for the SDK script sitting between the click and the popup call
+// can be enough for some browsers to block it as a "background" popup.
+function preloadSocialSdks() {
+  if (GOOGLE_ENABLED) {
+    loadScript("https://accounts.google.com/gsi/client").catch(() => {});
+  }
+  if (FACEBOOK_ENABLED) {
+    loadScript("https://connect.facebook.net/en_US/sdk.js").then(() => {
+      if (window.FB && !window.FB._tcInitialized) {
+        window.FB.init({ appId: FACEBOOK_APP_ID, cookie: true, xfbml: false, version: "v23.0" });
+        window.FB._tcInitialized = true;
+      }
+    }).catch(() => {});
+  }
+}
+
+// ─────────────────────────────────────────────
 // API CLIENT
 // ─────────────────────────────────────────────
 const TOKEN_KEY = "tc_token";
@@ -214,6 +291,17 @@ function scoreDisease(disease, answers) {
 // DISEASE CONFIDENCE (mirrors the backend's _disease_confidence exactly,
 // so offline results never disagree with what the server would compute)
 // ─────────────────────────────────────────────
+//
+// Previously confidence was yes_count / full_symptom_list_length for the
+// disease. That structurally under-scored diseases with long symptom
+// lists — Malaria has 14 tracked symptoms, so confirming 6 strong ones
+// only scored 6/14 = 0.43 — and ignored which symptoms had actually been
+// asked, which matters a lot here since the assessment caps at 15
+// adaptive questions and rarely reaches every symptom for every disease.
+// This normalises against symptoms actually asked (when supplied) and
+// blends the positive-match ratio with a coverage term, so a strong
+// partial match on a long-list disease is no longer scored lower than a
+// weaker match on a short one.
 function diseaseConfidence(disease, answers, asked = null) {
   const symptoms = DISEASE_SYMPTOM_MAP[disease] || [];
   if (symptoms.length === 0) return 0;
@@ -400,8 +488,17 @@ const injectStyles = () => {
     :root[data-theme="dark"] .nav-item:hover,
     :root[data-theme="dark"] .nav-item.active { background:var(--teal-xl); color:var(--teal-d); }
     :root[data-theme="dark"] .card { box-shadow:var(--shadow-s); }
-    :root[data-theme="dark"] .auth-wrap { background:linear-gradient(165deg,#102621 0%,#0f161e 60%); }
+    :root[data-theme="dark"] .auth-wrap { background:radial-gradient(circle at 20% 15%,#123833 0%,#0f161e 45%),linear-gradient(165deg,#102621 0%,#0f161e 60%); }
+    :root[data-theme="dark"] .auth-blob-a { background:radial-gradient(circle,rgba(20,184,166,0.16) 0%,transparent 70%); }
+    :root[data-theme="dark"] .auth-blob-b { background:radial-gradient(circle,rgba(91,141,239,0.14) 0%,transparent 70%); }
     :root[data-theme="dark"] .auth-box .card { box-shadow:0 12px 40px rgba(0,0,0,0.45); }
+    :root[data-theme="dark"] .auth-input-icon { color:var(--muted-l); }
+    :root[data-theme="dark"] .field-input.has-icon { background:#0c1218; }
+    :root[data-theme="dark"] .auth-divider::before,
+    :root[data-theme="dark"] .auth-divider::after { background:var(--border); }
+    :root[data-theme="dark"] .social-btn { background:#0c1218; border-color:var(--border); color:var(--ink-2); }
+    :root[data-theme="dark"] .social-btn:hover { border-color:var(--muted-l); background:var(--border-l); }
+    :root[data-theme="dark"] .auth-forgot { color:var(--teal-d); }
     :root[data-theme="dark"] .field-input { background:#0c1218; color:var(--ink); border-color:var(--border); }
     :root[data-theme="dark"] .field-input:hover { border-color:var(--muted-l); }
     :root[data-theme="dark"] .field-input:focus { border-color:var(--teal-d); }
@@ -553,17 +650,42 @@ const injectStyles = () => {
     .splash-dot:nth-child(2){animation-delay:0.18s;}
     .splash-dot:nth-child(3){animation-delay:0.36s;}
     @keyframes dot-bounce{0%,80%,100%{transform:scale(0.7);opacity:0.4;}40%{transform:scale(1.1);opacity:1;}}
-    .auth-wrap{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:linear-gradient(165deg,var(--teal-xl) 0%,var(--bg) 60%);}
+    .auth-wrap{position:relative;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;overflow:hidden;background:radial-gradient(circle at 18% 12%,var(--teal-l) 0%,transparent 45%),linear-gradient(165deg,var(--teal-xl) 0%,var(--bg) 62%);}
     @media(max-width:480px){.auth-wrap{padding:18px 14px;}}
-    .auth-box{width:100%;max-width:420px;}
-    .auth-logo{text-align:center;margin-bottom:36px;}
+    .auth-blob-a,.auth-blob-b{position:absolute;border-radius:50%;pointer-events:none;filter:blur(2px);}
+    .auth-blob-a{width:420px;height:420px;top:-140px;right:-120px;background:radial-gradient(circle,rgba(var(--teal-rgb),0.14) 0%,transparent 70%);}
+    .auth-blob-b{width:340px;height:340px;bottom:-120px;left:-100px;background:radial-gradient(circle,rgba(47,111,237,0.10) 0%,transparent 70%);}
+    .auth-box{position:relative;z-index:1;width:100%;max-width:420px;}
+    .auth-logo{text-align:center;margin-bottom:32px;}
     .auth-icon{width:60px;height:60px;background:linear-gradient(160deg,var(--teal) 0%,var(--teal-dd) 100%);border-radius:18px;display:flex;align-items:center;justify-content:center;margin:0 auto 14px;box-shadow:0 6px 18px rgba(var(--teal-rgb),0.32);}
     .auth-title{font-family:var(--display);font-size:28px;color:var(--ink);font-weight:700;letter-spacing:-0.3px;}
     .auth-hint{font-size:13px;color:var(--muted);margin-top:5px;line-height:1.5;}
     .auth-foot{text-align:center;margin-top:18px;font-size:11px;color:var(--muted-l);line-height:1.7;}
+    .auth-card{padding:28px 24px;border-radius:var(--radius-l);backdrop-filter:blur(18px);background:rgba(255,255,255,0.86);}
+    :root[data-theme="dark"] .auth-card{background:rgba(22,31,41,0.82);}
     .tabs{display:flex;background:var(--border-l);border-radius:var(--radius-s);padding:4px;margin-bottom:22px;}
     .tab{flex:1;padding:10px;text-align:center;border-radius:8px;font-family:var(--font);font-size:13px;font-weight:700;cursor:pointer;border:none;background:none;color:var(--muted);transition:background var(--t-fast),color var(--t-fast),box-shadow var(--t-fast);min-height:40px;}
     .tab.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-s);}
+    .field-icon-wrap{position:relative;}
+    .auth-input-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--muted-l);pointer-events:none;}
+    .field-input.has-icon{padding-left:42px;}
+    .auth-row{display:flex;align-items:center;justify-content:flex-end;margin:-4px 0 14px;}
+    .auth-forgot{background:none;border:none;padding:0;font-family:var(--font);font-size:12.5px;font-weight:700;color:var(--teal-d);cursor:pointer;}
+    .auth-forgot:hover{text-decoration:underline;}
+    .auth-divider{display:flex;align-items:center;gap:12px;margin:22px 0 16px;}
+    .auth-divider::before,.auth-divider::after{content:"";flex:1;height:1px;background:var(--border);}
+    .auth-divider span{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted-l);white-space:nowrap;}
+    .social-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+    .social-btn{display:flex;align-items:center;justify-content:center;padding:11px;border-radius:var(--radius-s);border:1.5px solid var(--border);background:var(--surface);cursor:pointer;min-height:46px;transition:border-color var(--t-fast),background var(--t-fast),transform var(--t-fast);}
+    .social-btn:hover{border-color:var(--muted-l);background:var(--border-l);transform:translateY(-1px);}
+    .social-btn:active{transform:translateY(0) scale(0.97);}
+    .social-btn:disabled{opacity:0.55;cursor:not-allowed;transform:none;}
+    .social-btn-inner{position:relative;display:flex;align-items:center;justify-content:center;}
+    .social-soon-badge{position:absolute;top:-14px;left:50%;transform:translateX(-50%);background:var(--ink-3);color:#fff;font-size:8px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;padding:2px 5px;border-radius:5px;white-space:nowrap;line-height:1.3;}
+    :root[data-theme="dark"] .social-soon-badge{background:var(--muted-l);color:var(--bg);}
+    .auth-apple-note{text-align:center;font-size:11px;color:var(--muted-l);margin-top:14px;}
+    .social-spinner{width:16px;height:16px;border-radius:50%;border:2px solid var(--border);border-top-color:var(--teal);animation:social-spin 0.7s linear infinite;}
+    @keyframes social-spin{to{transform:rotate(360deg);}}
     .grid-2{display:grid;grid-template-columns:1fr 1fr;gap:12px;}
     @media(max-width:360px){.grid-2{grid-template-columns:1fr;}}
     .pw-wrap{position:relative;}
@@ -1043,6 +1165,8 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "database":  return <svg {...p}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>;
     case "eye":       return <svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
     case "eyeOff":    return <svg {...p}><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>;
+    case "mail":      return <svg {...p}><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 6l-10 7L2 6"/></svg>;
+    case "lock":      return <svg {...p}><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>;
     case "calendar":  return <svg {...p}><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>;
     case "sun":       return <svg {...p}><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>;
     case "moon":      return <svg {...p}><path d="M21 12.79A9 9 0 1111.21 3 7 7 0 0021 12.79z"/></svg>;
@@ -1440,14 +1564,15 @@ export default function App() {
 // AUTH SCREEN
 // ─────────────────────────────────────────────
 function AuthScreen({ onLogin, toast }) {
-  const [mode,    setMode]    = useState("login");
-  const [name,    setName]    = useState("");
-  const [email,   setEmail]   = useState("");
-  const [pw,      setPw]      = useState("");
-  const [age,     setAge]     = useState("");
-  const [gender,  setGender]  = useState("");
-  const [showPw,  setShowPw]  = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [mode,         setMode]         = useState("login");
+  const [name,         setName]         = useState("");
+  const [email,        setEmail]        = useState("");
+  const [pw,           setPw]           = useState("");
+  const [age,          setAge]          = useState("");
+  const [gender,       setGender]       = useState("");
+  const [showPw,       setShowPw]       = useState(false);
+  const [loading,      setLoading]      = useState(false);
+  const [socialLoading, setSocialLoading] = useState(null); // "google" | "facebook" | "apple" | null
 
   const switchMode = (m) => {
     setMode(m);
@@ -1476,15 +1601,141 @@ function AuthScreen({ onLogin, toast }) {
     }
   };
 
+  const handleForgotPassword = () => {
+    toast("Password reset isn't available yet. Please contact support.");
+  };
+
+  // Facebook's SDK needs a <div id="fb-root"> in the DOM before FB.init()
+  // runs. Google's and Facebook's SDKs are preloaded here, as soon as the
+  // auth screen mounts, so that clicking a button later can open its
+  // sign-in popup immediately — with no network wait in between — which
+  // is what keeps browsers from treating the popup as unsolicited.
+  useEffect(() => {
+    if (!document.getElementById("fb-root")) {
+      const root = document.createElement("div");
+      root.id = "fb-root";
+      document.body.appendChild(root);
+    }
+    preloadSocialSdks();
+  }, []);
+
+  const finishOAuthLogin = async (path, body) => {
+    const data = await api.post(path, body);
+    onLogin({ ...data.user, token: data.access_token });
+  };
+
+  const handleGoogleLogin = async () => {
+    if (!GOOGLE_ENABLED) {
+      toast("Google sign-in hasn't been configured yet. Add a Google Client ID to enable it.");
+      return;
+    }
+    setSocialLoading("google");
+    try {
+      await loadScript("https://accounts.google.com/gsi/client");
+      const google = window.google;
+      if (!google?.accounts?.oauth2) throw new Error("Google sign-in failed to load. Please try again.");
+
+      const accessToken = await new Promise((resolve, reject) => {
+        const client = google.accounts.oauth2.initTokenClient({
+          client_id: GOOGLE_CLIENT_ID,
+          scope: "openid email profile",
+          callback: (resp) => {
+            if (resp.error) reject(new Error(resp.error_description || resp.error));
+            else resolve(resp.access_token);
+          },
+          error_callback: (err) => reject(new Error(err?.message || "Google sign-in was cancelled.")),
+        });
+        client.requestAccessToken();
+      });
+
+      await finishOAuthLogin("/auth/google", { access_token: accessToken });
+    } catch (e) {
+      toast(e.message || "Google sign-in failed. Please try again.");
+    } finally {
+      setSocialLoading(null);
+    }
+  };
+
+  const handleFacebookLogin = async () => {
+    if (!FACEBOOK_ENABLED) {
+      toast("Facebook sign-in hasn't been configured yet. Add a Facebook App ID to enable it.");
+      return;
+    }
+    setSocialLoading("facebook");
+    try {
+      await loadScript("https://connect.facebook.net/en_US/sdk.js");
+      const FB = window.FB;
+      if (!FB) throw new Error("Facebook sign-in failed to load. Please try again.");
+      if (!FB._tcInitialized) {
+        FB.init({ appId: FACEBOOK_APP_ID, cookie: true, xfbml: false, version: "v23.0" });
+        FB._tcInitialized = true;
+      }
+
+      const accessToken = await new Promise((resolve, reject) => {
+        FB.login((resp) => {
+          if (resp.authResponse) resolve(resp.authResponse.accessToken);
+          else reject(new Error("Facebook sign-in was cancelled."));
+        }, { scope: "email", auth_type: "rerequest" });
+      });
+
+      await finishOAuthLogin("/auth/facebook", { access_token: accessToken });
+    } catch (e) {
+      toast(e.message || "Facebook sign-in failed. Please try again.");
+    } finally {
+      setSocialLoading(null);
+    }
+  };
+
+  const handleAppleLogin = async () => {
+    // Apple Sign In requires a paid Apple Developer Program membership.
+    // Until APPLE_CLIENT_ID is set, the button below is shown disabled
+    // with a "Coming soon" badge, so this branch is a safety net only.
+    if (!APPLE_ENABLED) {
+      toast("Apple sign-in is coming soon.");
+      return;
+    }
+    setSocialLoading("apple");
+    try {
+      await loadScript("https://appleid.cdn-apple.com/appleauth/static/jsapi/appleid/1/en_US/appleid.auth.js");
+      const AppleID = window.AppleID;
+      if (!AppleID) throw new Error("Apple sign-in failed to load. Please try again.");
+
+      AppleID.auth.init({
+        clientId:    APPLE_CLIENT_ID,
+        scope:       "name email",
+        redirectURI: APPLE_REDIRECT_URI,
+        usePopup:    true,
+      });
+
+      const result = await AppleID.auth.signIn();
+      const idToken  = result?.authorization?.id_token;
+      if (!idToken) throw new Error("Apple sign-in did not return a valid token.");
+      // Apple only sends the user's name on the very first authorization,
+      // in a separate `user` object — never inside the id_token itself.
+      const fullName = result?.user?.name
+        ? `${result.user.name.firstName || ""} ${result.user.name.lastName || ""}`.trim()
+        : "";
+
+      await finishOAuthLogin("/auth/apple", { id_token: idToken, name: fullName });
+    } catch (e) {
+      const msg = e?.error === "popup_closed_by_user" ? "Apple sign-in was cancelled." : (e.message || "Apple sign-in failed. Please try again.");
+      toast(msg);
+    } finally {
+      setSocialLoading(null);
+    }
+  };
+
   return (
     <div className="auth-wrap">
+      <div className="auth-blob-a" />
+      <div className="auth-blob-b" />
       <div className="auth-box">
         <div className="auth-logo">
           <div className="auth-icon"><MedicalHeartLarge size={34} color="#fff" /></div>
           <div className="auth-title">TropiCare</div>
           <div className="auth-hint">Guided symptom assessment for tropical diseases</div>
         </div>
-        <div className="card card-p" style={{ boxShadow: "0 8px 40px rgba(0,0,0,0.1)" }}>
+        <div className="card auth-card" style={{ boxShadow: "0 20px 60px rgba(11,23,38,0.14)" }}>
           <div className="tabs">
             {["login", "register"].map((m) => (
               <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => switchMode(m)}>
@@ -1501,8 +1752,11 @@ function AuthScreen({ onLogin, toast }) {
           )}
           <div className="field">
             <label className="field-label">Email Address</label>
-            <input className="field-input" type="email" placeholder="you@email.com" value={email}
-              onChange={(e) => setEmail(e.target.value)} />
+            <div className="field-icon-wrap">
+              <span className="auth-input-icon"><Icon name="mail" size={16} /></span>
+              <input className="field-input has-icon" type="email" placeholder="you@email.com" value={email}
+                onChange={(e) => setEmail(e.target.value)} />
+            </div>
           </div>
           {mode === "register" && (
             <div className="grid-2">
@@ -1525,8 +1779,9 @@ function AuthScreen({ onLogin, toast }) {
           )}
           <div className="field">
             <label className="field-label">Password</label>
-            <div className="pw-wrap">
-              <input className="field-input" type={showPw ? "text" : "password"}
+            <div className="pw-wrap field-icon-wrap">
+              <span className="auth-input-icon"><Icon name="lock" size={16} /></span>
+              <input className="field-input has-icon" type={showPw ? "text" : "password"}
                 placeholder={mode === "register" ? "Min. 8 characters" : "Enter password"}
                 value={pw} onChange={(e) => setPw(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && submit()}
@@ -1536,13 +1791,71 @@ function AuthScreen({ onLogin, toast }) {
               </button>
             </div>
           </div>
+          {mode === "login" && (
+            <div className="auth-row">
+              <button className="auth-forgot" type="button" onClick={handleForgotPassword}>
+                Forgot password?
+              </button>
+            </div>
+          )}
           <button className="btn btn-primary btn-full btn-lg mt-2" onClick={submit} disabled={loading}>
             {loading ? "Please wait..." : mode === "login" ? "Sign In" : "Create Account"}
           </button>
+          <div className="auth-divider"><span>Or continue with</span></div>
+          <div className="social-row">
+            <button className="social-btn" type="button" aria-label="Continue with Google"
+              onClick={handleGoogleLogin} disabled={socialLoading !== null}>
+              {socialLoading === "google" ? <span className="social-spinner" /> : <GoogleGlyph size={19} />}
+            </button>
+            <button className="social-btn" type="button" aria-label="Continue with Facebook"
+              onClick={handleFacebookLogin} disabled={socialLoading !== null}>
+              {socialLoading === "facebook" ? <span className="social-spinner" /> : <FacebookGlyph size={19} />}
+            </button>
+            <button className="social-btn social-btn-soon" type="button"
+              aria-label="Apple sign-in — coming soon" title="Apple sign-in is coming soon"
+              onClick={handleAppleLogin} disabled={!APPLE_ENABLED || socialLoading !== null}>
+              {socialLoading === "apple" ? <span className="social-spinner" /> : (
+                <span className="social-btn-inner">
+                  <AppleGlyph size={19} />
+                  {!APPLE_ENABLED && <span className="social-soon-badge">Soon</span>}
+                </span>
+              )}
+            </button>
+          </div>
+          {!APPLE_ENABLED && (
+            <div className="auth-apple-note">Apple sign-in is coming soon</div>
+          )}
         </div>
         <div className="auth-foot">TropiCare · Symptom Checker for Tropical Diseases</div>
       </div>
     </div>
+  );
+}
+
+function GoogleGlyph({ size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 48 48">
+      <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.6-6 8-11.3 8-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.8 1.1 8 3l6-6C34.6 5.1 29.6 3 24 3 12.4 3 3 12.4 3 24s9.4 21 21 21 21-9.4 21-21c0-1.4-.1-2.4-.4-3.5z"/>
+      <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.9 18.9 13 24 13c3.1 0 5.8 1.1 8 3l6-6C34.6 5.1 29.6 3 24 3 16 3 9 7.7 6.3 14.7z"/>
+      <path fill="#4CAF50" d="M24 45c5.5 0 10.4-2.1 14.1-5.5l-6.5-5.5C29.5 35.7 26.9 37 24 37c-5.3 0-9.7-3.4-11.3-8.1l-6.5 5C9 42.2 16 45 24 45z"/>
+      <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.2-2.2 4.1-4.1 5.4l6.5 5.5C41.5 36.5 45 30.9 45 24c0-1.4-.1-2.4-.4-3.5z"/>
+    </svg>
+  );
+}
+
+function FacebookGlyph({ size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24">
+      <path fill="#1877F2" d="M24 12a12 12 0 10-13.9 11.9v-8.4H7.1V12h3v-2.6c0-3 1.8-4.6 4.5-4.6 1.3 0 2.6.2 2.6.2v2.9h-1.5c-1.5 0-1.9.9-1.9 1.8V12h3.3l-.5 3.5h-2.8v8.4A12 12 0 0024 12z"/>
+    </svg>
+  );
+}
+
+function AppleGlyph({ size = 20 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="#0b1726">
+      <path d="M16.4 1.4c0 1.1-.4 2.1-1.1 2.9-.8.9-2 1.6-3.1 1.5-.1-1.1.4-2.2 1.1-3 .8-.9 2.1-1.5 3.1-1.4zM19.8 17.3c-.4.9-.9 1.7-1.5 2.5-.8 1.1-1.7 2.5-2.9 2.5-1.1 0-1.4-.7-2.9-.7-1.5 0-1.9.7-2.9.7-1.2 0-2.1-1.3-2.9-2.4-1.7-2.4-3-6.8-1.3-9.8.9-1.5 2.4-2.4 4.1-2.5 1.1 0 2.2.8 2.9.8.7 0 2-.9 3.3-.8.6 0 2.2.2 3.3 1.8-.1.1-2 1.2-1.9 3.5 0 2.8 2.4 3.7 2.7 3.4z"/>
+    </svg>
   );
 }
 
