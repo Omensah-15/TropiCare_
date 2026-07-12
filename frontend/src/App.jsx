@@ -16,25 +16,7 @@ const API_BASE = "https://tropicare.onrender.com/api/v1";
 // ─────────────────────────────────────────────
 // SOCIAL SIGN-IN CONFIG
 // -----------------------------------------------------------------
-// These three IDs are PUBLIC client identifiers — safe to ship in the
-// frontend bundle (they are not secrets; the matching secrets live only
-// in the backend's environment variables). Replace the placeholders
-// below with the real values once the developer apps are created:
-//
-//   GOOGLE_CLIENT_ID   -> Google Cloud Console > APIs & Services >
-//                         Credentials > OAuth 2.0 Client ID (Web application).
-//                         Add your Vercel domain under
-//                         "Authorized JavaScript origins".
-//   FACEBOOK_APP_ID    -> developers.facebook.com > My Apps > (your app) >
-//                         Settings > Basic > App ID. Add your Vercel
-//                         domain under Facebook Login > Settings >
-//                         "Allowed Domains for the JavaScript SDK".
-//   APPLE_CLIENT_ID    -> developer.apple.com > Certificates, Identifiers &
-//                         Profiles > Identifiers > Services IDs. This is
-//                         the Services ID string (e.g. "com.tropicare.web"),
-//                         NOT your app's Bundle ID.
-//   APPLE_REDIRECT_URI -> Must exactly match the "Return URL" configured
-//                         on that Services ID in the Apple Developer portal.
+// These three IDs are PUBLIC client identifiers
 // -----------------------------------------------------------------
 const GOOGLE_CLIENT_ID   = "459505831088-27tcpt1j6s57k3mn4hdsjli8lf774gaf.apps.googleusercontent.com";
 const FACEBOOK_APP_ID    = "YOUR_FACEBOOK_APP_ID";
