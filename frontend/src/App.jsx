@@ -36,7 +36,7 @@ const API_BASE = "https://tropicare.onrender.com/api/v1";
 //   APPLE_REDIRECT_URI -> Must exactly match the "Return URL" configured
 //                         on that Services ID in the Apple Developer portal.
 // -----------------------------------------------------------------
-const GOOGLE_CLIENT_ID   = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID   = "459505831088-27tcpt1j6s57k3mn4hdsjli8lf774gaf.apps.googleusercontent.com";
 const FACEBOOK_APP_ID    = "YOUR_FACEBOOK_APP_ID";
 const APPLE_CLIENT_ID    = "YOUR_APPLE_SERVICES_ID";
 const APPLE_REDIRECT_URI = "https://tropi-care.vercel.app";
