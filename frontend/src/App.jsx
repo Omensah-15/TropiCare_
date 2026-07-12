@@ -19,8 +19,8 @@ const API_BASE = "https://tropicare.onrender.com/api/v1";
 // These three IDs are PUBLIC client identifiers
 // -----------------------------------------------------------------
 const GOOGLE_CLIENT_ID   = "459505831088-27tcpt1j6s57k3mn4hdsjli8lf774gaf.apps.googleusercontent.com";
-const FACEBOOK_APP_ID    = "YOUR_FACEBOOK_APP_ID";
-const APPLE_CLIENT_ID    = "YOUR_APPLE_SERVICES_ID";
+const FACEBOOK_APP_ID    = "FACEBOOK_APP_ID";
+const APPLE_CLIENT_ID    = "APPLE_SERVICES_ID";
 const APPLE_REDIRECT_URI = "https://tropi-care.vercel.app";
 
 // A provider is only considered "live" once its placeholder has been
