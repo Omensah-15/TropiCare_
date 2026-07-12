@@ -603,7 +603,7 @@ export default function ClinicFinder({ onClose }) {
         } else if (geoErr.code === 2) {
           setErrorMsg("Your device could not determine a location fix. Check that location services are turned on and try again.");
         } else if (geoErr.code === 3) {
-          setErrorMsg("Finding your location is taking longer than expected. Check your signal and try again.");
+          setErrorMsg("Finding your location is taking longer than expected. Check your connection and try again.");
         } else {
           setErrorMsg("Could not determine your location. Check your device's location settings and try again.");
         }
