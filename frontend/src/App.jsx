@@ -1937,7 +1937,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
         ) : error ? (
           <div style={{ textAlign: "center", padding: "24px 0" }}>
             <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 10 }}>
-              Could not load history. Check your connection.
+              Could not recent assessments. Check your connection.
             </div>
           </div>
         ) : records.length === 0 ? (
