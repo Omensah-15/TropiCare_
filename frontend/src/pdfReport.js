@@ -12,7 +12,7 @@ const PANEL  = [248, 250, 250];
 
 const RISK_RGB = {
   High:   [226, 61, 61],
-  Medium: [232, 147, 15], 
+  Medium: [232, 147, 15],
   Low:    [31, 157, 85],
   None:   [31, 157, 85],
 };
@@ -45,6 +45,116 @@ function getStoredUser() {
   } catch {
     return {};
   }
+}
+
+// ─────────────────────────────────────────────
+// QUESTION BANK
+// Mirrors the assessment engine's question set so each confirmed ("Yes")
+// answer can be rendered with its original question text and the symptom
+// it maps to, without requiring an extra network round-trip at PDF time.
+// ─────────────────────────────────────────────
+const QUESTION_BANK = [
+  {id:"high_fever",question:"Do you have a high fever?",category:"General"},
+  {id:"mild_fever",question:"Do you have a mild fever?",category:"General"},
+  {id:"fatigue",question:"Do you feel unusually tired or weak?",category:"General"},
+  {id:"malaise",question:"Do you feel generally unwell?",category:"General"},
+  {id:"chills",question:"Do you have chills or shivering?",category:"General"},
+  {id:"sweating",question:"Do you have episodes of sweating?",category:"General"},
+  {id:"headache",question:"Do you have headaches?",category:"General"},
+  {id:"muscle_pain",question:"Do you have muscle pain or body aches?",category:"General"},
+  {id:"joint_pain",question:"Do you have joint pain?",category:"General"},
+  {id:"back_pain",question:"Do you have back pain?",category:"General"},
+  {id:"cough",question:"Do you have a cough?",category:"Respiratory"},
+  {id:"phlegm",question:"Are you coughing up phlegm or mucus?",category:"Respiratory"},
+  {id:"rusty_sputum",question:"Are you coughing up rusty or brown-coloured sputum?",category:"Respiratory"},
+  {id:"blood_in_sputum",question:"Are you coughing up blood?",category:"Respiratory"},
+  {id:"breathlessness",question:"Do you have difficulty breathing?",category:"Respiratory"},
+  {id:"chest_pain",question:"Do you have chest pain?",category:"Respiratory"},
+  {id:"runny_nose",question:"Do you have a runny nose?",category:"Respiratory"},
+  {id:"continuous_sneezing",question:"Do you sneeze frequently?",category:"Respiratory"},
+  {id:"throat_irritation",question:"Do you have a sore or irritated throat?",category:"Respiratory"},
+  {id:"sinus_pressure",question:"Do you have sinus pressure or nasal congestion?",category:"Respiratory"},
+  {id:"watering_from_eyes",question:"Do you have watery eyes?",category:"Respiratory"},
+  {id:"loss_of_smell",question:"Have you lost your sense of smell?",category:"Respiratory"},
+  {id:"nausea",question:"Do you feel nauseous?",category:"Digestive"},
+  {id:"vomiting",question:"Have you been vomiting?",category:"Digestive"},
+  {id:"diarrhoea",question:"Do you have diarrhoea?",category:"Digestive"},
+  {id:"stomach_pain",question:"Do you have stomach pain?",category:"Digestive"},
+  {id:"abdominal_pain",question:"Do you have abdominal or belly pain?",category:"Digestive"},
+  {id:"indigestion",question:"Do you have indigestion or acidity?",category:"Digestive"},
+  {id:"distension_of_abdomen",question:"Do you feel bloated or have a distended abdomen?",category:"Digestive"},
+  {id:"constipation",question:"Do you have constipation?",category:"Digestive"},
+  {id:"passage_of_gases",question:"Do you have excessive gas?",category:"Digestive"},
+  {id:"bloody_stool",question:"Do you notice blood in your stool?",category:"Digestive"},
+  {id:"loss_of_appetite",question:"Have you lost your appetite?",category:"Digestive"},
+  {id:"stomach_bleeding",question:"Do you have stomach bleeding?",category:"Digestive"},
+  {id:"yellowish_skin",question:"Is your skin yellowish or jaundiced?",category:"Liver"},
+  {id:"yellowing_of_eyes",question:"Are the whites of your eyes turning yellow?",category:"Liver"},
+  {id:"dark_urine",question:"Is your urine dark or tea-coloured?",category:"Liver"},
+  {id:"yellow_urine",question:"Is your urine unusually yellow?",category:"Liver"},
+  {id:"internal_itching",question:"Do you experience internal itching?",category:"Liver"},
+  {id:"acute_liver_failure",question:"Do you have signs of acute liver failure?",category:"Liver"},
+  {id:"fluid_overload",question:"Do you have abnormal body swelling or fluid retention?",category:"Liver"},
+  {id:"itching",question:"Do you have itchy skin?",category:"Skin"},
+  {id:"skin_rash",question:"Do you have a skin rash?",category:"Skin"},
+  {id:"red_spots_over_body",question:"Do you have red spots on your body?",category:"Skin"},
+  {id:"nodal_skin_eruptions",question:"Do you have nodules or skin eruptions?",category:"Skin"},
+  {id:"dischromic_patches",question:"Do you have discoloured patches on your skin?",category:"Skin"},
+  {id:"redness_of_eyes",question:"Do you have red or irritated eyes?",category:"Eyes"},
+  {id:"blurred_vision",question:"Do you have blurred or distorted vision?",category:"Eyes"},
+  {id:"pain_behind_eyes",question:"Do you have pain behind your eyes?",category:"Eyes"},
+  {id:"burning_micturition",question:"Do you feel a burning sensation when urinating?",category:"Urinary"},
+  {id:"urinating_frequently",question:"Do you urinate much more than usual?",category:"Urinary"},
+  {id:"continuous_feel_of_urine",question:"Do you have a persistent urge to urinate?",category:"Urinary"},
+  {id:"bladder_discomfort",question:"Do you have bladder discomfort?",category:"Urinary"},
+  {id:"foul_smell_of_urine",question:"Does your urine have an unusual smell?",category:"Urinary"},
+  {id:"spotting_urination",question:"Do you notice spotting during urination?",category:"Urinary"},
+  {id:"pain_anal_region",question:"Do you have pain in your anal region?",category:"Rectal"},
+  {id:"pain_bowel_movements",question:"Do you have pain during bowel movements?",category:"Rectal"},
+  {id:"irritation_anus",question:"Do you have irritation around the anus?",category:"Rectal"},
+  {id:"restlessness",question:"Do you feel restless or agitated?",category:"Neurological"},
+  {id:"mood_swings",question:"Have you been experiencing mood swings?",category:"Neurological"},
+  {id:"confusion",question:"Do you feel confused or disoriented?",category:"Neurological"},
+  {id:"coma",question:"Have you experienced any loss of consciousness?",category:"Neurological"},
+  {id:"excessive_hunger",question:"Are you excessively hungry?",category:"Metabolic"},
+  {id:"increased_appetite",question:"Has your appetite increased significantly?",category:"Metabolic"},
+  {id:"irregular_sugar_level",question:"Do you have an irregular blood sugar level?",category:"Metabolic"},
+  {id:"polyuria",question:"Do you urinate in unusually large amounts?",category:"Metabolic"},
+  {id:"dehydration",question:"Do you feel severely dehydrated?",category:"Metabolic"},
+  {id:"weight_loss",question:"Have you experienced unexplained weight loss?",category:"Metabolic"},
+  {id:"obesity",question:"Are you significantly overweight?",category:"Metabolic"},
+  {id:"swelled_lymph_nodes",question:"Do you have swollen lymph nodes?",category:"Infection"},
+  {id:"swelling_stomach",question:"Is your stomach area swollen?",category:"Infection"},
+  {id:"fast_heart_rate",question:"Do you have a fast or irregular heartbeat?",category:"Infection"},
+  {id:"toxic_look",question:"Do you look or feel severely ill?",category:"Infection"},
+  {id:"swollen_lymph_neck",question:"Do you have swollen lymph nodes in the neck or armpit?",category:"Infection"},
+  {id:"loss_of_appetite_fever",question:"Have you lost your appetite alongside a fever?",category:"Infection"},
+  {id:"family_history",question:"Do you have a family history of this condition?",category:"History"},
+  {id:"blood_transfusion",question:"Have you received a blood transfusion recently?",category:"History"},
+  {id:"unsterile_injections",question:"Have you been injected with unsterile equipment?",category:"History"},
+  {id:"alcohol_history",question:"Do you have a history of heavy alcohol use?",category:"History"},
+];
+
+const QUESTION_INDEX = Object.fromEntries(QUESTION_BANK.map((q) => [q.id, q]));
+
+// Human-readable symptom label, e.g. "high_fever" -> "High Fever"
+function symptomLabel(symptomId) {
+  return String(symptomId || "")
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim() || "Unspecified";
+}
+
+// Resolves a symptom id to its original question text and category,
+// falling back to a generated question when the id isn't in the bank
+// (e.g. a legacy record referencing a retired question).
+function resolveQuestion(symptomId) {
+  const entry = QUESTION_INDEX[symptomId];
+  if (entry) return { question: entry.question, category: entry.category };
+  return {
+    question: `Do you have ${symptomLabel(symptomId).toLowerCase()}?`,
+    category: "General",
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -408,6 +518,96 @@ function drawRecommendations(doc, rec, y) {
 }
 
 // ─────────────────────────────────────────────
+// ASSESSMENT QUESTIONS
+// Lists every question that was answered "Yes" during the assessment,
+// each tagged with the symptom it maps to. Prefers the confidence
+// trajectory (preserves the exact order the questions were asked in);
+// falls back to the active symptoms list when no trajectory is present.
+// ─────────────────────────────────────────────
+function drawAssessmentQuestions(doc, trajectory, activeSymptoms, y) {
+  let confirmed = [];
+
+  if (trajectory && trajectory.length > 0) {
+    confirmed = trajectory
+      .filter((step) => step.answer === true)
+      .map((step) => {
+        const { question, category } = resolveQuestion(step.symptom);
+        return { symptom: step.symptom, question, category };
+      });
+  } else if (activeSymptoms && activeSymptoms.length > 0) {
+    confirmed = activeSymptoms.map((symptom) => {
+      const { question, category } = resolveQuestion(symptom);
+      return { symptom, question, category };
+    });
+  }
+
+  if (confirmed.length === 0) return y;
+
+  y = sectionLabel(doc, `Assessment Questions — Answered Yes (${confirmed.length})`, y);
+
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(...MUTED);
+  doc.text(
+    "Each item below was a question in the symptom assessment that the patient answered \"Yes\" to.",
+    MARGIN,
+    y
+  );
+  y += 7;
+
+  confirmed.forEach((item, idx) => {
+    const qLines   = doc.splitTextToSize(item.question, CONTENT_W - 16);
+    const tag      = `Symptom: ${symptomLabel(item.symptom)}`;
+    const tagW     = doc.getTextWidth(tag) + 7;
+    const catTag   = item.category;
+    const catW     = doc.getTextWidth(catTag) + 7;
+    const textH    = qLines.length * 4.2;
+    const boxH     = textH + 15;
+
+    y = ensureSpace(doc, y, boxH + 3);
+
+    doc.setFillColor(...PANEL);
+    doc.setDrawColor(...BORDER);
+    doc.roundedRect(MARGIN, y, CONTENT_W, boxH, 1.5, 1.5, "FD");
+
+    // Numbered marker
+    doc.setFillColor(...TEAL);
+    doc.circle(MARGIN + 7, y + 8, 3.4, "F");
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(255, 255, 255);
+    doc.text(String(idx + 1), MARGIN + 7, y + 9.2, { align: "center" });
+
+    // Question text
+    doc.setFontSize(9.5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...INK);
+    doc.text(qLines, MARGIN + 15, y + 7.5);
+
+    // Symptom + category tags
+    const tagY = y + 7.5 + textH + 2.5;
+    doc.setFillColor(238, 252, 250);
+    doc.setDrawColor(189, 240, 234);
+    doc.roundedRect(MARGIN + 15, tagY - 3.6, tagW, 5.4, 2, 2, "FD");
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...TEAL_D);
+    doc.text(tag, MARGIN + 15 + 3.5, tagY);
+
+    doc.setFillColor(245, 246, 247);
+    doc.setDrawColor(...BORDER);
+    doc.roundedRect(MARGIN + 15 + tagW + 3, tagY - 3.6, catW, 5.4, 2, 2, "FD");
+    doc.setTextColor(...MUTED);
+    doc.text(catTag, MARGIN + 15 + tagW + 3 + 3.5, tagY);
+    doc.setTextColor(...INK);
+
+    y += boxH + 3;
+  });
+
+  return y + 2;
+}
+
+// ─────────────────────────────────────────────
 // CONFIDENCE EVOLUTION CHART
 // Only plots steps where the patient answered Yes — these are the only
 // points that actually moved the model's reasoning. Each x-axis label
@@ -575,6 +775,9 @@ export function generateTropiCareReport({ patient, diagnosis }) {
 
   y = ensureSpace(doc, y, 30);
   y = drawRecommendations(doc, diagnosis.recommendation, y);
+
+  y = ensureSpace(doc, y, 20);
+  y = drawAssessmentQuestions(doc, diagnosis.confidence_trajectory, diagnosis.active_symptoms, y);
 
   y = drawConfidenceChart(doc, diagnosis.confidence_trajectory, y);
 
