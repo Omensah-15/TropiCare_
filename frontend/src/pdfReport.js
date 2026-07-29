@@ -12,7 +12,7 @@ const PANEL  = [248, 250, 250];
 
 const RISK_RGB = {
   High:   [226, 61, 61],
-  Medium: [232, 147, 15],
+  Medium: [232, 147, 15], 
   Low:    [31, 157, 85],
   None:   [31, 157, 85],
 };
