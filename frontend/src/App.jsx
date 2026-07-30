@@ -2351,7 +2351,7 @@ function RecordsScreen({ toast, onDetail, detail, onClearDetail }) {
       <div className="page-head">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
-            <div className="t-display">My Records</div>
+            <div className="t-display">Records</div>
             <div className="t-subtitle mt-1">{records.length} total assessment{records.length !== 1 ? "s" : ""}</div>
           </div>
           <button onClick={load} className="icon-btn"
