@@ -626,6 +626,14 @@ SYMPTOM_WEIGHT: Dict[str, float] = {
     sym: round(1.0 / count, 4) for sym, count in _SYMPTOM_DISEASE_COUNT.items()
 }
 
+# A single disease may not consume more than this many of the 15-question
+# budget in get_next_question(), even while it's the top-scoring candidate.
+# Without this ceiling, "prefer the current leader" (see get_next_question's
+# docstring) can drift back toward the pre-taper bug where one disease --
+# typically whichever has the longest symptom list -- absorbs nearly the
+# entire session and starves every other candidate of a real differential.
+QUESTION_MONOPOLY_CAP = 8
+
 ALL_QUESTIONS: List[Dict[str, str]] = [
     {"id":"high_fever","question":"Do you have a high fever?","category":"General"},
     {"id":"mild_fever","question":"Do you have a mild fever?","category":"General"},
@@ -791,17 +799,37 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
     could only ever get 2-4 of its own symptoms confirmed, capping
     everyone's confidence low instead of just Malaria's rivals.
 
-    Fix: taper the candidate pool size as the session progresses, mirroring
-    how a real differential diagnosis actually works -- broad screening
-    first, then narrowing to build real depth on the leading hypotheses:
+    That round-robin fix (sorting the pool by asked_count ascending, i.e.
+    "whichever candidate has been touched least goes next") swung the bug
+    the other way: the INSTANT a leading candidate had even one question
+    asked, it was no longer the least-touched member of the pool, so the
+    engine abandoned it for a completely fresh, untouched disease -- even
+    when the leader's score was clearly highest. For diseases with longer
+    symptom lists (Malaria again, at 14) this was especially damaging: they
+    need MORE of their own follow-up questions than a shorter-list disease
+    like Typhoid (13) to reach comparable coverage, but the tie-break
+    rule handed them FEWER, since they got deprioritized after their very
+    first question. On a genuinely ambiguous early fever presentation
+    (fever, headache, fatigue, vomiting -- shared by both Malaria and
+    Typhoid) this reliably let Typhoid overtake Malaria in the final
+    confidence ranking even when the underlying evidence favoured Malaria
+    equally or more, simply because Typhoid's shorter list reached a
+    usable coverage ratio faster within the same 15-question budget.
+
+    Fix: keep the taper (broad pool early, narrowing later) but make
+    CURRENT SCORE the primary sort key within the active pool, so a
+    genuine leader keeps getting its own follow-up questions instead of
+    being dropped the moment it's touched once. asked_count is now only a
+    tie-breaker for candidates that are still exactly tied on score,
+    which preserves the original broad-screening behaviour for the early
+    "everyone's at zero" phase. QUESTION_MONOPOLY_CAP puts a ceiling back
+    under this -- once a disease has consumed its share of the budget, it
+    steps aside for the next-best candidate even if it's still scoring
+    highest, so no single disease (long symptom list or not) can crowd
+    out the differential entirely the way the pre-taper bug did.
       - First 6 questions:  pool of 6 candidates (broad differential)
       - Next 5 questions:   pool of 3 candidates (narrowing)
       - Remaining questions: pool of 2 candidates (deep confirmation)
-    Within whichever pool is active, the candidate with the FEWEST of its
-    own symptoms asked so far goes next (ties keep score-rank order via
-    Python's stable sort), so nobody -- including a large-symptom-list
-    disease like Malaria -- can monopolize the pool's share of questions
-    the way the old code let the #1 slot monopolize the entire budget.
     """
     ranked = sorted(DISEASE_SYMPTOM_MAP.keys(), key=lambda d: score_disease(d, answers), reverse=True)
 
@@ -820,9 +848,14 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
     def has_unasked(d: str) -> bool:
         return any(s not in asked for s in DISEASE_SYMPTOM_MAP[d])
 
-    candidates = [d for d in top if has_unasked(d)]
+    # Candidates still under the monopoly cap get first refusal; only
+    # fall back to capped-but-unasked candidates if every pool member has
+    # already hit the cap (keeps the interview moving instead of stalling).
+    under_cap  = [d for d in top if has_unasked(d) and asked_count(d) < QUESTION_MONOPOLY_CAP]
+    candidates = under_cap if under_cap else [d for d in top if has_unasked(d)]
+
     if candidates:
-        candidates.sort(key=asked_count)
+        candidates.sort(key=lambda d: (-score_disease(d, answers), asked_count(d)))
         chosen_disease = candidates[0]
         for sym in DISEASE_SYMPTOM_MAP[chosen_disease]:
             if sym not in asked:
