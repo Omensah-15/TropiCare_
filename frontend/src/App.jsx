@@ -176,6 +176,33 @@ const RISK_MAP = {
   "Fungal Infection":"Low", Allergy:"Low", "Common Cold":"Low", "Drug Reaction":"Low",
 };
 
+// ─────────────────────────────────────────────
+// SYMPTOM SPECIFICITY WEIGHTS
+// Mirrors the backend's SYMPTOM_WEIGHT (main.py): an inverse-frequency
+// weight per symptom, based on how many diseases in DISEASE_SYMPTOM_MAP
+// list it -- 1.0 for a symptom unique to one disease, dropping toward
+// ~0.05-0.15 for symptoms shared across a dozen or more (fever, fatigue,
+// etc.). Applied to confirmed-symptom scoring only, in scoreDisease and
+// diseaseConfidence below, so confirming a highly distinguishing symptom
+// counts far more than confirming a generic one -- offline results now
+// actually match what the server computes instead of silently drifting
+// from it.
+// ─────────────────────────────────────────────
+const _SYMPTOM_DISEASE_COUNT = {};
+Object.values(DISEASE_SYMPTOM_MAP).forEach((syms) => {
+  new Set(syms).forEach((s) => {
+    _SYMPTOM_DISEASE_COUNT[s] = (_SYMPTOM_DISEASE_COUNT[s] || 0) + 1;
+  });
+});
+const SYMPTOM_WEIGHT = Object.fromEntries(
+  Object.entries(_SYMPTOM_DISEASE_COUNT).map(([s, c]) => [s, Math.round((1 / c) * 10000) / 10000])
+);
+
+// A single disease may not consume more than this many of the 15-question
+// budget in getNextQuestionOffline(), even while it's the top-scoring
+// candidate -- mirrors the backend's QUESTION_MONOPOLY_CAP (main.py).
+const QUESTION_MONOPOLY_CAP = 8;
+
 const ALL_QUESTIONS = [
   {id:"high_fever",question:"Do you have a high fever?",category:"General"},
   {id:"mild_fever",question:"Do you have a mild fever?",category:"General"},
@@ -263,7 +290,7 @@ const Q_INDEX = Object.fromEntries(ALL_QUESTIONS.map((q) => [q.id, q]));
 function scoreDisease(disease, answers) {
   let score = 0;
   for (const s of DISEASE_SYMPTOM_MAP[disease] || []) {
-    if (answers[s] === true)  score += 3;
+    if (answers[s] === true)  score += 3 * (SYMPTOM_WEIGHT[s] ?? 1);
     if (answers[s] === false) score -= 1;
   }
   return score;
@@ -274,16 +301,24 @@ function scoreDisease(disease, answers) {
 // so offline results never disagree with what the server would compute)
 // ─────────────────────────────────────────────
 //
-// Previously confidence was yes_count / full_symptom_list_length for the
-// disease. That structurally under-scored diseases with long symptom
-// lists — Malaria has 14 tracked symptoms, so confirming 6 strong ones
-// only scored 6/14 = 0.43 — and ignored which symptoms had actually been
-// asked, which matters a lot here since the assessment caps at 15
-// adaptive questions and rarely reaches every symptom for every disease.
-// This normalises against symptoms actually asked (when supplied) and
-// blends the positive-match ratio with a coverage term, so a strong
-// partial match on a long-list disease is no longer scored lower than a
-// weaker match on a short one.
+// Two things previously drifted out of sync with the backend:
+//
+// 1. Coverage floor -- this used "0.65 + 0.35 * coverage", understating
+//    how much a strong but partial match should count once the backend
+//    moved to "0.25 + 0.75 * coverage" (a disease that had barely been
+//    probed could still show ~70% confidence purely from a tiny,
+//    low-coverage sample matching). Now identical to the server.
+//
+// 2. Match ratio -- this used a flat yes/relevant count, treating a
+//    generic symptom like "fatigue" (shared by 15 of 22 diseases) as
+//    equally diagnostic as a specific one like "polyuria" (unique to
+//    Diabetes). The backend weights each symptom by SYMPTOM_WEIGHT
+//    (inverse disease-frequency) when computing the match ratio; this
+//    now does the same, so confirming a highly distinguishing symptom
+//    moves the ratio far more than confirming a generic one -- exactly
+//    the mismatch that let common-symptom diseases (e.g. Malaria, whose
+//    list overlaps heavily with several other febrile illnesses) look
+//    artificially under- or over-confident relative to narrower ones.
 function diseaseConfidence(disease, answers, asked = null) {
   const symptoms = DISEASE_SYMPTOM_MAP[disease] || [];
   if (symptoms.length === 0) return 0;
@@ -294,32 +329,67 @@ function diseaseConfidence(disease, answers, asked = null) {
 
   if (relevant.length === 0) return 0;
 
-  const yes = relevant.filter((s) => answers[s] === true).length;
-  if (yes === 0) return 0;
+  const weightTotal = relevant.reduce((sum, s) => sum + (SYMPTOM_WEIGHT[s] ?? 1), 0);
+  if (weightTotal <= 0) return 0;
 
-  const matchRatio = yes / relevant.length;
+  const matchedWeight = relevant
+    .filter((s) => answers[s] === true)
+    .reduce((sum, s) => sum + (SYMPTOM_WEIGHT[s] ?? 1), 0);
+  if (matchedWeight === 0) return 0;
+
+  const matchRatio = matchedWeight / weightTotal;
   const coverage    = Math.min(relevant.length / symptoms.length, 1);
 
-  // Match ratio dominates; coverage refines confidence upward as more of
-  // the disease's picture has been checked, rather than gating it.
-  const confidence = matchRatio * (0.65 + 0.35 * coverage);
+  // Coverage factor scales from a low floor near zero coverage up toward
+  // 1.0 as more of the disease's own symptom list is actually covered,
+  // so confidence tracks how much real evidence was gathered rather than
+  // just the ratio within whatever small sample happened to be asked.
+  const coverageFactor = Math.min(1, 0.25 + 0.75 * coverage);
+  const confidence = matchRatio * coverageFactor;
   return Math.round(Math.min(0.95, Math.max(0.10, confidence)) * 10000) / 10000;
 }
 
+// ─────────────────────────────────────────────
+// NEXT QUESTION (offline) -- mirrors the backend's get_next_question fix.
+// This previously just took the top-6 scoring diseases and drained the
+// #1-ranked one's ENTIRE symptom list before ever touching #2 -- the
+// original monopolization bug the backend moved away from. It also never
+// had the tapered pool (6 -> 3 -> 2) or the monopoly cap the backend now
+// uses, so offline sessions could diverge sharply from what the server
+// would have asked. Same fix as main.py: broaden-then-narrow the
+// candidate pool, keep following the CURRENT highest-scoring candidate
+// (asked-count is only a tie-breaker for exact score ties, not the
+// primary sort), and cap how many questions any one disease can consume
+// so it can't crowd out the rest of the differential.
+// ─────────────────────────────────────────────
 function getNextQuestionOffline(answers, asked) {
   const ranked = Object.keys(DISEASE_SYMPTOM_MAP)
-    .map((d) => ({ d, sc: scoreDisease(d, answers) }))
-    .sort((a, b) => b.sc - a.sc)
-    .slice(0, 6)
-    .map((x) => x.d);
-  for (const disease of ranked) {
-    for (const sym of DISEASE_SYMPTOM_MAP[disease] || []) {
+    .sort((a, b) => scoreDisease(b, answers) - scoreDisease(a, answers));
+
+  const nAsked   = asked.length;
+  const poolSize = nAsked < 6 ? 6 : nAsked < 11 ? 3 : 2;
+  const top      = ranked.slice(0, poolSize);
+
+  const askedCount = (d) => (DISEASE_SYMPTOM_MAP[d] || []).filter((s) => asked.includes(s)).length;
+  const hasUnasked = (d) => (DISEASE_SYMPTOM_MAP[d] || []).some((s) => !asked.includes(s));
+
+  const underCap   = top.filter((d) => hasUnasked(d) && askedCount(d) < QUESTION_MONOPOLY_CAP);
+  const candidates = underCap.length > 0 ? underCap : top.filter(hasUnasked);
+
+  if (candidates.length > 0) {
+    candidates.sort((a, b) => {
+      const scoreDiff = scoreDisease(b, answers) - scoreDisease(a, answers);
+      return scoreDiff !== 0 ? scoreDiff : askedCount(a) - askedCount(b);
+    });
+    const chosen = candidates[0];
+    for (const sym of DISEASE_SYMPTOM_MAP[chosen] || []) {
       if (!asked.includes(sym)) {
         const q = Q_INDEX[sym];
         if (q) return q;
       }
     }
   }
+
   return ALL_QUESTIONS.find((q) => !asked.includes(q.id)) || null;
 }
 
