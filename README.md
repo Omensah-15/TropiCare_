@@ -72,17 +72,6 @@ width="300">
 
 ---
 
-## Mobile Experience
-
-<div align="center">
-
-<img src="https://github.com/Omensah-15/TropiCare_/raw/56523bc5213ed47d35315f4aa111a40b6a2908e8/assets/mobileview.png"
-width="250">
-
-</div>
-
----
-
 ## Disclaimer
 
 TropiCare is an informational health support tool and does not replace professional medical diagnosis or clinical consultation.
