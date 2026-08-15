@@ -19,7 +19,7 @@ TropiCare helps patients and clinicians identify tropical disease risks through 
 
 <div align="center">
 
-<img src="https://github.com/Omensah-15/TropiCare_/blob/587e1aa8f0c2c13437433d96316cbd12edce02d6/assets/example_confidence_evolution.png"
+<img src="https://github.com/Omensah-15/TropiCare_/blob/180e4fb97ea3a38bc6fae90a6ae9e62d6c340c9d/assets/app_overview.png"
 alt="app">
 
 </div>
