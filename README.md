@@ -17,6 +17,13 @@ TropiCare helps patients and clinicians identify tropical disease risks through 
 
 ## Overview
 
+<div align="center">
+
+<img src="https://github.com/Omensah-15/TropiCare_/blob/587e1aa8f0c2c13437433d96316cbd12edce02d6/assets/example_confidence_evolution.png"
+alt="app">
+
+</div>
+
 Built for West Africa, TropiCare bridges the gap between symptom onset and clinical support by providing early risk assessment and actionable health guidance.
 
 **Key capabilities:**
