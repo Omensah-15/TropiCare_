@@ -548,41 +548,54 @@ def stop_model_watcher() -> None:
 # -----------------------------------------------------------------
 
 RISK_MAP: Dict[str, str] = {
-    "Malaria": "High", "Typhoid": "High", "Dengue": "High",
-    "Tuberculosis": "High", "Hepatitis B": "High", "Hepatitis C": "High",
-    "Hepatitis D": "High", "Pneumonia": "High",
-    "Hepatitis A": "Medium", "Hepatitis E": "Medium",
-    "Alcoholic Hepatitis": "Medium", "Jaundice": "Medium",
-    "Chicken Pox": "Medium", "Bronchial Asthma": "Medium",
-    "Urinary Tract Infection": "Medium", "Dimorphic Haemorrhoids": "Medium",
-    "Peptic Ulcer Disease": "Medium", "Diabetes": "Medium",
-    "Fungal Infection": "Low", "Allergy": "Low",
-    "Common Cold": "Low", "Drug Reaction": "Low",
+    "Malaria": "High", "Typhoid": "High", "Dengue": "High", "Chikungunya": "High", "Tuberculosis": "High", "Hepatitis B": "High", "Hepatitis C": "High", "Hepatitis D": "High", "Pneumonia": "High", "Heart attack": "High", "Paralysis (Brain Hemorrhage)": "High", "Hypoglycemia": "High",
+    "Hepatitis A": "Medium", "Hepatitis E": "Medium", "Alcoholic Hepatitis": "Medium", "Chronic cholestasis": "Medium", "Jaundice": "Medium", "Chicken Pox": "Medium", "Bronchial Asthma": "Medium", "Urinary Tract Infection": "Medium", "Dimorphic Haemorrhoids": "Medium", "Peptic Ulcer Disease": "Medium", "Diabetes": "Medium", "Hypertension": "Medium", "Gastroenteritis": "Medium", "Hypothyroidism": "Medium", "Hyperthyroidism": "Medium",
+    "Fungal Infection": "Low", "Allergy": "Low", "Common Cold": "Low", "Drug Reaction": "Low", "GERD": "Low", "Migraine": "Low", "Cervical spondylosis": "Low", "Varicose veins": "Low", "Osteoarthritis": "Low", "Arthritis": "Low", "Paroxysmal Positional Vertigo": "Low", "Acne": "Low", "Psoriasis": "Low", "Impetigo": "Low",
 }
 
+
 DISEASE_SYMPTOM_MAP: Dict[str, List[str]] = {
-    "Malaria":                ["high_fever","chills","sweating","headache","muscle_pain","vomiting","fatigue","joint_pain","nausea","malaise","loss_of_appetite","fast_heart_rate","confusion","coma"],
-    "Typhoid":                ["high_fever","headache","fatigue","loss_of_appetite","vomiting","constipation","toxic_look","abdominal_pain","diarrhoea","loss_of_appetite_fever","fast_heart_rate","red_spots_over_body","confusion"],
-    "Dengue":                 ["high_fever","headache","pain_behind_eyes","muscle_pain","joint_pain","skin_rash","red_spots_over_body","vomiting","fatigue","malaise","fast_heart_rate","swelled_lymph_nodes"],
-    "Tuberculosis":           ["cough","blood_in_sputum","weight_loss","fatigue","sweating","chest_pain","breathlessness","phlegm","loss_of_appetite","high_fever","swollen_lymph_neck","family_history"],
-    "Hepatitis B":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","blood_transfusion","unsterile_injections","abdominal_pain","nausea","loss_of_appetite","internal_itching","acute_liver_failure"],
-    "Hepatitis C":            ["yellowing_of_eyes","yellowish_skin","fatigue","nausea","loss_of_appetite","blood_transfusion","dark_urine","weight_loss","internal_itching","abdominal_pain"],
-    "Hepatitis D":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","acute_liver_failure","fluid_overload","blood_transfusion","unsterile_injections","swelling_stomach"],
-    "Pneumonia":              ["cough","breathlessness","chest_pain","high_fever","rusty_sputum","chills","fatigue","phlegm","loss_of_appetite","malaise"],
-    "Hepatitis A":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","loss_of_appetite","nausea","abdominal_pain","vomiting","mild_fever","malaise","distension_of_abdomen"],
-    "Hepatitis E":            ["yellowing_of_eyes","yellowish_skin","fatigue","loss_of_appetite","nausea","mild_fever","yellow_urine","abdominal_pain","malaise"],
-    "Alcoholic Hepatitis":    ["yellowing_of_eyes","vomiting","abdominal_pain","alcohol_history","swelling_stomach","fluid_overload","yellowish_skin","acute_liver_failure","distension_of_abdomen"],
-    "Jaundice":               ["yellowing_of_eyes","yellowish_skin","dark_urine","yellow_urine","itching","fatigue","abdominal_pain","internal_itching","fluid_overload","distension_of_abdomen"],
-    "Chicken Pox":            ["skin_rash","itching","red_spots_over_body","mild_fever","fatigue","headache","loss_of_appetite","nodal_skin_eruptions"],
-    "Bronchial Asthma":       ["breathlessness","cough","phlegm","chest_pain","fatigue"],
-    "Urinary Tract Infection":["burning_micturition","urinating_frequently","continuous_feel_of_urine","bladder_discomfort","foul_smell_of_urine","spotting_urination","back_pain"],
-    "Dimorphic Haemorrhoids": ["bloody_stool","pain_anal_region","pain_bowel_movements","constipation","passage_of_gases","irritation_anus"],
-    "Peptic Ulcer Disease":   ["stomach_pain","indigestion","vomiting","loss_of_appetite","nausea","stomach_bleeding","abdominal_pain","passage_of_gases"],
-    "Diabetes":               ["polyuria","excessive_hunger","irregular_sugar_level","weight_loss","fatigue","blurred_vision","urinating_frequently","increased_appetite","family_history","obesity"],
-    "Fungal Infection":       ["itching","skin_rash","dischromic_patches","nodal_skin_eruptions","irritation_anus"],
-    "Allergy":                ["continuous_sneezing","runny_nose","itching","watering_from_eyes","skin_rash","redness_of_eyes","throat_irritation","mild_fever","joint_pain"],
-    "Common Cold":            ["runny_nose","continuous_sneezing","throat_irritation","mild_fever","cough","headache","sinus_pressure","watering_from_eyes","loss_of_smell"],
-    "Drug Reaction":          ["itching","skin_rash","red_spots_over_body","fatigue","nausea","diarrhoea"],
+    "Malaria": ["high_fever","chills","sweating","headache","muscle_pain","vomiting","nausea","diarrhoea"],
+    "Typhoid": ["high_fever","chills","fatigue","vomiting","headache","nausea","constipation","abdominal_pain","diarrhoea","toxic_look_typhos","belly_pain"],
+    "Dengue": ["high_fever","headache","pain_behind_the_eyes","loss_of_appetite","back_pain","skin_rash","vomiting","fatigue","chills","joint_pain","malaise","muscle_pain","red_spots_over_body"],
+    "Chikungunya": ["skin_rash","joint_pain","fatigue","nausea","redness_of_eyes"],
+    "Tuberculosis": ["blood_in_sputum","chest_pain","phlegm","malaise","swelled_lymph_nodes","yellowing_of_eyes","mild_fever","loss_of_appetite","sweating","breathlessness","high_fever","cough","weight_loss","fatigue","vomiting","chills"],
+    "Hepatitis B": ["yellowing_of_eyes","malaise","receiving_blood_transfusion","receiving_unsterile_injections","yellowish_skin","lethargy","fatigue","itching","yellow_urine","abdominal_pain","loss_of_appetite","dark_urine"],
+    "Hepatitis C": ["fatigue","yellowish_skin","nausea","loss_of_appetite","family_history","yellowing_of_eyes"],
+    "Hepatitis D": ["joint_pain","vomiting","fatigue","yellowish_skin","dark_urine","nausea","loss_of_appetite","abdominal_pain","yellowing_of_eyes"],
+    "Pneumonia": ["chest_pain","rusty_sputum","fast_heart_rate","cough","fatigue","chills","high_fever","malaise","sweating","breathlessness","phlegm"],
+    "Heart attack": ["heartburn","chest_pain","vomiting","sweating","breathlessness"],
+    "Paralysis (Brain Hemorrhage)": ["altered_sensorium","vomiting","headache","weakness_of_one_body_side"],
+    "Hypoglycemia": ["slurred_speech","irritability","palpitations","excessive_hunger","sweating","anxiety","fatigue","vomiting","blurred_and_distorted_vision","nausea","headache","drying_and_tingling_lips"],
+    "Hepatitis A": ["mild_fever","muscle_pain","yellowing_of_eyes","yellowish_skin","vomiting","joint_pain","dark_urine","abdominal_pain","loss_of_appetite","nausea","diarrhoea"],
+    "Hepatitis E": ["stomach_bleeding","yellowing_of_eyes","coma","loss_of_appetite","abdominal_pain","yellowish_skin","high_fever","fatigue","vomiting","joint_pain","nausea","dark_urine","acute_liver_failure"],
+    "Alcoholic Hepatitis": ["vomiting","yellowish_skin","abdominal_pain","fluid_overload","swelling_of_stomach","distention_of_abdomen","history_of_alcohol_consumption"],
+    "Chronic cholestasis": ["itching","vomiting","yellowish_skin","nausea","loss_of_appetite","abdominal_pain","yellowing_of_eyes"],
+    "Jaundice": ["itching","vomiting","fatigue","weight_loss","high_fever","yellowish_skin","dark_urine","abdominal_pain"],
+    "Chicken Pox": ["malaise","red_spots_over_body","itching","fatigue","skin_rash","lethargy","high_fever","loss_of_appetite","headache","swelled_lymph_nodes","mild_fever"],
+    "Bronchial Asthma": ["breathlessness","high_fever","family_history","mucoid_sputum","cough","fatigue"],
+    "Urinary Tract Infection": ["bladder_discomfort","continuous_feel_of_urine","burning_micturition","foul_smell_of_urine"],
+    "Dimorphic Haemorrhoids": ["constipation","pain_during_bowel_movements","pain_in_anal_region","bloody_stool","irritation_in_anus"],
+    "Peptic Ulcer Disease": ["vomiting","abdominal_pain","internal_itching","passage_of_gases","indigestion","loss_of_appetite"],
+    "Diabetes": ["polyuria","increased_appetite","weight_loss","restlessness","fatigue","excessive_hunger","lethargy","irregular_sugar_level","blurred_and_distorted_vision","obesity","mood_swings","dehydration","urinating_a_lot"],
+    "Hypertension": ["lack_of_concentration","loss_of_balance","headache","dizziness","chest_pain"],
+    "Gastroenteritis": ["diarrhoea","vomiting","sunken_eyes","dehydration"],
+    "Hypothyroidism": ["irritability","swollen_extremeties","depression","enlarged_thyroid","brittle_nails","abnormal_menstruation","weight_gain","cold_hands_and_feets","mood_swings","dizziness","lethargy","puffy_face_and_eyes","fatigue"],
+    "Hyperthyroidism": ["muscle_weakness","abnormal_menstruation","irritability","weight_loss","mood_swings","fatigue","restlessness","fast_heart_rate","diarrhoea","sweating","excessive_hunger"],
+    "Fungal Infection": ["itching","skin_rash","nodal_skin_eruptions","dischromic_patches"],
+    "Allergy": ["continuous_sneezing","shivering","chills","watering_from_eyes"],
+    "Common Cold": ["phlegm","muscle_pain","loss_of_smell","chest_pain","congestion","runny_nose","sinus_pressure","redness_of_eyes","throat_irritation","continuous_sneezing","malaise","headache","swelled_lymph_nodes","fatigue","cough","chills","high_fever"],
+    "Drug Reaction": ["itching","skin_rash","stomach_pain","burning_micturition","spotting_urination"],
+    "GERD": ["stomach_pain","chest_pain","cough","acidity","vomiting","ulcers_on_tongue"],
+    "Migraine": ["acidity","indigestion","headache","blurred_and_distorted_vision","excessive_hunger","stiff_neck","depression","irritability","visual_disturbances"],
+    "Cervical spondylosis": ["neck_pain","loss_of_balance","dizziness","back_pain","weakness_in_limbs"],
+    "Varicose veins": ["fatigue","cramps","bruising","obesity","swollen_legs","prominent_veins_on_calf","swollen_blood_vessels"],
+    "Osteoarthritis": ["joint_pain","neck_pain","knee_pain","hip_joint_pain","swelling_joints","painful_walking"],
+    "Arthritis": ["muscle_weakness","stiff_neck","swelling_joints","movement_stiffness","painful_walking"],
+    "Paroxysmal Positional Vertigo": ["vomiting","headache","nausea","loss_of_balance","unsteadiness","spinning_movements"],
+    "Acne": ["skin_rash","pus_filled_pimples","blackheads","scurring"],
+    "Psoriasis": ["skin_rash","joint_pain","skin_peeling","silver_like_dusting","small_dents_in_nails","inflammatory_nails"],
+    "Impetigo": ["skin_rash","blister","red_sore_around_nose","yellow_crust_ooze","high_fever"],
 }
 
 # -----------------------------------------------------------------
@@ -590,11 +603,12 @@ DISEASE_SYMPTOM_MAP: Dict[str, List[str]] = {
 #
 # Root cause of the confidence imbalance: a symptom like "fatigue" or
 # "headache" appears in well over half of DISEASE_SYMPTOM_MAP, while a
-# symptom like "polyuria" or "blurred_vision" appears only under Diabetes.
-# Both were previously worth an identical +3 when confirmed. That let any
-# disease built mostly from common, overlapping symptoms (Malaria has 14
-# symptoms, nearly all of them shared with several other febrile illnesses)
-# accumulate score from confirmations that are only weakly diagnostic,
+# symptom like "polyuria" or "blurred_and_distorted_vision" appears only
+# under Diabetes. Both were previously worth an identical +3 when
+# confirmed. That let any disease built mostly from common, overlapping
+# symptoms (Common Cold, Tuberculosis, and Dengue all share most of their
+# symptoms with several other febrile illnesses) accumulate score from
+# confirmations that are only weakly diagnostic,
 # while a disease defined by a small set of narrow, specific symptoms
 # (Diabetes) could only earn the same +3 per confirmation despite each of
 # its symptoms being far more informative on its own. The same flat
@@ -635,112 +649,182 @@ SYMPTOM_WEIGHT: Dict[str, float] = {
 QUESTION_MONOPOLY_CAP = 8
 
 ALL_QUESTIONS: List[Dict[str, str]] = [
-    {"id":"high_fever","question":"Do you have a high fever?","category":"General"},
-    {"id":"mild_fever","question":"Do you have a mild fever?","category":"General"},
-    {"id":"fatigue","question":"Do you feel unusually tired or weak?","category":"General"},
-    {"id":"malaise","question":"Do you feel generally unwell or sick?","category":"General"},
-    {"id":"chills","question":"Do you have chills or shivering?","category":"General"},
-    {"id":"sweating","question":"Do you have sweating episodes?","category":"General"},
-    {"id":"headache","question":"Do you have headaches?","category":"General"},
-    {"id":"muscle_pain","question":"Do you have muscle pain or body aches?","category":"General"},
-    {"id":"joint_pain","question":"Do you have joint pain?","category":"General"},
     {"id":"back_pain","question":"Do you have back pain?","category":"General"},
-    {"id":"cough","question":"Do you have a cough?","category":"Respiratory"},
-    {"id":"phlegm","question":"Are you coughing up phlegm or mucus?","category":"Respiratory"},
-    {"id":"rusty_sputum","question":"Are you coughing up rusty or brown-coloured sputum?","category":"Respiratory"},
+    {"id":"chills","question":"Do you have chills or shivering?","category":"General"},
+    {"id":"dehydration","question":"Do you feel severely dehydrated?","category":"General"},
+    {"id":"fatigue","question":"Do you feel unusually tired or weak?","category":"General"},
+    {"id":"headache","question":"Do you have headaches?","category":"General"},
+    {"id":"high_fever","question":"Do you have a high fever?","category":"General"},
+    {"id":"joint_pain","question":"Do you have joint pain?","category":"General"},
+    {"id":"lethargy","question":"Do you feel a lack of energy or sluggishness?","category":"General"},
+    {"id":"malaise","question":"Do you feel generally unwell or sick?","category":"General"},
+    {"id":"mild_fever","question":"Do you have a mild fever?","category":"General"},
+    {"id":"muscle_pain","question":"Do you have muscle pain or body aches?","category":"General"},
+    {"id":"shivering","question":"Are you shivering?","category":"General"},
+    {"id":"sweating","question":"Do you have episodes of sweating?","category":"General"},
     {"id":"blood_in_sputum","question":"Are you coughing up blood?","category":"Respiratory"},
     {"id":"breathlessness","question":"Do you have difficulty breathing or shortness of breath?","category":"Respiratory"},
     {"id":"chest_pain","question":"Do you have chest pain?","category":"Respiratory"},
-    {"id":"runny_nose","question":"Do you have a runny nose?","category":"Respiratory"},
+    {"id":"congestion","question":"Do you have nasal or chest congestion?","category":"Respiratory"},
     {"id":"continuous_sneezing","question":"Do you sneeze frequently?","category":"Respiratory"},
-    {"id":"throat_irritation","question":"Do you have a sore or irritated throat?","category":"Respiratory"},
-    {"id":"sinus_pressure","question":"Do you have sinus pressure or nasal congestion?","category":"Respiratory"},
-    {"id":"watering_from_eyes","question":"Do you have watery eyes?","category":"Respiratory"},
+    {"id":"cough","question":"Do you have a cough?","category":"Respiratory"},
     {"id":"loss_of_smell","question":"Have you lost your sense of smell?","category":"Respiratory"},
-    {"id":"nausea","question":"Do you have nausea?","category":"Digestive"},
-    {"id":"vomiting","question":"Do you have vomiting?","category":"Digestive"},
-    {"id":"diarrhoea","question":"Do you have diarrhoea?","category":"Digestive"},
-    {"id":"stomach_pain","question":"Do you have stomach pain?","category":"Digestive"},
+    {"id":"mucoid_sputum","question":"Are you coughing up thick, mucus-like sputum?","category":"Respiratory"},
+    {"id":"phlegm","question":"Are you coughing up phlegm or mucus?","category":"Respiratory"},
+    {"id":"runny_nose","question":"Do you have a runny nose?","category":"Respiratory"},
+    {"id":"rusty_sputum","question":"Are you coughing up rusty or brown-coloured sputum?","category":"Respiratory"},
+    {"id":"sinus_pressure","question":"Do you have sinus pressure or nasal congestion?","category":"Respiratory"},
+    {"id":"throat_irritation","question":"Do you have a sore or irritated throat?","category":"Respiratory"},
+    {"id":"watering_from_eyes","question":"Do you have watery eyes?","category":"Respiratory"},
     {"id":"abdominal_pain","question":"Do you have abdominal or belly pain?","category":"Digestive"},
-    {"id":"indigestion","question":"Do you have indigestion or acidity?","category":"Digestive"},
-    {"id":"distension_of_abdomen","question":"Do you feel bloated or have a distended abdomen?","category":"Digestive"},
+    {"id":"acidity","question":"Do you have acidity or a burning sensation in your stomach?","category":"Digestive"},
+    {"id":"belly_pain","question":"Do you have persistent belly pain?","category":"Digestive"},
+    {"id":"bloody_stool","question":"Do you notice blood in your stool?","category":"Digestive"},
     {"id":"constipation","question":"Do you have constipation?","category":"Digestive"},
-    {"id":"passage_of_gases","question":"Do you have excessive gas or passage of gas?","category":"Digestive"},
-    {"id":"bloody_stool","question":"Do you have blood in your stool?","category":"Digestive"},
-    {"id":"loss_of_appetite","question":"Do you have a loss of appetite?","category":"Digestive"},
+    {"id":"diarrhoea","question":"Do you have diarrhoea?","category":"Digestive"},
+    {"id":"distention_of_abdomen","question":"Do you feel bloated or have a distended abdomen?","category":"Digestive"},
+    {"id":"heartburn","question":"Do you have heartburn?","category":"Digestive"},
+    {"id":"indigestion","question":"Do you have indigestion?","category":"Digestive"},
+    {"id":"loss_of_appetite","question":"Have you lost your appetite?","category":"Digestive"},
+    {"id":"nausea","question":"Do you feel nauseous?","category":"Digestive"},
+    {"id":"passage_of_gases","question":"Do you have excessive gas?","category":"Digestive"},
     {"id":"stomach_bleeding","question":"Do you have stomach bleeding?","category":"Digestive"},
-    {"id":"yellowish_skin","question":"Is your skin yellowish or pale?","category":"Liver"},
-    {"id":"yellowing_of_eyes","question":"Are your eyes yellow?","category":"Liver"},
-    {"id":"dark_urine","question":"Is your urine dark or tea-coloured?","category":"Liver"},
-    {"id":"yellow_urine","question":"Is your urine yellow-coloured?","category":"Liver"},
-    {"id":"internal_itching","question":"Do you have internal itching?","category":"Liver"},
+    {"id":"stomach_pain","question":"Do you have stomach pain?","category":"Digestive"},
+    {"id":"sunken_eyes","question":"Do your eyes look sunken?","category":"Digestive"},
+    {"id":"swelling_of_stomach","question":"Is your stomach area swollen?","category":"Digestive"},
+    {"id":"ulcers_on_tongue","question":"Do you have ulcers on your tongue?","category":"Digestive"},
+    {"id":"vomiting","question":"Have you been vomiting?","category":"Digestive"},
     {"id":"acute_liver_failure","question":"Do you have signs of acute liver failure?","category":"Liver"},
-    {"id":"fluid_overload","question":"Do you have fluid overload or swelling in the body?","category":"Liver"},
-    {"id":"itching","question":"Do you have itching on your skin?","category":"Skin"},
-    {"id":"skin_rash","question":"Do you have a skin rash?","category":"Skin"},
-    {"id":"red_spots_over_body","question":"Do you have red spots on your body?","category":"Skin"},
-    {"id":"nodal_skin_eruptions","question":"Do you have nodules or skin eruptions?","category":"Skin"},
+    {"id":"dark_urine","question":"Is your urine dark or tea-coloured?","category":"Liver"},
+    {"id":"fluid_overload","question":"Do you have abnormal body swelling or fluid retention?","category":"Liver"},
+    {"id":"internal_itching","question":"Do you experience internal itching?","category":"Liver"},
+    {"id":"yellow_urine","question":"Is your urine unusually yellow?","category":"Liver"},
+    {"id":"yellowing_of_eyes","question":"Are the whites of your eyes turning yellow?","category":"Liver"},
+    {"id":"yellowish_skin","question":"Is your skin yellowish or jaundiced?","category":"Liver"},
+    {"id":"blackheads","question":"Do you have blackheads?","category":"Skin"},
+    {"id":"blister","question":"Do you have fluid-filled blisters?","category":"Skin"},
+    {"id":"bruising","question":"Do you bruise easily?","category":"Skin"},
     {"id":"dischromic_patches","question":"Do you have discoloured patches on your skin?","category":"Skin"},
-    {"id":"redness_of_eyes","question":"Do you have redness in your eyes?","category":"Eyes"},
-    {"id":"blurred_vision","question":"Do you have blurred or distorted vision?","category":"Eyes"},
-    {"id":"pain_behind_eyes","question":"Do you have pain behind your eyes?","category":"Eyes"},
+    {"id":"itching","question":"Do you have itchy skin?","category":"Skin"},
+    {"id":"nodal_skin_eruptions","question":"Do you have nodules or skin eruptions?","category":"Skin"},
+    {"id":"pus_filled_pimples","question":"Do you have pus-filled pimples?","category":"Skin"},
+    {"id":"red_sore_around_nose","question":"Do you have red sores around your nose or mouth?","category":"Skin"},
+    {"id":"red_spots_over_body","question":"Do you have red spots on your body?","category":"Skin"},
+    {"id":"scurring","question":"Do you have scarring on your skin?","category":"Skin"},
+    {"id":"silver_like_dusting","question":"Do you have silvery, scale-like patches on your skin?","category":"Skin"},
+    {"id":"skin_peeling","question":"Is your skin peeling?","category":"Skin"},
+    {"id":"skin_rash","question":"Do you have a skin rash?","category":"Skin"},
+    {"id":"yellow_crust_ooze","question":"Do your skin sores ooze a yellow crust?","category":"Skin"},
+    {"id":"blurred_and_distorted_vision","question":"Do you have blurred or distorted vision?","category":"Eyes"},
+    {"id":"pain_behind_the_eyes","question":"Do you have pain behind your eyes?","category":"Eyes"},
+    {"id":"puffy_face_and_eyes","question":"Do you have puffiness around your face or eyes?","category":"Eyes"},
+    {"id":"redness_of_eyes","question":"Do you have red or irritated eyes?","category":"Eyes"},
+    {"id":"visual_disturbances","question":"Do you have visual disturbances, such as flashing lights or blind spots?","category":"Eyes"},
+    {"id":"abnormal_menstruation","question":"Have you noticed abnormal or irregular menstrual periods?","category":"Urinary"},
+    {"id":"bladder_discomfort","question":"Do you have bladder discomfort?","category":"Urinary"},
     {"id":"burning_micturition","question":"Do you feel a burning sensation when urinating?","category":"Urinary"},
-    {"id":"urinating_frequently","question":"Do you urinate very frequently?","category":"Urinary"},
-    {"id":"continuous_feel_of_urine","question":"Do you have a continuous urge to urinate?","category":"Urinary"},
-    {"id":"bladder_discomfort","question":"Do you have discomfort in your bladder?","category":"Urinary"},
-    {"id":"foul_smell_of_urine","question":"Does your urine have a foul smell?","category":"Urinary"},
-    {"id":"spotting_urination","question":"Do you have spotting during urination?","category":"Urinary"},
-    {"id":"pain_anal_region","question":"Do you have pain in your anal region?","category":"Rectal"},
-    {"id":"pain_bowel_movements","question":"Do you have pain during bowel movements?","category":"Rectal"},
-    {"id":"irritation_anus","question":"Do you have irritation around the anus?","category":"Rectal"},
+    {"id":"continuous_feel_of_urine","question":"Do you have a persistent urge to urinate?","category":"Urinary"},
+    {"id":"foul_smell_of_urine","question":"Does your urine have an unusual smell?","category":"Urinary"},
+    {"id":"polyuria","question":"Do you urinate in unusually large amounts?","category":"Urinary"},
+    {"id":"spotting_urination","question":"Do you notice spotting during urination?","category":"Urinary"},
+    {"id":"urinating_a_lot","question":"Do you urinate much more than usual?","category":"Urinary"},
+    {"id":"irritation_in_anus","question":"Do you have irritation around the anus?","category":"Rectal"},
+    {"id":"pain_during_bowel_movements","question":"Do you have pain during bowel movements?","category":"Rectal"},
+    {"id":"pain_in_anal_region","question":"Do you have pain in your anal region?","category":"Rectal"},
+    {"id":"altered_sensorium","question":"Do you feel confused or disoriented?","category":"Neurological"},
+    {"id":"anxiety","question":"Have you been feeling anxious?","category":"Neurological"},
+    {"id":"coma","question":"Have you experienced any loss of consciousness?","category":"Neurological"},
+    {"id":"depression","question":"Have you been feeling persistently low or depressed?","category":"Neurological"},
+    {"id":"dizziness","question":"Do you feel dizzy?","category":"Neurological"},
+    {"id":"irritability","question":"Have you been feeling unusually irritable?","category":"Neurological"},
+    {"id":"lack_of_concentration","question":"Do you have trouble concentrating?","category":"Neurological"},
+    {"id":"loss_of_balance","question":"Do you have trouble keeping your balance?","category":"Neurological"},
+    {"id":"mood_swings","question":"Have you been experiencing mood swings?","category":"Neurological"},
+    {"id":"muscle_weakness","question":"Do you have general muscle weakness?","category":"Neurological"},
     {"id":"restlessness","question":"Do you feel restless or agitated?","category":"Neurological"},
-    {"id":"mood_swings","question":"Do you have mood swings?","category":"Neurological"},
-    {"id":"confusion","question":"Do you feel confused or disoriented?","category":"Neurological"},
-    {"id":"coma","question":"Have you lost consciousness or fallen into a coma?","category":"Neurological"},
+    {"id":"slurred_speech","question":"Have you had episodes of slurred speech?","category":"Neurological"},
+    {"id":"spinning_movements","question":"Do you feel a spinning sensation (vertigo)?","category":"Neurological"},
+    {"id":"toxic_look_typhos","question":"Do you look or feel severely, acutely ill?","category":"Neurological"},
+    {"id":"unsteadiness","question":"Do you feel unsteady on your feet?","category":"Neurological"},
+    {"id":"weakness_in_limbs","question":"Do you have weakness in your arms or legs?","category":"Neurological"},
+    {"id":"weakness_of_one_body_side","question":"Do you have sudden weakness on one side of your body?","category":"Neurological"},
+    {"id":"brittle_nails","question":"Do you have brittle nails?","category":"Metabolic"},
+    {"id":"cold_hands_and_feets","question":"Do your hands and feet often feel unusually cold?","category":"Metabolic"},
+    {"id":"drying_and_tingling_lips","question":"Do you have dry or tingling lips?","category":"Metabolic"},
+    {"id":"enlarged_thyroid","question":"Have you noticed swelling in the front of your neck (thyroid area)?","category":"Metabolic"},
     {"id":"excessive_hunger","question":"Are you excessively hungry?","category":"Metabolic"},
     {"id":"increased_appetite","question":"Has your appetite increased significantly?","category":"Metabolic"},
     {"id":"irregular_sugar_level","question":"Do you have an irregular blood sugar level?","category":"Metabolic"},
-    {"id":"polyuria","question":"Do you urinate in very large amounts?","category":"Metabolic"},
-    {"id":"dehydration","question":"Do you feel severely dehydrated?","category":"Metabolic"},
-    {"id":"weight_loss","question":"Do you have unexplained weight loss?","category":"Metabolic"},
-    {"id":"obesity","question":"Are you obese or significantly overweight?","category":"Metabolic"},
+    {"id":"obesity","question":"Are you significantly overweight?","category":"Metabolic"},
+    {"id":"palpitations","question":"Do you have a racing or pounding heartbeat?","category":"Metabolic"},
+    {"id":"swollen_extremeties","question":"Do you have swelling in your arms or legs?","category":"Metabolic"},
+    {"id":"weight_gain","question":"Have you experienced unexplained weight gain?","category":"Metabolic"},
+    {"id":"weight_loss","question":"Have you experienced unexplained weight loss?","category":"Metabolic"},
+    {"id":"cramps","question":"Do you get muscle cramps?","category":"Cardiovascular"},
+    {"id":"fast_heart_rate","question":"Do you have a fast or irregular heartbeat?","category":"Cardiovascular"},
+    {"id":"prominent_veins_on_calf","question":"Do you have prominent, visible veins on your calves?","category":"Cardiovascular"},
+    {"id":"swollen_blood_vessels","question":"Do you have visibly swollen or bulging blood vessels?","category":"Cardiovascular"},
+    {"id":"swollen_legs","question":"Do you have swollen legs?","category":"Cardiovascular"},
+    {"id":"hip_joint_pain","question":"Do you have hip joint pain?","category":"Musculoskeletal"},
+    {"id":"inflammatory_nails","question":"Are your nails inflamed or discoloured?","category":"Musculoskeletal"},
+    {"id":"knee_pain","question":"Do you have knee pain?","category":"Musculoskeletal"},
+    {"id":"movement_stiffness","question":"Do you feel stiffness when moving?","category":"Musculoskeletal"},
+    {"id":"neck_pain","question":"Do you have neck pain?","category":"Musculoskeletal"},
+    {"id":"painful_walking","question":"Is walking painful for you?","category":"Musculoskeletal"},
+    {"id":"small_dents_in_nails","question":"Do you have small dents or pits in your nails?","category":"Musculoskeletal"},
+    {"id":"stiff_neck","question":"Do you have a stiff neck?","category":"Musculoskeletal"},
+    {"id":"swelling_joints","question":"Do you have swelling in your joints?","category":"Musculoskeletal"},
     {"id":"swelled_lymph_nodes","question":"Do you have swollen lymph nodes?","category":"Infection"},
-    {"id":"swelling_stomach","question":"Do you have swelling of your stomach area?","category":"Infection"},
-    {"id":"fast_heart_rate","question":"Do you have a fast or irregular heart rate?","category":"Infection"},
-    {"id":"toxic_look","question":"Do you look severely ill or toxic-looking?","category":"Infection"},
-    {"id":"swollen_lymph_neck","question":"Do you have swollen lymph nodes in the neck or armpit?","category":"Infection"},
-    {"id":"loss_of_appetite_fever","question":"Do you have a loss of appetite alongside fever?","category":"Infection"},
     {"id":"family_history","question":"Do you have a family history of this condition?","category":"History"},
-    {"id":"blood_transfusion","question":"Have you recently received a blood transfusion?","category":"History"},
-    {"id":"unsterile_injections","question":"Have you received injections with unsterile equipment?","category":"History"},
-    {"id":"alcohol_history","question":"Do you have a history of heavy alcohol consumption?","category":"History"},
+    {"id":"history_of_alcohol_consumption","question":"Do you have a history of heavy alcohol use?","category":"History"},
+    {"id":"receiving_blood_transfusion","question":"Have you received a blood transfusion recently?","category":"History"},
+    {"id":"receiving_unsterile_injections","question":"Have you been injected with unsterile equipment?","category":"History"},
 ]
 
 Q_INDEX: Dict[str, Dict] = {q["id"]: q for q in ALL_QUESTIONS}
 
 DEFAULT_RECS: Dict[str, Dict[str, str]] = {
-    "Malaria":                {"home_care":"Rest and drink plenty of fluids","test":"Malaria RDT or blood smear","doctor":"Go to clinic immediately for antimalarial treatment","safety":"Do not delay - malaria can become severe quickly"},
-    "Typhoid":                {"home_care":"Rest, eat soft foods, drink clean water only","test":"Widal test or blood culture","doctor":"See a doctor for antibiotic prescription","safety":"Avoid spreading infection - wash hands frequently"},
-    "Dengue":                 {"home_care":"Rest and drink fluids - avoid aspirin or ibuprofen","test":"Dengue NS1 antigen test","doctor":"Seek care immediately if you notice bleeding or severe pain","safety":"Aspirin can worsen bleeding in dengue"},
-    "Tuberculosis":           {"home_care":"Rest, isolate yourself, keep room well-ventilated","test":"Chest X-ray and sputum test","doctor":"Visit a TB clinic immediately","safety":"TB is contagious - wear a mask and avoid crowded places"},
-    "Hepatitis B":            {"home_care":"Rest and avoid alcohol completely","test":"Hepatitis B surface antigen (HBsAg) test","doctor":"See a doctor for antiviral medication evaluation","safety":"Hepatitis B is contagious - avoid sharing needles or razors"},
-    "Hepatitis C":            {"home_care":"Rest and avoid alcohol","test":"Hepatitis C antibody test","doctor":"See a specialist for antiviral treatment","safety":"Avoid sharing sharp objects with others"},
-    "Hepatitis D":            {"home_care":"Rest and stop alcohol completely","test":"Hepatitis D antibody and liver function tests","doctor":"Seek specialist care urgently","safety":"Hepatitis D only occurs with hepatitis B - urgent care needed"},
-    "Pneumonia":              {"home_care":"Rest, keep warm, drink warm fluids","test":"Chest X-ray","doctor":"Visit clinic immediately for antibiotic treatment","safety":"Pneumonia can worsen quickly - do not wait"},
-    "Hepatitis A":            {"home_care":"Rest and drink clean water - eat lightly","test":"Hepatitis A IgM antibody test","doctor":"See a doctor if symptoms worsen","safety":"Avoid sharing food or drinks with others"},
-    "Hepatitis E":            {"home_care":"Rest and drink clean water only","test":"Hepatitis E IgM antibody test","doctor":"See a doctor - especially important if pregnant","safety":"Very dangerous during pregnancy - seek care urgently if pregnant"},
-    "Alcoholic Hepatitis":    {"home_care":"Stop alcohol completely and eat well","test":"Liver function tests (LFTs)","doctor":"Seek medical care urgently","safety":"Continued alcohol use can be fatal with this condition"},
-    "Jaundice":               {"home_care":"Rest and drink clean water","test":"Liver function tests and bilirubin level","doctor":"See a doctor to find the underlying cause","safety":"Jaundice is a sign of another condition - do not ignore it"},
-    "Chicken Pox":            {"home_care":"Rest, avoid scratching, apply calamine lotion","test":"No test usually needed","doctor":"See a doctor if blisters become infected or fever is very high","safety":"Highly contagious - stay home and avoid contact with others"},
-    "Bronchial Asthma":       {"home_care":"Avoid triggers and use your prescribed inhaler","test":"Peak flow measurement or spirometry","doctor":"See a doctor for long-term management plan","safety":"Carry your inhaler at all times"},
-    "Urinary Tract Infection":{"home_care":"Drink plenty of water and avoid spicy food","test":"Urine culture and sensitivity test","doctor":"See a doctor for antibiotic prescription","safety":"Do not hold urine - empty your bladder regularly"},
+    "Malaria": {"home_care":"Rest and drink plenty of fluids","test":"Malaria RDT or blood smear","doctor":"Go to clinic immediately for antimalarial treatment","safety":"Do not delay - malaria can become severe quickly"},
+    "Typhoid": {"home_care":"Rest, eat soft foods, drink clean water only","test":"Widal test or blood culture","doctor":"See a doctor for antibiotic prescription","safety":"Avoid spreading infection - wash hands frequently"},
+    "Dengue": {"home_care":"Rest and drink fluids - avoid aspirin or ibuprofen","test":"Dengue NS1 antigen test","doctor":"Seek care immediately if you notice bleeding or severe pain","safety":"Aspirin can worsen bleeding in dengue"},
+    "Chikungunya": {"home_care":"Rest, drink fluids, and elevate painful joints","test":"Chikungunya IgM antibody test","doctor":"See a doctor if joint pain is severe or persists beyond a week","safety":"Avoid mosquito bites during illness to prevent further spread"},
+    "Tuberculosis": {"home_care":"Rest, isolate yourself, keep room well-ventilated","test":"Chest X-ray and sputum test","doctor":"Visit a TB clinic immediately","safety":"TB is contagious - wear a mask and avoid crowded places"},
+    "Hepatitis B": {"home_care":"Rest and avoid alcohol completely","test":"Hepatitis B surface antigen (HBsAg) test","doctor":"See a doctor for antiviral medication evaluation","safety":"Hepatitis B is contagious - avoid sharing needles or razors"},
+    "Hepatitis C": {"home_care":"Rest and avoid alcohol","test":"Hepatitis C antibody test","doctor":"See a specialist for antiviral treatment","safety":"Avoid sharing sharp objects with others"},
+    "Hepatitis D": {"home_care":"Rest and stop alcohol completely","test":"Hepatitis D antibody and liver function tests","doctor":"Seek specialist care urgently","safety":"Hepatitis D only occurs with hepatitis B - urgent care needed"},
+    "Pneumonia": {"home_care":"Rest, keep warm, drink warm fluids","test":"Chest X-ray","doctor":"Visit clinic immediately for antibiotic treatment","safety":"Pneumonia can worsen quickly - do not wait"},
+    "Heart attack": {"home_care":"Stop all activity and stay calm while awaiting help","test":"ECG and cardiac enzyme (troponin) tests","doctor":"Call emergency services or go to the nearest hospital immediately","safety":"This is a medical emergency - do not attempt to drive yourself"},
+    "Paralysis (Brain Hemorrhage)": {"home_care":"Keep the person still and lying on their side if unconscious","test":"CT scan or MRI of the brain","doctor":"Call emergency services immediately","safety":"This is a medical emergency - every minute of delay matters"},
+    "Hypoglycemia": {"home_care":"Consume a fast-acting sugar source immediately (juice, sugar, glucose tablets)","test":"Blood glucose measurement","doctor":"See a doctor if episodes recur or you have diabetes medication","safety":"Severe or prolonged low blood sugar can cause loss of consciousness - seek emergency care if symptoms don't improve within 15 minutes"},
+    "Hepatitis A": {"home_care":"Rest and drink clean water - eat lightly","test":"Hepatitis A IgM antibody test","doctor":"See a doctor if symptoms worsen","safety":"Avoid sharing food or drinks with others"},
+    "Hepatitis E": {"home_care":"Rest and drink clean water only","test":"Hepatitis E IgM antibody test","doctor":"See a doctor - especially important if pregnant","safety":"Very dangerous during pregnancy - seek care urgently if pregnant"},
+    "Alcoholic Hepatitis": {"home_care":"Stop alcohol completely and eat well","test":"Liver function tests (LFTs)","doctor":"Seek medical care urgently","safety":"Continued alcohol use can be fatal with this condition"},
+    "Chronic cholestasis": {"home_care":"Avoid alcohol and fatty foods, stay hydrated","test":"Liver function tests and abdominal ultrasound","doctor":"See a doctor to identify and treat the underlying cause","safety":"Persistent itching and jaundice should not be ignored"},
+    "Jaundice": {"home_care":"Rest and drink clean water","test":"Liver function tests and bilirubin level","doctor":"See a doctor to find the underlying cause","safety":"Jaundice is a sign of another condition - do not ignore it"},
+    "Chicken Pox": {"home_care":"Rest, avoid scratching, apply calamine lotion","test":"No test usually needed","doctor":"See a doctor if blisters become infected or fever is very high","safety":"Highly contagious - stay home and avoid contact with others"},
+    "Bronchial Asthma": {"home_care":"Avoid triggers and use your prescribed inhaler","test":"Peak flow measurement or spirometry","doctor":"See a doctor for long-term management plan","safety":"Carry your inhaler at all times"},
+    "Urinary Tract Infection": {"home_care":"Drink plenty of water and avoid spicy food","test":"Urine culture and sensitivity test","doctor":"See a doctor for antibiotic prescription","safety":"Do not hold urine - empty your bladder regularly"},
     "Dimorphic Haemorrhoids": {"home_care":"Eat high-fibre foods and avoid straining on the toilet","test":"No test usually needed","doctor":"See a doctor if bleeding continues or worsens","safety":"Avoid sitting for long periods"},
-    "Peptic Ulcer Disease":   {"home_care":"Avoid spicy food, alcohol and pain tablets like aspirin","test":"H. pylori breath test or endoscopy if needed","doctor":"See a doctor for antacid or antibiotic treatment","safety":"Avoid aspirin and ibuprofen - they worsen ulcers"},
-    "Diabetes":               {"home_care":"Reduce sugar and refined carbohydrates in your diet","test":"Fasting blood glucose and HbA1c test","doctor":"See a doctor for a diabetes management plan","safety":"Monitor your blood sugar regularly if you have a glucometer"},
-    "Fungal Infection":       {"home_care":"Keep the affected area dry and clean","test":"No test usually needed","doctor":"Visit a pharmacy for antifungal cream","safety":"Avoid sharing personal items like socks or towels"},
-    "Allergy":                {"home_care":"Avoid known triggers and stay indoors during high pollen periods","test":"Allergy skin prick test if symptoms are recurrent","doctor":"See a doctor for antihistamine prescription","safety":"If you have throat swelling or difficulty breathing - go to emergency immediately"},
-    "Common Cold":            {"home_care":"Rest and drink warm fluids","test":"No test needed","doctor":"Visit clinic if symptoms persist beyond 7 days","safety":"Wash hands frequently to avoid spreading"},
-    "Drug Reaction":          {"home_care":"Stop the suspected medication immediately","test":"No test usually needed","doctor":"See a doctor immediately if rash spreads or breathing is affected","safety":"Seek emergency care if you have throat swelling or difficulty breathing"},
+    "Peptic Ulcer Disease": {"home_care":"Avoid spicy food, alcohol and pain tablets like aspirin","test":"H. pylori breath test or endoscopy if needed","doctor":"See a doctor for antacid or antibiotic treatment","safety":"Avoid aspirin and ibuprofen - they worsen ulcers"},
+    "Diabetes": {"home_care":"Reduce sugar and refined carbohydrates in your diet","test":"Fasting blood glucose and HbA1c test","doctor":"See a doctor for a diabetes management plan","safety":"Monitor your blood sugar regularly if you have a glucometer"},
+    "Hypertension": {"home_care":"Reduce salt intake and manage stress","test":"Blood pressure measurement over multiple readings","doctor":"See a doctor for a blood pressure management plan","safety":"Seek emergency care for severe headache, chest pain, or vision changes"},
+    "Gastroenteritis": {"home_care":"Drink oral rehydration solution and eat bland foods","test":"Stool test if symptoms persist beyond a few days","doctor":"See a doctor if you cannot keep fluids down or symptoms worsen","safety":"Dehydration can become serious quickly in young children and the elderly"},
+    "Hypothyroidism": {"home_care":"Maintain a balanced diet and regular sleep schedule","test":"Thyroid function test (TSH, T3, T4)","doctor":"See a doctor for thyroid hormone replacement evaluation","safety":"Untreated hypothyroidism can affect heart and metabolic health long-term"},
+    "Hyperthyroidism": {"home_care":"Avoid caffeine and get adequate rest","test":"Thyroid function test (TSH, T3, T4)","doctor":"See a doctor or endocrinologist for management options","safety":"Seek prompt care for a rapid heartbeat or significant weight loss"},
+    "Fungal Infection": {"home_care":"Keep the affected area dry and clean","test":"No test usually needed","doctor":"Visit a pharmacy for antifungal cream","safety":"Avoid sharing personal items like socks or towels"},
+    "Allergy": {"home_care":"Avoid known triggers and stay indoors during high pollen periods","test":"Allergy skin prick test if symptoms are recurrent","doctor":"See a doctor for antihistamine prescription","safety":"If you have throat swelling or difficulty breathing - go to emergency immediately"},
+    "Common Cold": {"home_care":"Rest and drink warm fluids","test":"No test needed","doctor":"Visit clinic if symptoms persist beyond 7 days","safety":"Wash hands frequently to avoid spreading"},
+    "Drug Reaction": {"home_care":"Stop the suspected medication immediately","test":"No test usually needed","doctor":"See a doctor immediately if rash spreads or breathing is affected","safety":"Seek emergency care if you have throat swelling or difficulty breathing"},
+    "GERD": {"home_care":"Avoid large meals, spicy food, and lying down right after eating","test":"No test usually needed for mild cases; endoscopy if severe or persistent","doctor":"See a doctor if symptoms occur more than twice a week","safety":"Persistent heartburn with weight loss or difficulty swallowing needs prompt evaluation"},
+    "Migraine": {"home_care":"Rest in a quiet, dark room and stay hydrated","test":"No test usually needed unless symptoms are atypical","doctor":"See a doctor if migraines are frequent or severe","safety":"Seek urgent care for the worst headache of your life or headache with fever and stiff neck"},
+    "Cervical spondylosis": {"home_care":"Maintain good posture and do gentle neck stretches","test":"Neck X-ray or MRI if symptoms are severe","doctor":"See a doctor or physiotherapist for a management plan","safety":"Seek care promptly if you develop arm weakness or numbness"},
+    "Varicose veins": {"home_care":"Elevate your legs and avoid standing for long periods","test":"Doppler ultrasound of the legs","doctor":"See a doctor if veins become painful or skin changes occur","safety":"Watch for signs of a blood clot such as sudden leg swelling or pain"},
+    "Osteoarthritis": {"home_care":"Maintain a healthy weight and stay gently active","test":"Joint X-ray if needed","doctor":"See a doctor for a pain management plan","safety":"Avoid high-impact activities that worsen joint pain"},
+    "Arthritis": {"home_care":"Apply warm or cold compresses and stay gently active","test":"Blood tests and joint imaging if needed","doctor":"See a doctor or rheumatologist for evaluation","safety":"Persistent joint swelling with fever should be evaluated promptly"},
+    "Paroxysmal Positional Vertigo": {"home_care":"Move slowly when changing position and avoid sudden head movements","test":"No test usually needed; a positional test may be done by a doctor","doctor":"See a doctor if episodes are frequent or affect daily activities","safety":"Avoid driving or climbing during an active episode of vertigo"},
+    "Acne": {"home_care":"Keep skin clean and avoid picking at pimples","test":"No test usually needed","doctor":"See a dermatologist if over-the-counter treatment doesn't help","safety":"Avoid harsh scrubbing, which can worsen inflammation"},
+    "Psoriasis": {"home_care":"Moisturise regularly and avoid known triggers such as stress","test":"Usually diagnosed by physical examination; skin biopsy if unclear","doctor":"See a dermatologist for a treatment plan","safety":"Avoid scratching affected areas to prevent infection"},
+    "Impetigo": {"home_care":"Keep the affected area clean and covered","test":"No test usually needed","doctor":"See a doctor for antibiotic treatment","safety":"Highly contagious - avoid close contact and sharing towels until treated"},
 }
 
 # -----------------------------------------------------------------
@@ -776,20 +860,19 @@ def score_disease(disease: str, answers: dict) -> float:
 
 def get_next_question(answers: dict, asked: list) -> Optional[dict]:
     """
-    Root cause of "everything except Malaria gets low confidence":
-    this previously drained the #1-ranked disease's ENTIRE unasked symptom
-    list before ever asking about the #2 candidate. Malaria's symptom list
-    is the largest (14) and overlaps heavily with nearly every other
-    febrile illness (fever, headache, fatigue, malaise, vomiting...), so
-    almost any early "yes" answer -- regardless of the person's actual
-    condition -- put Malaria in the #1 slot. It then absorbed most or all
-    of the fixed 15-question budget for itself, leaving every other
-    candidate (Typhoid, Dengue, TB, the Hepatitis variants, Pneumonia,
-    Jaundice, Diabetes...) with only 1-4 of their own symptoms ever asked.
-    A disease that is 90%+ unasked looks like "no evidence" to both the
-    scoring fallback and the trained ML model, so those diseases were
+    Root cause of the original bug ("one disease dominates, everything
+    else gets low confidence"): this previously drained the #1-ranked
+    disease's ENTIRE unasked symptom list before ever asking about the #2
+    candidate. Whichever disease has the longest symptom list and overlaps
+    heavily with nearby febrile illnesses (fever, headache, fatigue,
+    malaise, vomiting...) tends to reach the #1 slot from almost any early
+    "yes" answer, regardless of the person's actual condition. It then
+    absorbed most or all of the fixed 15-question budget for itself,
+    leaving every other candidate with only 1-4 of their own symptoms ever
+    asked. A disease that is 90%+ unasked looks like "no evidence" to both
+    the scoring fallback and the trained ML model, so those diseases were
     structurally locked into low confidence almost regardless of the
-    person's real answers -- while Malaria, riding on shared symptoms,
+    person's real answers -- while the disease riding on shared symptoms
     consistently ended up with a near-complete feature profile and a
     comparatively strong score even when it wasn't the actual condition.
 
@@ -797,49 +880,82 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
     session was tried and rejected: it spread the 15-question budget so
     thin across shifting candidates that even the TRUE underlying disease
     could only ever get 2-4 of its own symptoms confirmed, capping
-    everyone's confidence low instead of just Malaria's rivals.
+    everyone's confidence low instead of just the dominant candidate's
+    rivals.
 
     That round-robin fix (sorting the pool by asked_count ascending, i.e.
     "whichever candidate has been touched least goes next") swung the bug
     the other way: the INSTANT a leading candidate had even one question
     asked, it was no longer the least-touched member of the pool, so the
     engine abandoned it for a completely fresh, untouched disease -- even
-    when the leader's score was clearly highest. For diseases with longer
-    symptom lists (Malaria again, at 14) this was especially damaging: they
-    need MORE of their own follow-up questions than a shorter-list disease
-    like Typhoid (13) to reach comparable coverage, but the tie-break
+    when the leader's score was clearly highest. Diseases with longer
+    symptom lists need MORE of their own follow-up questions than a
+    shorter-list disease to reach comparable coverage, but the tie-break
     rule handed them FEWER, since they got deprioritized after their very
-    first question. On a genuinely ambiguous early fever presentation
-    (fever, headache, fatigue, vomiting -- shared by both Malaria and
-    Typhoid) this reliably let Typhoid overtake Malaria in the final
-    confidence ranking even when the underlying evidence favoured Malaria
-    equally or more, simply because Typhoid's shorter list reached a
-    usable coverage ratio faster within the same 15-question budget.
+    first question. On a genuinely ambiguous early presentation shared by
+    two overlapping diseases, this reliably let the shorter-list disease
+    overtake the true leader in the final confidence ranking even when the
+    underlying evidence favoured the leader equally or more, simply
+    because the shorter list reached a usable coverage ratio faster within
+    the same 15-question budget.
 
     Fix: keep the taper (broad pool early, narrowing later) but make
     CURRENT SCORE the primary sort key within the active pool, so a
     genuine leader keeps getting its own follow-up questions instead of
-    being dropped the moment it's touched once. asked_count is now only a
-    tie-breaker for candidates that are still exactly tied on score,
-    which preserves the original broad-screening behaviour for the early
-    "everyone's at zero" phase. QUESTION_MONOPOLY_CAP puts a ceiling back
-    under this -- once a disease has consumed its share of the budget, it
-    steps aside for the next-best candidate even if it's still scoring
-    highest, so no single disease (long symptom list or not) can crowd
-    out the differential entirely the way the pre-taper bug did.
-      - First 6 questions:  pool of 6 candidates (broad differential)
-      - Next 5 questions:   pool of 3 candidates (narrowing)
-      - Remaining questions: pool of 2 candidates (deep confirmation)
-    """
-    ranked = sorted(DISEASE_SYMPTOM_MAP.keys(), key=lambda d: score_disease(d, answers), reverse=True)
+    being dropped the moment it's touched once. asked_count is then a
+    tie-breaker for candidates still tied on score, which preserves the
+    original broad-screening behaviour for the early "everyone's at zero"
+    phase. QUESTION_MONOPOLY_CAP puts a ceiling back under this -- once a
+    disease has consumed its share of the budget, it steps aside for the
+    next-best candidate even if it's still scoring highest, so no single
+    disease (long symptom list or not) can crowd out the differential
+    entirely the way the pre-taper bug did.
 
+    Pool width is a FRACTION of the active disease list (the original
+    22-disease design's 6/22, 3/22, 2/22 ratios), not a fixed headcount,
+    so behaviour scales automatically if the disease list ever grows or
+    shrinks again instead of silently starving the tail the way a fixed
+    pool_size=6 did once this engine grew past 22 diseases.
+      - First 6 questions:  broad differential (~27% of diseases)
+      - Next 5 questions:   narrowing (~14% of diseases)
+      - Remaining questions: deep confirmation (~9% of diseases)
+
+    Remaining gap this closes: when several candidates are still fully
+    tied (identical score AND identical asked_count -- normally the
+    untouched, zero-scored bulk at the start of a session, or after a
+    batch of denials), the previous version broke the tie by picking
+    whichever candidate happened to sit first in DISEASE_SYMPTOM_MAP's
+    definition order and asking ITS next symptom. That's an arbitrary,
+    non-clinical tie-break: a disease's reachability within the fixed
+    question budget ended up depending on where it happened to be
+    inserted into a Python dict, not on how distinctive its symptoms are.
+    With a large disease list this could let a disease slip through an
+    entire session with zero questions ever probing it -- it might still
+    end up ranked #1 by elimination (nothing else outscored it), but with
+    0% confidence, since confidence is computed only from symptoms
+    actually asked.
+
+    This version breaks a genuine tie by asking about whichever unasked
+    symptom is shared by the MOST currently-tied candidates, instead of
+    the first tied candidate's own list. That single question then
+    confirms or eliminates the largest possible slice of the tied group
+    at once, so the tied group shrinks as fast as the data allows and
+    reachability for any one disease depends on how distinctive its
+    symptoms are, not on dictionary insertion order. When only one
+    candidate remains at the top (a genuine score leader), the original
+    behaviour is unchanged: its own next unasked symptom is asked directly.
+    """
+    scores = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
+    ranked = sorted(DISEASE_SYMPTOM_MAP.keys(), key=lambda d: scores[d], reverse=True)
+
+    n_diseases = len(DISEASE_SYMPTOM_MAP)
     n_asked = len(asked)
     if n_asked < 6:
-        pool_size = 6
+        pool_size = max(6, round(n_diseases * 6 / 22))
     elif n_asked < 11:
-        pool_size = 3
+        pool_size = max(3, round(n_diseases * 3 / 22))
     else:
-        pool_size = 2
+        pool_size = max(2, round(n_diseases * 2 / 22))
     top = ranked[:pool_size]
 
     def asked_count(d: str) -> int:
@@ -855,11 +971,31 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
     candidates = under_cap if under_cap else [d for d in top if has_unasked(d)]
 
     if candidates:
-        candidates.sort(key=lambda d: (-score_disease(d, answers), asked_count(d)))
-        chosen_disease = candidates[0]
-        for sym in DISEASE_SYMPTOM_MAP[chosen_disease]:
-            if sym not in asked:
-                q = Q_INDEX.get(sym)
+        candidates.sort(key=lambda d: (-scores[d], asked_count(d)))
+        best_score, best_asked = scores[candidates[0]], asked_count(candidates[0])
+        tied = [d for d in candidates if scores[d] == best_score and asked_count(d) == best_asked]
+
+        if len(tied) == 1:
+            chosen_disease = tied[0]
+            for sym in DISEASE_SYMPTOM_MAP[chosen_disease]:
+                if sym not in asked:
+                    q = Q_INDEX.get(sym)
+                    if q:
+                        return q
+        else:
+            # Genuine tie: ask about the unasked symptom shared by the
+            # most tied candidates (maximum information gain), breaking
+            # any further tie by earliest position in ALL_QUESTIONS for a
+            # deterministic, repeatable question order.
+            coverage: Dict[str, int] = {}
+            for d in tied:
+                for sym in DISEASE_SYMPTOM_MAP[d]:
+                    if sym not in asked:
+                        coverage[sym] = coverage.get(sym, 0) + 1
+            if coverage:
+                question_order = {q["id"]: i for i, q in enumerate(ALL_QUESTIONS)}
+                best_symptom = max(coverage, key=lambda s: (coverage[s], -question_order.get(s, 0)))
+                q = Q_INDEX.get(best_symptom)
                 if q:
                     return q
 
@@ -876,8 +1012,8 @@ def _disease_confidence(disease: str, answers: dict, asked: Optional[list] = Non
 
     Previously this divided confirmed symptoms by the FULL symptom list
     length for the disease (yes_count / len(symptoms)). That structurally
-    under-scored diseases with long symptom lists (e.g. Malaria has 14
-    tracked symptoms, so confirming 6 strong ones only scored 6/14 = 0.43)
+    under-scored diseases with long symptom lists (e.g. a disease with 16
+    tracked symptoms confirming 6 strong ones only scored 6/16 = 0.375)
     while ignoring which symptoms had actually been asked. This version
     normalises against symptoms that were actually asked (when supplied)
     and blends the positive-match ratio with a coverage term, so a strong
@@ -887,7 +1023,7 @@ def _disease_confidence(disease: str, answers: dict, asked: Optional[list] = Non
     The match ratio is further weighted by SYMPTOM_WEIGHT (see definition
     above). Without this, a disease built mostly from generic, widely
     shared symptoms (fatigue, headache, fever) scored identically to one
-    built from narrow, highly specific symptoms (polyuria, blurred_vision)
+    built from narrow, highly specific symptoms (polyuria, drying_and_tingling_lips)
     for the same yes/no split -- which is what let common-symptom diseases
     end up with an inflated confidence relative to narrower ones like
     Diabetes even when the actual evidence was weaker. Confirming a
