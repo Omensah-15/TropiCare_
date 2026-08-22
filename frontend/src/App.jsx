@@ -142,38 +142,53 @@ const RISK_BG    = { High: "#fdecec", Medium: "#fef3e0", Low: "#e9f9ee" };
 // DISEASE / SYMPTOM DATA
 // ─────────────────────────────────────────────
 const DISEASE_SYMPTOM_MAP = {
-  Malaria:                  ["high_fever","chills","sweating","headache","muscle_pain","vomiting","fatigue","joint_pain","nausea","malaise","loss_of_appetite","fast_heart_rate","confusion","coma"],
-  Typhoid:                  ["high_fever","headache","fatigue","loss_of_appetite","vomiting","constipation","toxic_look","abdominal_pain","diarrhoea","loss_of_appetite_fever","fast_heart_rate","red_spots_over_body","confusion"],
-  Dengue:                   ["high_fever","headache","pain_behind_eyes","muscle_pain","joint_pain","skin_rash","red_spots_over_body","vomiting","fatigue","malaise","fast_heart_rate","swelled_lymph_nodes"],
-  Tuberculosis:             ["cough","blood_in_sputum","weight_loss","fatigue","sweating","chest_pain","breathlessness","phlegm","loss_of_appetite","high_fever","swollen_lymph_neck","family_history"],
-  "Hepatitis B":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","blood_transfusion","unsterile_injections","abdominal_pain","nausea","loss_of_appetite","internal_itching","acute_liver_failure"],
-  "Hepatitis C":            ["yellowing_of_eyes","yellowish_skin","fatigue","nausea","loss_of_appetite","blood_transfusion","dark_urine","weight_loss","internal_itching","abdominal_pain"],
-  "Hepatitis D":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","acute_liver_failure","fluid_overload","blood_transfusion","unsterile_injections","swelling_stomach"],
-  Pneumonia:                ["cough","breathlessness","chest_pain","high_fever","rusty_sputum","chills","fatigue","phlegm","loss_of_appetite","malaise"],
-  "Hepatitis A":            ["yellowing_of_eyes","yellowish_skin","dark_urine","fatigue","loss_of_appetite","nausea","abdominal_pain","vomiting","mild_fever","malaise","distension_of_abdomen"],
-  "Hepatitis E":            ["yellowing_of_eyes","yellowish_skin","fatigue","loss_of_appetite","nausea","mild_fever","yellow_urine","abdominal_pain","malaise"],
-  "Alcoholic Hepatitis":    ["yellowing_of_eyes","vomiting","abdominal_pain","alcohol_history","swelling_stomach","fluid_overload","yellowish_skin","acute_liver_failure","distension_of_abdomen"],
-  Jaundice:                 ["yellowing_of_eyes","yellowish_skin","dark_urine","yellow_urine","itching","fatigue","abdominal_pain","internal_itching","fluid_overload","distension_of_abdomen"],
-  "Chicken Pox":            ["skin_rash","itching","red_spots_over_body","mild_fever","fatigue","headache","loss_of_appetite","nodal_skin_eruptions"],
-  "Bronchial Asthma":       ["breathlessness","cough","phlegm","chest_pain","fatigue"],
-  "Urinary Tract Infection":["burning_micturition","urinating_frequently","continuous_feel_of_urine","bladder_discomfort","foul_smell_of_urine","spotting_urination","back_pain"],
-  "Dimorphic Haemorrhoids": ["bloody_stool","pain_anal_region","pain_bowel_movements","constipation","passage_of_gases","irritation_anus"],
-  "Peptic Ulcer Disease":   ["stomach_pain","indigestion","vomiting","loss_of_appetite","nausea","stomach_bleeding","abdominal_pain","passage_of_gases"],
-  Diabetes:                 ["polyuria","excessive_hunger","irregular_sugar_level","weight_loss","fatigue","blurred_vision","urinating_frequently","increased_appetite","family_history","obesity"],
-  "Fungal Infection":       ["itching","skin_rash","dischromic_patches","nodal_skin_eruptions","irritation_anus"],
-  Allergy:                  ["continuous_sneezing","runny_nose","itching","watering_from_eyes","skin_rash","redness_of_eyes","throat_irritation","mild_fever","joint_pain"],
-  "Common Cold":            ["runny_nose","continuous_sneezing","throat_irritation","mild_fever","cough","headache","sinus_pressure","watering_from_eyes","loss_of_smell"],
-  "Drug Reaction":          ["itching","skin_rash","red_spots_over_body","fatigue","nausea","diarrhoea"],
+  Malaria: ["high_fever","chills","sweating","headache","muscle_pain","vomiting","nausea","diarrhoea"],
+  Typhoid: ["high_fever","chills","fatigue","vomiting","headache","nausea","constipation","abdominal_pain","diarrhoea","toxic_look_typhos","belly_pain"],
+  Dengue: ["high_fever","headache","pain_behind_the_eyes","loss_of_appetite","back_pain","skin_rash","vomiting","fatigue","chills","joint_pain","malaise","muscle_pain","red_spots_over_body"],
+  Chikungunya: ["skin_rash","joint_pain","fatigue","nausea","redness_of_eyes"],
+  Tuberculosis: ["blood_in_sputum","chest_pain","phlegm","malaise","swelled_lymph_nodes","yellowing_of_eyes","mild_fever","loss_of_appetite","sweating","breathlessness","high_fever","cough","weight_loss","fatigue","vomiting","chills"],
+  "Hepatitis B": ["yellowing_of_eyes","malaise","receiving_blood_transfusion","receiving_unsterile_injections","yellowish_skin","lethargy","fatigue","itching","yellow_urine","abdominal_pain","loss_of_appetite","dark_urine"],
+  "Hepatitis C": ["fatigue","yellowish_skin","nausea","loss_of_appetite","family_history","yellowing_of_eyes"],
+  "Hepatitis D": ["joint_pain","vomiting","fatigue","yellowish_skin","dark_urine","nausea","loss_of_appetite","abdominal_pain","yellowing_of_eyes"],
+  Pneumonia: ["chest_pain","rusty_sputum","fast_heart_rate","cough","fatigue","chills","high_fever","malaise","sweating","breathlessness","phlegm"],
+  "Heart attack": ["heartburn","chest_pain","vomiting","sweating","breathlessness"],
+  "Paralysis (Brain Hemorrhage)": ["altered_sensorium","vomiting","headache","weakness_of_one_body_side"],
+  Hypoglycemia: ["slurred_speech","irritability","palpitations","excessive_hunger","sweating","anxiety","fatigue","vomiting","blurred_and_distorted_vision","nausea","headache","drying_and_tingling_lips"],
+  "Hepatitis A": ["mild_fever","muscle_pain","yellowing_of_eyes","yellowish_skin","vomiting","joint_pain","dark_urine","abdominal_pain","loss_of_appetite","nausea","diarrhoea"],
+  "Hepatitis E": ["stomach_bleeding","yellowing_of_eyes","coma","loss_of_appetite","abdominal_pain","yellowish_skin","high_fever","fatigue","vomiting","joint_pain","nausea","dark_urine","acute_liver_failure"],
+  "Alcoholic Hepatitis": ["vomiting","yellowish_skin","abdominal_pain","fluid_overload","swelling_of_stomach","distention_of_abdomen","history_of_alcohol_consumption"],
+  "Chronic cholestasis": ["itching","vomiting","yellowish_skin","nausea","loss_of_appetite","abdominal_pain","yellowing_of_eyes"],
+  Jaundice: ["itching","vomiting","fatigue","weight_loss","high_fever","yellowish_skin","dark_urine","abdominal_pain"],
+  "Chicken Pox": ["malaise","red_spots_over_body","itching","fatigue","skin_rash","lethargy","high_fever","loss_of_appetite","headache","swelled_lymph_nodes","mild_fever"],
+  "Bronchial Asthma": ["breathlessness","high_fever","family_history","mucoid_sputum","cough","fatigue"],
+  "Urinary Tract Infection": ["bladder_discomfort","continuous_feel_of_urine","burning_micturition","foul_smell_of_urine"],
+  "Dimorphic Haemorrhoids": ["constipation","pain_during_bowel_movements","pain_in_anal_region","bloody_stool","irritation_in_anus"],
+  "Peptic Ulcer Disease": ["vomiting","abdominal_pain","internal_itching","passage_of_gases","indigestion","loss_of_appetite"],
+  Diabetes: ["polyuria","increased_appetite","weight_loss","restlessness","fatigue","excessive_hunger","lethargy","irregular_sugar_level","blurred_and_distorted_vision","obesity","mood_swings","dehydration","urinating_a_lot"],
+  Hypertension: ["lack_of_concentration","loss_of_balance","headache","dizziness","chest_pain"],
+  Gastroenteritis: ["diarrhoea","vomiting","sunken_eyes","dehydration"],
+  Hypothyroidism: ["irritability","swollen_extremeties","depression","enlarged_thyroid","brittle_nails","abnormal_menstruation","weight_gain","cold_hands_and_feets","mood_swings","dizziness","lethargy","puffy_face_and_eyes","fatigue"],
+  Hyperthyroidism: ["muscle_weakness","abnormal_menstruation","irritability","weight_loss","mood_swings","fatigue","restlessness","fast_heart_rate","diarrhoea","sweating","excessive_hunger"],
+  "Fungal Infection": ["itching","skin_rash","nodal_skin_eruptions","dischromic_patches"],
+  Allergy: ["continuous_sneezing","shivering","chills","watering_from_eyes"],
+  "Common Cold": ["phlegm","muscle_pain","loss_of_smell","chest_pain","congestion","runny_nose","sinus_pressure","redness_of_eyes","throat_irritation","continuous_sneezing","malaise","headache","swelled_lymph_nodes","fatigue","cough","chills","high_fever"],
+  "Drug Reaction": ["itching","skin_rash","stomach_pain","burning_micturition","spotting_urination"],
+  GERD: ["stomach_pain","chest_pain","cough","acidity","vomiting","ulcers_on_tongue"],
+  Migraine: ["acidity","indigestion","headache","blurred_and_distorted_vision","excessive_hunger","stiff_neck","depression","irritability","visual_disturbances"],
+  "Cervical spondylosis": ["neck_pain","loss_of_balance","dizziness","back_pain","weakness_in_limbs"],
+  "Varicose veins": ["fatigue","cramps","bruising","obesity","swollen_legs","prominent_veins_on_calf","swollen_blood_vessels"],
+  Osteoarthritis: ["joint_pain","neck_pain","knee_pain","hip_joint_pain","swelling_joints","painful_walking"],
+  Arthritis: ["muscle_weakness","stiff_neck","swelling_joints","movement_stiffness","painful_walking"],
+  "Paroxysmal Positional Vertigo": ["vomiting","headache","nausea","loss_of_balance","unsteadiness","spinning_movements"],
+  Acne: ["skin_rash","pus_filled_pimples","blackheads","scurring"],
+  Psoriasis: ["skin_rash","joint_pain","skin_peeling","silver_like_dusting","small_dents_in_nails","inflammatory_nails"],
+  Impetigo: ["skin_rash","blister","red_sore_around_nose","yellow_crust_ooze","high_fever"],
 };
 
 const RISK_MAP = {
-  Malaria:"High", Typhoid:"High", Dengue:"High", Tuberculosis:"High",
-  "Hepatitis B":"High", "Hepatitis C":"High", "Hepatitis D":"High", Pneumonia:"High",
-  "Hepatitis A":"Medium", "Hepatitis E":"Medium", "Alcoholic Hepatitis":"Medium",
-  Jaundice:"Medium", "Chicken Pox":"Medium", "Bronchial Asthma":"Medium",
-  "Urinary Tract Infection":"Medium", "Dimorphic Haemorrhoids":"Medium",
-  "Peptic Ulcer Disease":"Medium", Diabetes:"Medium",
-  "Fungal Infection":"Low", Allergy:"Low", "Common Cold":"Low", "Drug Reaction":"Low",
+  Malaria:"High", Typhoid:"High", Dengue:"High", Chikungunya:"High", Tuberculosis:"High", "Hepatitis B":"High", "Hepatitis C":"High", "Hepatitis D":"High", Pneumonia:"High", "Heart attack":"High", "Paralysis (Brain Hemorrhage)":"High", Hypoglycemia:"High",
+  "Hepatitis A":"Medium", "Hepatitis E":"Medium", "Alcoholic Hepatitis":"Medium", "Chronic cholestasis":"Medium", Jaundice:"Medium", "Chicken Pox":"Medium", "Bronchial Asthma":"Medium", "Urinary Tract Infection":"Medium", "Dimorphic Haemorrhoids":"Medium", "Peptic Ulcer Disease":"Medium", Diabetes:"Medium", Hypertension:"Medium", Gastroenteritis:"Medium", Hypothyroidism:"Medium", Hyperthyroidism:"Medium",
+  "Fungal Infection":"Low", Allergy:"Low", "Common Cold":"Low", "Drug Reaction":"Low", GERD:"Low", Migraine:"Low", "Cervical spondylosis":"Low", "Varicose veins":"Low", Osteoarthritis:"Low", Arthritis:"Low", "Paroxysmal Positional Vertigo":"Low", Acne:"Low", Psoriasis:"Low", Impetigo:"Low",
 };
 
 // ─────────────────────────────────────────────
@@ -204,85 +219,136 @@ const SYMPTOM_WEIGHT = Object.fromEntries(
 const QUESTION_MONOPOLY_CAP = 8;
 
 const ALL_QUESTIONS = [
-  {id:"high_fever",question:"Do you have a high fever?",category:"General"},
-  {id:"mild_fever",question:"Do you have a mild fever?",category:"General"},
-  {id:"fatigue",question:"Do you feel unusually tired or weak?",category:"General"},
-  {id:"malaise",question:"Do you feel generally unwell?",category:"General"},
-  {id:"chills",question:"Do you have chills or shivering?",category:"General"},
-  {id:"sweating",question:"Do you have episodes of sweating?",category:"General"},
-  {id:"headache",question:"Do you have headaches?",category:"General"},
-  {id:"muscle_pain",question:"Do you have muscle pain or body aches?",category:"General"},
-  {id:"joint_pain",question:"Do you have joint pain?",category:"General"},
   {id:"back_pain",question:"Do you have back pain?",category:"General"},
-  {id:"cough",question:"Do you have a cough?",category:"Respiratory"},
-  {id:"phlegm",question:"Are you coughing up phlegm or mucus?",category:"Respiratory"},
-  {id:"rusty_sputum",question:"Are you coughing up rusty or brown-coloured sputum?",category:"Respiratory"},
+  {id:"chills",question:"Do you have chills or shivering?",category:"General"},
+  {id:"dehydration",question:"Do you feel severely dehydrated?",category:"General"},
+  {id:"fatigue",question:"Do you feel unusually tired or weak?",category:"General"},
+  {id:"headache",question:"Do you have headaches?",category:"General"},
+  {id:"high_fever",question:"Do you have a high fever?",category:"General"},
+  {id:"joint_pain",question:"Do you have joint pain?",category:"General"},
+  {id:"lethargy",question:"Do you feel a lack of energy or sluggishness?",category:"General"},
+  {id:"malaise",question:"Do you feel generally unwell or sick?",category:"General"},
+  {id:"mild_fever",question:"Do you have a mild fever?",category:"General"},
+  {id:"muscle_pain",question:"Do you have muscle pain or body aches?",category:"General"},
+  {id:"shivering",question:"Are you shivering?",category:"General"},
+  {id:"sweating",question:"Do you have episodes of sweating?",category:"General"},
   {id:"blood_in_sputum",question:"Are you coughing up blood?",category:"Respiratory"},
-  {id:"breathlessness",question:"Do you have difficulty breathing?",category:"Respiratory"},
+  {id:"breathlessness",question:"Do you have difficulty breathing or shortness of breath?",category:"Respiratory"},
   {id:"chest_pain",question:"Do you have chest pain?",category:"Respiratory"},
-  {id:"runny_nose",question:"Do you have a runny nose?",category:"Respiratory"},
+  {id:"congestion",question:"Do you have nasal or chest congestion?",category:"Respiratory"},
   {id:"continuous_sneezing",question:"Do you sneeze frequently?",category:"Respiratory"},
-  {id:"throat_irritation",question:"Do you have a sore or irritated throat?",category:"Respiratory"},
-  {id:"sinus_pressure",question:"Do you have sinus pressure or nasal congestion?",category:"Respiratory"},
-  {id:"watering_from_eyes",question:"Do you have watery eyes?",category:"Respiratory"},
+  {id:"cough",question:"Do you have a cough?",category:"Respiratory"},
   {id:"loss_of_smell",question:"Have you lost your sense of smell?",category:"Respiratory"},
-  {id:"nausea",question:"Do you feel nauseous?",category:"Digestive"},
-  {id:"vomiting",question:"Have you been vomiting?",category:"Digestive"},
-  {id:"diarrhoea",question:"Do you have diarrhoea?",category:"Digestive"},
-  {id:"stomach_pain",question:"Do you have stomach pain?",category:"Digestive"},
+  {id:"mucoid_sputum",question:"Are you coughing up thick, mucus-like sputum?",category:"Respiratory"},
+  {id:"phlegm",question:"Are you coughing up phlegm or mucus?",category:"Respiratory"},
+  {id:"runny_nose",question:"Do you have a runny nose?",category:"Respiratory"},
+  {id:"rusty_sputum",question:"Are you coughing up rusty or brown-coloured sputum?",category:"Respiratory"},
+  {id:"sinus_pressure",question:"Do you have sinus pressure or nasal congestion?",category:"Respiratory"},
+  {id:"throat_irritation",question:"Do you have a sore or irritated throat?",category:"Respiratory"},
+  {id:"watering_from_eyes",question:"Do you have watery eyes?",category:"Respiratory"},
   {id:"abdominal_pain",question:"Do you have abdominal or belly pain?",category:"Digestive"},
-  {id:"indigestion",question:"Do you have indigestion or acidity?",category:"Digestive"},
-  {id:"distension_of_abdomen",question:"Do you feel bloated or have a distended abdomen?",category:"Digestive"},
-  {id:"constipation",question:"Do you have constipation?",category:"Digestive"},
-  {id:"passage_of_gases",question:"Do you have excessive gas?",category:"Digestive"},
+  {id:"acidity",question:"Do you have acidity or a burning sensation in your stomach?",category:"Digestive"},
+  {id:"belly_pain",question:"Do you have persistent belly pain?",category:"Digestive"},
   {id:"bloody_stool",question:"Do you notice blood in your stool?",category:"Digestive"},
+  {id:"constipation",question:"Do you have constipation?",category:"Digestive"},
+  {id:"diarrhoea",question:"Do you have diarrhoea?",category:"Digestive"},
+  {id:"distention_of_abdomen",question:"Do you feel bloated or have a distended abdomen?",category:"Digestive"},
+  {id:"heartburn",question:"Do you have heartburn?",category:"Digestive"},
+  {id:"indigestion",question:"Do you have indigestion?",category:"Digestive"},
   {id:"loss_of_appetite",question:"Have you lost your appetite?",category:"Digestive"},
+  {id:"nausea",question:"Do you feel nauseous?",category:"Digestive"},
+  {id:"passage_of_gases",question:"Do you have excessive gas?",category:"Digestive"},
   {id:"stomach_bleeding",question:"Do you have stomach bleeding?",category:"Digestive"},
-  {id:"yellowish_skin",question:"Is your skin yellowish or jaundiced?",category:"Liver"},
-  {id:"yellowing_of_eyes",question:"Are the whites of your eyes turning yellow?",category:"Liver"},
-  {id:"dark_urine",question:"Is your urine dark or tea-coloured?",category:"Liver"},
-  {id:"yellow_urine",question:"Is your urine unusually yellow?",category:"Liver"},
-  {id:"internal_itching",question:"Do you experience internal itching?",category:"Liver"},
+  {id:"stomach_pain",question:"Do you have stomach pain?",category:"Digestive"},
+  {id:"sunken_eyes",question:"Do your eyes look sunken?",category:"Digestive"},
+  {id:"swelling_of_stomach",question:"Is your stomach area swollen?",category:"Digestive"},
+  {id:"ulcers_on_tongue",question:"Do you have ulcers on your tongue?",category:"Digestive"},
+  {id:"vomiting",question:"Have you been vomiting?",category:"Digestive"},
   {id:"acute_liver_failure",question:"Do you have signs of acute liver failure?",category:"Liver"},
+  {id:"dark_urine",question:"Is your urine dark or tea-coloured?",category:"Liver"},
   {id:"fluid_overload",question:"Do you have abnormal body swelling or fluid retention?",category:"Liver"},
-  {id:"itching",question:"Do you have itchy skin?",category:"Skin"},
-  {id:"skin_rash",question:"Do you have a skin rash?",category:"Skin"},
-  {id:"red_spots_over_body",question:"Do you have red spots on your body?",category:"Skin"},
-  {id:"nodal_skin_eruptions",question:"Do you have nodules or skin eruptions?",category:"Skin"},
+  {id:"internal_itching",question:"Do you experience internal itching?",category:"Liver"},
+  {id:"yellow_urine",question:"Is your urine unusually yellow?",category:"Liver"},
+  {id:"yellowing_of_eyes",question:"Are the whites of your eyes turning yellow?",category:"Liver"},
+  {id:"yellowish_skin",question:"Is your skin yellowish or jaundiced?",category:"Liver"},
+  {id:"blackheads",question:"Do you have blackheads?",category:"Skin"},
+  {id:"blister",question:"Do you have fluid-filled blisters?",category:"Skin"},
+  {id:"bruising",question:"Do you bruise easily?",category:"Skin"},
   {id:"dischromic_patches",question:"Do you have discoloured patches on your skin?",category:"Skin"},
+  {id:"itching",question:"Do you have itchy skin?",category:"Skin"},
+  {id:"nodal_skin_eruptions",question:"Do you have nodules or skin eruptions?",category:"Skin"},
+  {id:"pus_filled_pimples",question:"Do you have pus-filled pimples?",category:"Skin"},
+  {id:"red_sore_around_nose",question:"Do you have red sores around your nose or mouth?",category:"Skin"},
+  {id:"red_spots_over_body",question:"Do you have red spots on your body?",category:"Skin"},
+  {id:"scurring",question:"Do you have scarring on your skin?",category:"Skin"},
+  {id:"silver_like_dusting",question:"Do you have silvery, scale-like patches on your skin?",category:"Skin"},
+  {id:"skin_peeling",question:"Is your skin peeling?",category:"Skin"},
+  {id:"skin_rash",question:"Do you have a skin rash?",category:"Skin"},
+  {id:"yellow_crust_ooze",question:"Do your skin sores ooze a yellow crust?",category:"Skin"},
+  {id:"blurred_and_distorted_vision",question:"Do you have blurred or distorted vision?",category:"Eyes"},
+  {id:"pain_behind_the_eyes",question:"Do you have pain behind your eyes?",category:"Eyes"},
+  {id:"puffy_face_and_eyes",question:"Do you have puffiness around your face or eyes?",category:"Eyes"},
   {id:"redness_of_eyes",question:"Do you have red or irritated eyes?",category:"Eyes"},
-  {id:"blurred_vision",question:"Do you have blurred or distorted vision?",category:"Eyes"},
-  {id:"pain_behind_eyes",question:"Do you have pain behind your eyes?",category:"Eyes"},
-  {id:"burning_micturition",question:"Do you feel a burning sensation when urinating?",category:"Urinary"},
-  {id:"urinating_frequently",question:"Do you urinate much more than usual?",category:"Urinary"},
-  {id:"continuous_feel_of_urine",question:"Do you have a persistent urge to urinate?",category:"Urinary"},
+  {id:"visual_disturbances",question:"Do you have visual disturbances, such as flashing lights or blind spots?",category:"Eyes"},
+  {id:"abnormal_menstruation",question:"Have you noticed abnormal or irregular menstrual periods?",category:"Urinary"},
   {id:"bladder_discomfort",question:"Do you have bladder discomfort?",category:"Urinary"},
+  {id:"burning_micturition",question:"Do you feel a burning sensation when urinating?",category:"Urinary"},
+  {id:"continuous_feel_of_urine",question:"Do you have a persistent urge to urinate?",category:"Urinary"},
   {id:"foul_smell_of_urine",question:"Does your urine have an unusual smell?",category:"Urinary"},
+  {id:"polyuria",question:"Do you urinate in unusually large amounts?",category:"Urinary"},
   {id:"spotting_urination",question:"Do you notice spotting during urination?",category:"Urinary"},
-  {id:"pain_anal_region",question:"Do you have pain in your anal region?",category:"Rectal"},
-  {id:"pain_bowel_movements",question:"Do you have pain during bowel movements?",category:"Rectal"},
-  {id:"irritation_anus",question:"Do you have irritation around the anus?",category:"Rectal"},
-  {id:"restlessness",question:"Do you feel restless or agitated?",category:"Neurological"},
-  {id:"mood_swings",question:"Have you been experiencing mood swings?",category:"Neurological"},
-  {id:"confusion",question:"Do you feel confused or disoriented?",category:"Neurological"},
+  {id:"urinating_a_lot",question:"Do you urinate much more than usual?",category:"Urinary"},
+  {id:"irritation_in_anus",question:"Do you have irritation around the anus?",category:"Rectal"},
+  {id:"pain_during_bowel_movements",question:"Do you have pain during bowel movements?",category:"Rectal"},
+  {id:"pain_in_anal_region",question:"Do you have pain in your anal region?",category:"Rectal"},
+  {id:"altered_sensorium",question:"Do you feel confused or disoriented?",category:"Neurological"},
+  {id:"anxiety",question:"Have you been feeling anxious?",category:"Neurological"},
   {id:"coma",question:"Have you experienced any loss of consciousness?",category:"Neurological"},
+  {id:"depression",question:"Have you been feeling persistently low or depressed?",category:"Neurological"},
+  {id:"dizziness",question:"Do you feel dizzy?",category:"Neurological"},
+  {id:"irritability",question:"Have you been feeling unusually irritable?",category:"Neurological"},
+  {id:"lack_of_concentration",question:"Do you have trouble concentrating?",category:"Neurological"},
+  {id:"loss_of_balance",question:"Do you have trouble keeping your balance?",category:"Neurological"},
+  {id:"mood_swings",question:"Have you been experiencing mood swings?",category:"Neurological"},
+  {id:"muscle_weakness",question:"Do you have general muscle weakness?",category:"Neurological"},
+  {id:"restlessness",question:"Do you feel restless or agitated?",category:"Neurological"},
+  {id:"slurred_speech",question:"Have you had episodes of slurred speech?",category:"Neurological"},
+  {id:"spinning_movements",question:"Do you feel a spinning sensation (vertigo)?",category:"Neurological"},
+  {id:"toxic_look_typhos",question:"Do you look or feel severely, acutely ill?",category:"Neurological"},
+  {id:"unsteadiness",question:"Do you feel unsteady on your feet?",category:"Neurological"},
+  {id:"weakness_in_limbs",question:"Do you have weakness in your arms or legs?",category:"Neurological"},
+  {id:"weakness_of_one_body_side",question:"Do you have sudden weakness on one side of your body?",category:"Neurological"},
+  {id:"brittle_nails",question:"Do you have brittle nails?",category:"Metabolic"},
+  {id:"cold_hands_and_feets",question:"Do your hands and feet often feel unusually cold?",category:"Metabolic"},
+  {id:"drying_and_tingling_lips",question:"Do you have dry or tingling lips?",category:"Metabolic"},
+  {id:"enlarged_thyroid",question:"Have you noticed swelling in the front of your neck (thyroid area)?",category:"Metabolic"},
   {id:"excessive_hunger",question:"Are you excessively hungry?",category:"Metabolic"},
   {id:"increased_appetite",question:"Has your appetite increased significantly?",category:"Metabolic"},
   {id:"irregular_sugar_level",question:"Do you have an irregular blood sugar level?",category:"Metabolic"},
-  {id:"polyuria",question:"Do you urinate in unusually large amounts?",category:"Metabolic"},
-  {id:"dehydration",question:"Do you feel severely dehydrated?",category:"Metabolic"},
-  {id:"weight_loss",question:"Have you experienced unexplained weight loss?",category:"Metabolic"},
   {id:"obesity",question:"Are you significantly overweight?",category:"Metabolic"},
+  {id:"palpitations",question:"Do you have a racing or pounding heartbeat?",category:"Metabolic"},
+  {id:"swollen_extremeties",question:"Do you have swelling in your arms or legs?",category:"Metabolic"},
+  {id:"weight_gain",question:"Have you experienced unexplained weight gain?",category:"Metabolic"},
+  {id:"weight_loss",question:"Have you experienced unexplained weight loss?",category:"Metabolic"},
+  {id:"cramps",question:"Do you get muscle cramps?",category:"Cardiovascular"},
+  {id:"fast_heart_rate",question:"Do you have a fast or irregular heartbeat?",category:"Cardiovascular"},
+  {id:"prominent_veins_on_calf",question:"Do you have prominent, visible veins on your calves?",category:"Cardiovascular"},
+  {id:"swollen_blood_vessels",question:"Do you have visibly swollen or bulging blood vessels?",category:"Cardiovascular"},
+  {id:"swollen_legs",question:"Do you have swollen legs?",category:"Cardiovascular"},
+  {id:"hip_joint_pain",question:"Do you have hip joint pain?",category:"Musculoskeletal"},
+  {id:"inflammatory_nails",question:"Are your nails inflamed or discoloured?",category:"Musculoskeletal"},
+  {id:"knee_pain",question:"Do you have knee pain?",category:"Musculoskeletal"},
+  {id:"movement_stiffness",question:"Do you feel stiffness when moving?",category:"Musculoskeletal"},
+  {id:"neck_pain",question:"Do you have neck pain?",category:"Musculoskeletal"},
+  {id:"painful_walking",question:"Is walking painful for you?",category:"Musculoskeletal"},
+  {id:"small_dents_in_nails",question:"Do you have small dents or pits in your nails?",category:"Musculoskeletal"},
+  {id:"stiff_neck",question:"Do you have a stiff neck?",category:"Musculoskeletal"},
+  {id:"swelling_joints",question:"Do you have swelling in your joints?",category:"Musculoskeletal"},
   {id:"swelled_lymph_nodes",question:"Do you have swollen lymph nodes?",category:"Infection"},
-  {id:"swelling_stomach",question:"Is your stomach area swollen?",category:"Infection"},
-  {id:"fast_heart_rate",question:"Do you have a fast or irregular heartbeat?",category:"Infection"},
-  {id:"toxic_look",question:"Do you look or feel severely ill?",category:"Infection"},
-  {id:"swollen_lymph_neck",question:"Do you have swollen lymph nodes in the neck or armpit?",category:"Infection"},
-  {id:"loss_of_appetite_fever",question:"Have you lost your appetite alongside a fever?",category:"Infection"},
   {id:"family_history",question:"Do you have a family history of this condition?",category:"History"},
-  {id:"blood_transfusion",question:"Have you received a blood transfusion recently?",category:"History"},
-  {id:"unsterile_injections",question:"Have you been injected with unsterile equipment?",category:"History"},
-  {id:"alcohol_history",question:"Do you have a history of heavy alcohol use?",category:"History"},
+  {id:"history_of_alcohol_consumption",question:"Do you have a history of heavy alcohol use?",category:"History"},
+  {id:"receiving_blood_transfusion",question:"Have you received a blood transfusion recently?",category:"History"},
+  {id:"receiving_unsterile_injections",question:"Have you been injected with unsterile equipment?",category:"History"},
 ];
 
 const Q_INDEX = Object.fromEntries(ALL_QUESTIONS.map((q) => [q.id, q]));
@@ -310,7 +376,7 @@ function scoreDisease(disease, answers) {
 //    low-coverage sample matching). Now identical to the server.
 //
 // 2. Match ratio -- this used a flat yes/relevant count, treating a
-//    generic symptom like "fatigue" (shared by 15 of 22 diseases) as
+//    generic symptom like "fatigue" (shared by many of the 41 diseases) as
 //    equally diagnostic as a specific one like "polyuria" (unique to
 //    Diabetes). The backend weights each symptom by SYMPTOM_WEIGHT
 //    (inverse disease-frequency) when computing the match ratio; this
@@ -351,24 +417,42 @@ function diseaseConfidence(disease, answers, asked = null) {
 
 // ─────────────────────────────────────────────
 // NEXT QUESTION (offline) -- mirrors the backend's get_next_question fix.
-// This previously just took the top-6 scoring diseases and drained the
-// #1-ranked one's ENTIRE symptom list before ever touching #2 -- the
-// original monopolization bug the backend moved away from. It also never
-// had the tapered pool (6 -> 3 -> 2) or the monopoly cap the backend now
-// uses, so offline sessions could diverge sharply from what the server
-// would have asked. Same fix as main.py: broaden-then-narrow the
-// candidate pool, keep following the CURRENT highest-scoring candidate
-// (asked-count is only a tie-breaker for exact score ties, not the
-// primary sort), and cap how many questions any one disease can consume
-// so it can't crowd out the rest of the differential.
+//
+// Pool width is a FRACTION of the active disease list (the original
+// 22-disease design's 6/22, 3/22, 2/22 ratios), not a fixed headcount, so
+// this scales automatically if the disease list ever grows or shrinks
+// instead of silently starving the tail the way a fixed poolSize=6 did
+// once this list grew past 22 diseases.
+//
+// It also fixes a reachability gap: when several candidates are fully
+// tied (identical score AND identical askedCount -- normally the
+// untouched, zero-scored bulk early in a session), the previous version
+// broke the tie by picking whichever candidate happened to sit first in
+// DISEASE_SYMPTOM_MAP's definition order and asking ITS next symptom.
+// That's an arbitrary, non-clinical tie-break: with a large disease list
+// a disease could go an entire session without ever being probed --
+// still possibly ranked #1 by elimination, but showing 0% confidence,
+// since confidence only reflects symptoms actually asked. This version
+// breaks a genuine tie by asking about whichever unasked symptom is
+// shared by the MOST currently-tied candidates, so one question narrows
+// the largest possible slice of the tied group at once, and reachability
+// depends on how distinctive a disease's symptoms are, not on where it
+// sits in the object literal. A single leading candidate is unaffected --
+// its own next unasked symptom is still asked directly.
 // ─────────────────────────────────────────────
 function getNextQuestionOffline(answers, asked) {
-  const ranked = Object.keys(DISEASE_SYMPTOM_MAP)
-    .sort((a, b) => scoreDisease(b, answers) - scoreDisease(a, answers));
+  const nDiseases = Object.keys(DISEASE_SYMPTOM_MAP).length;
+  const scores = {};
+  Object.keys(DISEASE_SYMPTOM_MAP).forEach((d) => { scores[d] = scoreDisease(d, answers); });
+  const ranked = Object.keys(DISEASE_SYMPTOM_MAP).sort((a, b) => scores[b] - scores[a]);
 
   const nAsked   = asked.length;
-  const poolSize = nAsked < 6 ? 6 : nAsked < 11 ? 3 : 2;
-  const top      = ranked.slice(0, poolSize);
+  const poolSize = nAsked < 6
+    ? Math.max(6, Math.round(nDiseases * 6 / 22))
+    : nAsked < 11
+      ? Math.max(3, Math.round(nDiseases * 3 / 22))
+      : Math.max(2, Math.round(nDiseases * 2 / 22));
+  const top = ranked.slice(0, poolSize);
 
   const askedCount = (d) => (DISEASE_SYMPTOM_MAP[d] || []).filter((s) => asked.includes(s)).length;
   const hasUnasked = (d) => (DISEASE_SYMPTOM_MAP[d] || []).some((s) => !asked.includes(s));
@@ -378,13 +462,37 @@ function getNextQuestionOffline(answers, asked) {
 
   if (candidates.length > 0) {
     candidates.sort((a, b) => {
-      const scoreDiff = scoreDisease(b, answers) - scoreDisease(a, answers);
+      const scoreDiff = scores[b] - scores[a];
       return scoreDiff !== 0 ? scoreDiff : askedCount(a) - askedCount(b);
     });
-    const chosen = candidates[0];
-    for (const sym of DISEASE_SYMPTOM_MAP[chosen] || []) {
-      if (!asked.includes(sym)) {
-        const q = Q_INDEX[sym];
+    const bestScore = scores[candidates[0]];
+    const bestAsked = askedCount(candidates[0]);
+    const tied = candidates.filter((d) => scores[d] === bestScore && askedCount(d) === bestAsked);
+
+    if (tied.length === 1) {
+      const chosen = tied[0];
+      for (const sym of DISEASE_SYMPTOM_MAP[chosen] || []) {
+        if (!asked.includes(sym)) {
+          const q = Q_INDEX[sym];
+          if (q) return q;
+        }
+      }
+    } else {
+      const coverage = {};
+      tied.forEach((d) => {
+        (DISEASE_SYMPTOM_MAP[d] || []).forEach((sym) => {
+          if (!asked.includes(sym)) coverage[sym] = (coverage[sym] || 0) + 1;
+        });
+      });
+      const symptomOrder = {};
+      ALL_QUESTIONS.forEach((q, i) => { symptomOrder[q.id] = i; });
+      const coverageKeys = Object.keys(coverage);
+      if (coverageKeys.length > 0) {
+        coverageKeys.sort((a, b) => {
+          const diff = coverage[b] - coverage[a];
+          return diff !== 0 ? diff : (symptomOrder[a] ?? 0) - (symptomOrder[b] ?? 0);
+        });
+        const q = Q_INDEX[coverageKeys[0]];
         if (q) return q;
       }
     }
@@ -2046,12 +2154,27 @@ function HomeScreen({ userId, user, onStart, onNav }) {
       <div className="section">
         <div className="section-ttl">Disease Coverage</div>
         <div className="card card-p">
-          <div className="disease-grid">
-            {Object.entries(RISK_MAP).map(([d, r]) => (
-              <span key={d} className={`badge badge-${r}`}>{d}</span>
-            ))}
+          <div style={{ display: "flex", gap: 10 }}>
+            {["High", "Medium", "Low"].map((tier) => {
+              const count = Object.values(RISK_MAP).filter((r) => r === tier).length;
+              return (
+                <div key={tier} style={{
+                  flex: 1, textAlign: "center", padding: "14px 8px",
+                  borderRadius: 12, background: `${RISK_COLOR[tier]}12`,
+                }}>
+                  <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, color: RISK_COLOR[tier] }}>
+                    {count}
+                  </div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: RISK_COLOR[tier], textTransform: "uppercase", letterSpacing: "0.04em", marginTop: 2 }}>
+                    {tier} risk
+                  </div>
+                </div>
+              );
+            })}
           </div>
-          <div className="t-subtitle mt-3" style={{ fontSize: 12 }}>22 diseases · 3 risk levels</div>
+          <div className="t-subtitle mt-3" style={{ fontSize: 12 }}>
+            {Object.keys(RISK_MAP).length} diseases · 3 risk levels
+          </div>
         </div>
       </div>
       <div style={{ height: 24 }} />
@@ -2065,7 +2188,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
 function AssessmentLanding({ onStart }) {
   const features = [
     { icon: "activity", title: "Adaptive Questions",    desc: "Up to 15 questions tailored to your answers — no irrelevant ones.", color: "var(--teal)",   bg: "var(--teal-xl)"  },
-    { icon: "shield",   title: "22 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "var(--blue)",   bg: "var(--blue-l)"   },
+    { icon: "shield",   title: "41 Diseases Covered",   desc: "Covers tropical and common diseases prevalent across West Africa.", color: "var(--blue)",   bg: "var(--blue-l)"   },
     { icon: "info",     title: "Clear Recommendations", desc: "Home care, tests to consider, and when to see a doctor.",           color: "var(--purple)", bg: "var(--purple-l)" },
   ];
   return (
@@ -2083,7 +2206,7 @@ function AssessmentLanding({ onStart }) {
               Answer a short set of questions and receive a detailed assessment with personalised recommendations.
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {["Free", "Under 2 min", "22 diseases"].map((t) => (
+              {["Free", "Under 2 min", "41 diseases"].map((t) => (
                 <span key={t} className="badge badge-teal">
                   <Icon name="check" size={10} color="var(--teal)" />&nbsp;{t}
                 </span>
@@ -2251,7 +2374,7 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
             Based on your responses, no significant symptoms were detected. There are no indicators of the conditions this system screens for.
           </div>
           <div className="rec-bubbles mb-4" style={{ textAlign: "left" }}>
-            <RecBubble icon="heart"  label="What this means" text="Your answers did not match the symptom patterns for any of the 22 conditions in our database." accent="var(--green-d)" />
+            <RecBubble icon="heart"  label="What this means" text="Your answers did not match the symptom patterns for any of the 41 conditions in our database." accent="var(--green-d)" />
             <RecBubble icon="user"   label="Recommendation"  text="If you feel unwell but were unsure how to answer, consider retaking the assessment or visiting a clinic." accent="var(--blue-d)" />
             <RecBubble icon="info"   label="Good to know"    text="This result does not mean you are definitely healthy — it means your answers did not point to a specific condition." accent="var(--purple-d)" />
           </div>
@@ -3177,7 +3300,7 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
 function AboutScreen({ onBack }) {
   const features = [
     { icon: "activity",  color: "var(--teal)",   bg: "var(--teal-xl)",  title: "Adaptive Symptom Assessment", desc: "Questions adjust in real time based on your answers — no irrelevant questions, no wasted time." },
-    { icon: "database",  color: "var(--blue)",   bg: "var(--blue-l)",   title: "Machine Learning Diagnosis",   desc: "A calibrated ensemble of Random Forest, XGBoost, and Logistic Regression trained on a curated dataset of 22 tropical and common diseases." },
+    { icon: "database",  color: "var(--blue)",   bg: "var(--blue-l)",   title: "Machine Learning Diagnosis",   desc: "A calibrated ensemble of Random Forest, XGBoost, and Logistic Regression trained on a curated dataset of 41 tropical and common diseases." },
     { icon: "shield",    color: "var(--purple)", bg: "var(--purple-l)", title: "Risk Stratification",          desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
     { icon: "heart",     color: "var(--red)",    bg: "var(--red-l)",    title: "AI-Powered Recommendations",   desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
     { icon: "clipboard", color: "var(--amber)",  bg: "var(--amber-l)",  title: "Assessment History",           desc: "All past results are stored securely so you and your care provider can track changes over time." },
@@ -3230,8 +3353,8 @@ function AboutScreen({ onBack }) {
 
         <div className="about-fact-grid mb-4">
           {[
-            { val: "22", lbl: "Diseases covered"  },
-            { val: "76", lbl: "Tracked symptoms"  },
+            { val: "41", lbl: "Diseases covered"  },
+            { val: "130", lbl: "Tracked symptoms"  },
             { val: "15", lbl: "Max questions"      },
             { val: "3",  lbl: "ML models"          },
           ].map((f) => (
