@@ -3599,7 +3599,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
 
         {saved && (
           <div style={{ marginTop: 10, textAlign: "center", fontSize: 12, color: "var(--green-d)", fontWeight: 600 }}>
-            Settings saved successfully.
+            Settings saved.
           </div>
         )}
       </div>
