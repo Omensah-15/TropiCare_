@@ -2150,33 +2150,6 @@ function HomeScreen({ userId, user, onStart, onNav }) {
         )}
       </div>
 
-      {/* Disease Coverage */}
-      <div className="section">
-        <div className="section-ttl">Disease Coverage</div>
-        <div className="card card-p">
-          <div style={{ display: "flex", gap: 10 }}>
-            {["High", "Medium", "Low"].map((tier) => {
-              const count = Object.values(RISK_MAP).filter((r) => r === tier).length;
-              return (
-                <div key={tier} style={{
-                  flex: 1, textAlign: "center", padding: "14px 8px",
-                  borderRadius: 12, background: `${RISK_COLOR[tier]}12`,
-                }}>
-                  <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, color: RISK_COLOR[tier] }}>
-                    {count}
-                  </div>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: RISK_COLOR[tier], textTransform: "uppercase", letterSpacing: "0.04em", marginTop: 2 }}>
-                    {tier} risk
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div className="t-subtitle mt-3" style={{ fontSize: 12 }}>
-            {Object.keys(RISK_MAP).length} diseases · 3 risk levels
-          </div>
-        </div>
-      </div>
       <div style={{ height: 24 }} />
     </div>
   );
