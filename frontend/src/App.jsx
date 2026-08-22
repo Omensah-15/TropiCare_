@@ -3307,7 +3307,6 @@ function AboutScreen({ onBack }) {
       <div className="page-body">
         <div className="about-hero">
           <div className="about-hero-bg"><Icon name="heart" size={160} color="#fff" /></div>
-          <div className="about-hero-eyebrow">Project · KNUST 2026</div>
           <div className="about-hero-title">TropiCare</div>
           <div className="about-hero-sub">
             An AI-guided symptom checker built to help patients and clinicians identify tropical
