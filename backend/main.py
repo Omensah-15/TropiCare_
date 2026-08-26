@@ -336,6 +336,7 @@ class DiagnosisModel(Base):
     rec_test              = Column(Text, nullable=True)
     rec_doctor            = Column(Text, nullable=True)
     rec_safety            = Column(Text, nullable=True)
+    rec_red_flags         = Column(Text, nullable=True)
     ai_explanation        = Column(Text, nullable=True)
     ml_scores             = Column(Text, nullable=True)
     confidence_trajectory = Column(Text, nullable=True)
@@ -551,6 +552,7 @@ RISK_MAP: Dict[str, str] = {
     "Malaria": "High", "Typhoid": "High", "Dengue": "High", "Chikungunya": "High", "Tuberculosis": "High", "Hepatitis B": "High", "Hepatitis C": "High", "Hepatitis D": "High", "Pneumonia": "High", "Heart attack": "High", "Paralysis (Brain Hemorrhage)": "High", "Hypoglycemia": "High",
     "Hepatitis A": "Medium", "Hepatitis E": "Medium", "Alcoholic Hepatitis": "Medium", "Chronic cholestasis": "Medium", "Jaundice": "Medium", "Chicken Pox": "Medium", "Bronchial Asthma": "Medium", "Urinary Tract Infection": "Medium", "Dimorphic Haemorrhoids": "Medium", "Peptic Ulcer Disease": "Medium", "Diabetes": "Medium", "Hypertension": "Medium", "Gastroenteritis": "Medium", "Hypothyroidism": "Medium", "Hyperthyroidism": "Medium",
     "Fungal Infection": "Low", "Allergy": "Low", "Common Cold": "Low", "Drug Reaction": "Low", "GERD": "Low", "Migraine": "Low", "Cervical spondylosis": "Low", "Varicose veins": "Low", "Osteoarthritis": "Low", "Arthritis": "Low", "Paroxysmal Positional Vertigo": "Low", "Acne": "Low", "Psoriasis": "Low", "Impetigo": "Low",
+    "Meningitis": "High",
 }
 
 
@@ -561,7 +563,7 @@ DISEASE_SYMPTOM_MAP: Dict[str, List[str]] = {
     "Chikungunya": ["skin_rash","joint_pain","fatigue","nausea","redness_of_eyes"],
     "Tuberculosis": ["blood_in_sputum","chest_pain","phlegm","malaise","swelled_lymph_nodes","yellowing_of_eyes","mild_fever","loss_of_appetite","sweating","breathlessness","high_fever","cough","weight_loss","fatigue","vomiting","chills"],
     "Hepatitis B": ["yellowing_of_eyes","malaise","receiving_blood_transfusion","receiving_unsterile_injections","yellowish_skin","lethargy","fatigue","itching","yellow_urine","abdominal_pain","loss_of_appetite","dark_urine"],
-    "Hepatitis C": ["fatigue","yellowish_skin","nausea","loss_of_appetite","family_history","yellowing_of_eyes"],
+    "Hepatitis C": ["fatigue","yellowish_skin","nausea","loss_of_appetite","receiving_blood_transfusion","receiving_unsterile_injections","yellowing_of_eyes"],
     "Hepatitis D": ["joint_pain","vomiting","fatigue","yellowish_skin","dark_urine","nausea","loss_of_appetite","abdominal_pain","yellowing_of_eyes"],
     "Pneumonia": ["chest_pain","rusty_sputum","fast_heart_rate","cough","fatigue","chills","high_fever","malaise","sweating","breathlessness","phlegm"],
     "Heart attack": ["heartburn","chest_pain","vomiting","sweating","breathlessness"],
@@ -596,6 +598,7 @@ DISEASE_SYMPTOM_MAP: Dict[str, List[str]] = {
     "Acne": ["skin_rash","pus_filled_pimples","blackheads","scurring"],
     "Psoriasis": ["skin_rash","joint_pain","skin_peeling","silver_like_dusting","small_dents_in_nails","inflammatory_nails"],
     "Impetigo": ["skin_rash","blister","red_sore_around_nose","yellow_crust_ooze","high_fever"],
+    "Meningitis": ["high_fever","headache","stiff_neck","vomiting","altered_sensorium","coma"],
 }
 
 # -----------------------------------------------------------------
@@ -694,7 +697,7 @@ ALL_QUESTIONS: List[Dict[str, str]] = [
     {"id":"swelling_of_stomach","question":"Is your stomach area swollen?","category":"Digestive"},
     {"id":"ulcers_on_tongue","question":"Do you have ulcers on your tongue?","category":"Digestive"},
     {"id":"vomiting","question":"Have you been vomiting?","category":"Digestive"},
-    {"id":"acute_liver_failure","question":"Do you have signs of acute liver failure?","category":"Liver"},
+    {"id":"acute_liver_failure","question":"Do you have confusion, severe swelling, or very dark urine along with yellowing of your skin or eyes?","category":"Liver"},
     {"id":"dark_urine","question":"Is your urine dark or tea-coloured?","category":"Liver"},
     {"id":"fluid_overload","question":"Do you have abnormal body swelling or fluid retention?","category":"Liver"},
     {"id":"internal_itching","question":"Do you experience internal itching?","category":"Liver"},
@@ -723,11 +726,11 @@ ALL_QUESTIONS: List[Dict[str, str]] = [
     {"id":"abnormal_menstruation","question":"Have you noticed abnormal or irregular menstrual periods?","category":"Urinary"},
     {"id":"bladder_discomfort","question":"Do you have bladder discomfort?","category":"Urinary"},
     {"id":"burning_micturition","question":"Do you feel a burning sensation when urinating?","category":"Urinary"},
-    {"id":"continuous_feel_of_urine","question":"Do you have a persistent urge to urinate?","category":"Urinary"},
+    {"id":"continuous_feel_of_urine","question":"Do you feel like you need to urinate again right after you've just gone?","category":"Urinary"},
     {"id":"foul_smell_of_urine","question":"Does your urine have an unusual smell?","category":"Urinary"},
-    {"id":"polyuria","question":"Do you urinate in unusually large amounts?","category":"Urinary"},
+    {"id":"polyuria","question":"When you do urinate, are you passing much larger amounts than usual each time?","category":"Urinary"},
     {"id":"spotting_urination","question":"Do you notice spotting during urination?","category":"Urinary"},
-    {"id":"urinating_a_lot","question":"Do you urinate much more than usual?","category":"Urinary"},
+    {"id":"urinating_a_lot","question":"Are you making more trips to the bathroom to urinate than usual?","category":"Urinary"},
     {"id":"irritation_in_anus","question":"Do you have irritation around the anus?","category":"Rectal"},
     {"id":"pain_during_bowel_movements","question":"Do you have pain during bowel movements?","category":"Rectal"},
     {"id":"pain_in_anal_region","question":"Do you have pain in your anal region?","category":"Rectal"},
@@ -775,7 +778,7 @@ ALL_QUESTIONS: List[Dict[str, str]] = [
     {"id":"stiff_neck","question":"Do you have a stiff neck?","category":"Musculoskeletal"},
     {"id":"swelling_joints","question":"Do you have swelling in your joints?","category":"Musculoskeletal"},
     {"id":"swelled_lymph_nodes","question":"Do you have swollen lymph nodes?","category":"Infection"},
-    {"id":"family_history","question":"Do you have a family history of this condition?","category":"History"},
+    {"id":"family_history","question":"Does anyone in your close family have asthma?","category":"History"},
     {"id":"history_of_alcohol_consumption","question":"Do you have a history of heavy alcohol use?","category":"History"},
     {"id":"receiving_blood_transfusion","question":"Have you received a blood transfusion recently?","category":"History"},
     {"id":"receiving_unsterile_injections","question":"Have you been injected with unsterile equipment?","category":"History"},
@@ -825,6 +828,7 @@ DEFAULT_RECS: Dict[str, Dict[str, str]] = {
     "Acne": {"home_care":"Keep skin clean and avoid picking at pimples","test":"No test usually needed","doctor":"See a dermatologist if over-the-counter treatment doesn't help","safety":"Avoid harsh scrubbing, which can worsen inflammation"},
     "Psoriasis": {"home_care":"Moisturise regularly and avoid known triggers such as stress","test":"Usually diagnosed by physical examination; skin biopsy if unclear","doctor":"See a dermatologist for a treatment plan","safety":"Avoid scratching affected areas to prevent infection"},
     "Impetigo": {"home_care":"Keep the affected area clean and covered","test":"No test usually needed","doctor":"See a doctor for antibiotic treatment","safety":"Highly contagious - avoid close contact and sharing towels until treated"},
+    "Meningitis": {"home_care":"Do not attempt to treat this at home","test":"Diagnosis typically requires a lumbar puncture (spinal tap) along with blood tests","doctor":"Go to the nearest hospital emergency department immediately","safety":"Meningitis can become life-threatening within hours - do not wait to see if symptoms improve"},
 }
 
 # -----------------------------------------------------------------
@@ -1234,6 +1238,101 @@ def predict_with_ml(answers: dict) -> dict:
         "all_scores": all_scores,
         "method":     "scoring",
     }
+
+
+# -----------------------------------------------------------------
+# RED-FLAG SAFETY NET
+#
+# Risk level was previously inherited entirely from whichever disease won
+# the differential (RISK_MAP.get(best_disease, "Medium") / risk_map.get
+# (disease, "Medium") above). That means a genuinely dangerous symptom
+# pattern can be present in the answers but get buried if a lower-risk
+# disease happens to outscore the dangerous one -- e.g. Heart attack and
+# GERD share chest_pain + vomiting, so GERD can win the differential and
+# display as "Low Risk" while Heart attack sits unstyled in "Other
+# Possibilities" with no urgency cues at all.
+#
+# RED_FLAG_RULES is an independent layer of hard-coded, clinically
+# dangerous symptom patterns, checked directly against the raw answers
+# regardless of which disease the model/scoring picked. It never changes
+# WHICH disease is reported -- only whether the risk level gets floored
+# up to "High" and whether plain-language warnings are attached.
+# -----------------------------------------------------------------
+
+RED_FLAG_RULES: List[Dict[str, Any]] = [
+    {
+        "symptoms": ["chest_pain", "breathlessness"],
+        "match":    "all",
+        "label":    "Possible heart attack pattern",
+        "message":  "Chest pain along with shortness of breath can be a sign of a heart attack and needs urgent medical attention.",
+    },
+    {
+        "symptoms": ["chest_pain", "sweating"],
+        "match":    "all",
+        "label":    "Possible heart attack pattern",
+        "message":  "Chest pain along with sweating can be a sign of a heart attack and needs urgent medical attention.",
+    },
+    {
+        "symptoms": ["weakness_of_one_body_side"],
+        "match":    "any",
+        "label":    "Possible stroke",
+        "message":  "Sudden weakness on one side of the body can be a sign of a stroke and needs emergency care right away.",
+    },
+    {
+        "symptoms": ["coma"],
+        "match":    "any",
+        "label":    "Loss of consciousness",
+        "message":  "Loss of consciousness is a medical emergency and needs immediate attention.",
+    },
+    {
+        "symptoms": ["blood_in_sputum"],
+        "match":    "any",
+        "label":    "Coughing blood",
+        "message":  "Coughing up blood can be a sign of a serious underlying condition and needs prompt medical evaluation.",
+    },
+    {
+        "symptoms": ["stomach_bleeding"],
+        "match":    "any",
+        "label":    "Internal bleeding",
+        "message":  "Stomach bleeding can be a sign of internal bleeding and needs urgent medical attention.",
+    },
+    {
+        "symptoms": ["stiff_neck", "headache", "high_fever"],
+        "match":    "all",
+        "label":    "Possible meningitis pattern",
+        "message":  "A stiff neck together with headache and high fever can be a sign of meningitis, which can become life-threatening within hours.",
+    },
+]
+
+
+def apply_red_flag_rules(pred: dict, answers: dict) -> dict:
+    """
+    Checks the raw answers against RED_FLAG_RULES independently of
+    whichever disease predict_with_ml() landed on. If any rule fires,
+    this raises pred["risk"] to "High" (it only ever raises, never
+    lowers, the risk level) and attaches the fired rules' plain-language
+    messages as pred["red_flags"]. pred["disease"] is left untouched --
+    the predicted condition name stays whatever the model/scoring
+    produced; only the risk level and an added warning are affected.
+    """
+    fired_messages: List[str] = []
+    for rule in RED_FLAG_RULES:
+        symptoms = rule["symptoms"]
+        if rule.get("match") == "any":
+            matched = any(answers.get(s) is True for s in symptoms)
+        else:
+            matched = all(answers.get(s) is True for s in symptoms)
+        if matched:
+            fired_messages.append(rule["message"])
+
+    if fired_messages:
+        if pred.get("risk") != "High":
+            pred["risk"] = "High"
+        pred["red_flags"] = fired_messages
+    else:
+        pred["red_flags"] = []
+
+    return pred
 
 
 # -----------------------------------------------------------------
@@ -2543,6 +2642,7 @@ async def analyze(
     answers    = _load_json(s.answers, {})
     trajectory = _load_json(s.trajectory, [])
     pred       = predict_with_ml(answers)
+    pred       = apply_red_flag_rules(pred, answers)
 
     if pred["disease"] is None:
         response_body = {
@@ -2561,6 +2661,7 @@ async def analyze(
                 "doctor":    "See a doctor if you develop symptoms or feel unwell.",
                 "safety":    "",
             },
+            "red_flags":             pred.get("red_flags", []),
             "method":                pred["method"],
             "ai_used":               False,
             "confidence_trajectory": trajectory,
@@ -2596,6 +2697,7 @@ async def analyze(
         rec_test              = rec["test"],
         rec_doctor            = rec["doctor"],
         rec_safety            = rec.get("safety", ""),
+        rec_red_flags         = _dump_json(pred.get("red_flags", [])),
         ai_explanation        = rec.get("explanation", ""),
         ml_scores             = _dump_json(pred.get("all_scores", {})),
         confidence_trajectory = _dump_json(trajectory),
@@ -2619,6 +2721,7 @@ async def analyze(
             "doctor":    rec["doctor"],
             "safety":    rec.get("safety", ""),
         },
+        "red_flags":             pred.get("red_flags", []),
         "method":                pred["method"],
         "ai_used":               ai_result is not None,
         "confidence_trajectory": trajectory,
@@ -2723,6 +2826,7 @@ async def get_history(
                 "doctor":    d.rec_doctor,
                 "safety":    d.rec_safety,
             },
+            "red_flags":       _load_json(d.rec_red_flags, []),
             "explanation":     d.ai_explanation,
             "active_symptoms": _load_json(d.active_symptoms, []),
         }
@@ -2759,6 +2863,7 @@ async def get_diagnosis(
             "doctor":    d.rec_doctor,
             "safety":    d.rec_safety,
         },
+        "red_flags":              _load_json(d.rec_red_flags, []),
         "explanation":            d.ai_explanation,
         "ml_scores":              _load_json(d.ml_scores, {}),
         "confidence_trajectory":  _load_json(d.confidence_trajectory, []),
