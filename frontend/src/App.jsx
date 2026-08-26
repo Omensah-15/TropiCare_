@@ -148,7 +148,7 @@ const DISEASE_SYMPTOM_MAP = {
   Chikungunya: ["skin_rash","joint_pain","fatigue","nausea","redness_of_eyes"],
   Tuberculosis: ["blood_in_sputum","chest_pain","phlegm","malaise","swelled_lymph_nodes","yellowing_of_eyes","mild_fever","loss_of_appetite","sweating","breathlessness","high_fever","cough","weight_loss","fatigue","vomiting","chills"],
   "Hepatitis B": ["yellowing_of_eyes","malaise","receiving_blood_transfusion","receiving_unsterile_injections","yellowish_skin","lethargy","fatigue","itching","yellow_urine","abdominal_pain","loss_of_appetite","dark_urine"],
-  "Hepatitis C": ["fatigue","yellowish_skin","nausea","loss_of_appetite","family_history","yellowing_of_eyes"],
+  "Hepatitis C": ["fatigue","yellowish_skin","nausea","loss_of_appetite","receiving_blood_transfusion","receiving_unsterile_injections","yellowing_of_eyes"],
   "Hepatitis D": ["joint_pain","vomiting","fatigue","yellowish_skin","dark_urine","nausea","loss_of_appetite","abdominal_pain","yellowing_of_eyes"],
   Pneumonia: ["chest_pain","rusty_sputum","fast_heart_rate","cough","fatigue","chills","high_fever","malaise","sweating","breathlessness","phlegm"],
   "Heart attack": ["heartburn","chest_pain","vomiting","sweating","breathlessness"],
@@ -183,10 +183,11 @@ const DISEASE_SYMPTOM_MAP = {
   Acne: ["skin_rash","pus_filled_pimples","blackheads","scurring"],
   Psoriasis: ["skin_rash","joint_pain","skin_peeling","silver_like_dusting","small_dents_in_nails","inflammatory_nails"],
   Impetigo: ["skin_rash","blister","red_sore_around_nose","yellow_crust_ooze","high_fever"],
+  Meningitis: ["high_fever","headache","stiff_neck","vomiting","altered_sensorium","coma"],
 };
 
 const RISK_MAP = {
-  Malaria:"High", Typhoid:"High", Dengue:"High", Chikungunya:"High", Tuberculosis:"High", "Hepatitis B":"High", "Hepatitis C":"High", "Hepatitis D":"High", Pneumonia:"High", "Heart attack":"High", "Paralysis (Brain Hemorrhage)":"High", Hypoglycemia:"High",
+  Malaria:"High", Typhoid:"High", Dengue:"High", Chikungunya:"High", Tuberculosis:"High", "Hepatitis B":"High", "Hepatitis C":"High", "Hepatitis D":"High", Pneumonia:"High", "Heart attack":"High", "Paralysis (Brain Hemorrhage)":"High", Hypoglycemia:"High", Meningitis:"High",
   "Hepatitis A":"Medium", "Hepatitis E":"Medium", "Alcoholic Hepatitis":"Medium", "Chronic cholestasis":"Medium", Jaundice:"Medium", "Chicken Pox":"Medium", "Bronchial Asthma":"Medium", "Urinary Tract Infection":"Medium", "Dimorphic Haemorrhoids":"Medium", "Peptic Ulcer Disease":"Medium", Diabetes:"Medium", Hypertension:"Medium", Gastroenteritis:"Medium", Hypothyroidism:"Medium", Hyperthyroidism:"Medium",
   "Fungal Infection":"Low", Allergy:"Low", "Common Cold":"Low", "Drug Reaction":"Low", GERD:"Low", Migraine:"Low", "Cervical spondylosis":"Low", "Varicose veins":"Low", Osteoarthritis:"Low", Arthritis:"Low", "Paroxysmal Positional Vertigo":"Low", Acne:"Low", Psoriasis:"Low", Impetigo:"Low",
 };
@@ -264,7 +265,7 @@ const ALL_QUESTIONS = [
   {id:"swelling_of_stomach",question:"Is your stomach area swollen?",category:"Digestive"},
   {id:"ulcers_on_tongue",question:"Do you have ulcers on your tongue?",category:"Digestive"},
   {id:"vomiting",question:"Have you been vomiting?",category:"Digestive"},
-  {id:"acute_liver_failure",question:"Do you have signs of acute liver failure?",category:"Liver"},
+  {id:"acute_liver_failure",question:"Do you have confusion, severe swelling, or very dark urine along with yellowing of your skin or eyes?",category:"Liver"},
   {id:"dark_urine",question:"Is your urine dark or tea-coloured?",category:"Liver"},
   {id:"fluid_overload",question:"Do you have abnormal body swelling or fluid retention?",category:"Liver"},
   {id:"internal_itching",question:"Do you experience internal itching?",category:"Liver"},
@@ -293,11 +294,11 @@ const ALL_QUESTIONS = [
   {id:"abnormal_menstruation",question:"Have you noticed abnormal or irregular menstrual periods?",category:"Urinary"},
   {id:"bladder_discomfort",question:"Do you have bladder discomfort?",category:"Urinary"},
   {id:"burning_micturition",question:"Do you feel a burning sensation when urinating?",category:"Urinary"},
-  {id:"continuous_feel_of_urine",question:"Do you have a persistent urge to urinate?",category:"Urinary"},
+  {id:"continuous_feel_of_urine",question:"Do you feel like you need to urinate again right after you've just gone?",category:"Urinary"},
   {id:"foul_smell_of_urine",question:"Does your urine have an unusual smell?",category:"Urinary"},
-  {id:"polyuria",question:"Do you urinate in unusually large amounts?",category:"Urinary"},
+  {id:"polyuria",question:"When you do urinate, are you passing much larger amounts than usual each time?",category:"Urinary"},
   {id:"spotting_urination",question:"Do you notice spotting during urination?",category:"Urinary"},
-  {id:"urinating_a_lot",question:"Do you urinate much more than usual?",category:"Urinary"},
+  {id:"urinating_a_lot",question:"Are you making more trips to the bathroom to urinate than usual?",category:"Urinary"},
   {id:"irritation_in_anus",question:"Do you have irritation around the anus?",category:"Rectal"},
   {id:"pain_during_bowel_movements",question:"Do you have pain during bowel movements?",category:"Rectal"},
   {id:"pain_in_anal_region",question:"Do you have pain in your anal region?",category:"Rectal"},
@@ -345,7 +346,7 @@ const ALL_QUESTIONS = [
   {id:"stiff_neck",question:"Do you have a stiff neck?",category:"Musculoskeletal"},
   {id:"swelling_joints",question:"Do you have swelling in your joints?",category:"Musculoskeletal"},
   {id:"swelled_lymph_nodes",question:"Do you have swollen lymph nodes?",category:"Infection"},
-  {id:"family_history",question:"Do you have a family history of this condition?",category:"History"},
+  {id:"family_history",question:"Does anyone in your close family have asthma?",category:"History"},
   {id:"history_of_alcohol_consumption",question:"Do you have a history of heavy alcohol use?",category:"History"},
   {id:"receiving_blood_transfusion",question:"Have you received a blood transfusion recently?",category:"History"},
   {id:"receiving_unsterile_injections",question:"Have you been injected with unsterile equipment?",category:"History"},
@@ -2389,6 +2390,37 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
           <span className={`badge badge-${risk}`} style={{ fontSize: 12, padding: "4px 14px" }}>{risk} Risk</span>
         </div>
 
+        {/* Urgent red-flag banner — shown whenever a dangerous symptom pattern
+            was detected, even if the predicted condition itself displays a
+            lower risk color. Distinct from the general medical disclaimer
+            below. */}
+        {result.red_flags && result.red_flags.length > 0 && (
+          <div
+            className="card card-p mb-3"
+            style={{ border: `1px solid ${RISK_COLOR.High}`, background: RISK_BG.High }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <Icon name="alert" size={16} color={RISK_COLOR.High} />
+              <span style={{ fontFamily: "var(--display)", fontWeight: 700, fontSize: 14, color: RISK_COLOR.High }}>
+                Urgent — Seek Care Now
+              </span>
+            </div>
+            {result.red_flags.map((msg, i) => (
+              <p
+                key={i}
+                style={{
+                  fontSize: 13,
+                  color: "var(--ink)",
+                  lineHeight: 1.5,
+                  marginBottom: i < result.red_flags.length - 1 ? 6 : 0,
+                }}
+              >
+                {msg}
+              </p>
+            ))}
+          </div>
+        )}
+
         {/* Diagnosis card */}
         <div className="card card-p mb-3 text-c">
           <div className="t-label mb-2">Predicted Condition</div>
@@ -2433,15 +2465,28 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
         {scores.length > 0 && (
           <div className="card card-p mb-4">
             <div className="section-ttl mb-3">Other Possibilities</div>
-            {scores.map(([d, conf]) => (
-              <div key={d} className="score-bar-row">
-                <span className="score-bar-name">{d}</span>
-                <div className="score-bar-track">
-                  <div className="score-bar-fill" style={{ width: `${Math.round(conf * 100)}%` }} />
+            {scores.map(([d, conf]) => {
+              const altRisk = RISK_MAP[d] || "Medium";
+              return (
+                <div key={d} className="score-bar-row">
+                  <span className="score-bar-name">
+                    {d}
+                    {altRisk === "High" && (
+                      <span
+                        className="badge badge-High"
+                        style={{ marginLeft: 8, fontSize: 10, padding: "2px 8px", verticalAlign: "middle" }}
+                      >
+                        High Risk
+                      </span>
+                    )}
+                  </span>
+                  <div className="score-bar-track">
+                    <div className="score-bar-fill" style={{ width: `${Math.round(conf * 100)}%` }} />
+                  </div>
+                  <span className="score-bar-pct">{Math.round(conf * 100)}%</span>
                 </div>
-                <span className="score-bar-pct">{Math.round(conf * 100)}%</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
