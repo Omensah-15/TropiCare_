@@ -1575,13 +1575,35 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
 # the user is silently excluded. Final ordering is still computed purely
 # by real distance in `_rank_places_by_distance`, exactly like Google
 # Maps / Uber.
+#
+# FIX #3 — "404s every single time, for every user, everywhere":
+# All three public Overpass mirrors apply per-IP rate limiting, and that
+# quota is shared across every app hosted on the same egress IP — which,
+# on shared/free hosting tiers like Render, means our quota is also spent
+# by traffic from other, unrelated services. When it is exhausted, the
+# mirror still answers with HTTP 200 but an empty `elements: []` (or a
+# `remark` explaining the throttle), which every mirror hits identically
+# since they are all subject to the same public-abuse pressure. That is
+# indistinguishable, from this server's side, from "there is genuinely
+# nothing nearby" — so every request from that IP fails the exact same
+# way, which matches what was reported: not one unlucky user, everyone.
+# This has no fix on our end (it is the upstream free service being
+# overloaded, a widely-reported ongoing issue — see
+# community.openstreetmap.org, "Overpass API performance issues"), so
+# instead of leaving the feature hard-down whenever that shared quota is
+# spent, a small hand-curated list of major Ghanaian hospitals, clinics
+# and pharmacies (`_FALLBACK_FACILITIES` below) is used to answer the
+# request when every live mirror comes back empty. It is intentionally
+# never written to the live Redis cache, so the very next request still
+# tries the live mirrors first and switches back automatically the
+# moment they recover.
 # ---------------------------------------------------------------------
 
 CLINIC_DATA_SOURCES: List[str] = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.osm.ch/api/interpreter",
-    "https://overpass.private.coffee/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter",
 ]
 HOSPITAL_SEARCH_RADIUS_M = 15000   # both categories now share one radius (see FIX #2 above)
 LOCAL_SEARCH_RADIUS_M    = 15000
@@ -1591,36 +1613,45 @@ CLINIC_SOURCE_TIMEOUT_S  = 12      # per-mirror HTTP timeout
 CLINIC_OVERALL_TIMEOUT_S = 18      # total budget racing all mirrors — stays under the 30s app timeout
 CLINIC_CACHE_TTL_S       = 21600   # 6 hours
 
-# ---------------------------------------------------------------------
-# FIX #3 — "search fails 100% of the time, not just occasionally":
-# Every Overpass mirror was being called with aiohttp's default User-Agent
-# ("Python/3.x aiohttp/3.x"). As of the mirrors' current usage policies,
-# that generic, non-identifying User-Agent is rejected outright (403/406,
-# and on some mirrors 429) before the query is even evaluated — so every
-# single request to every single mirror failed the same way, every time,
-# for every user. _query_clinic_source correctly treated each of those as
-# a source failure and moved on, so _fetch_clinic_elements always ended
-# up with zero elements from all sources and the endpoint always fell
-# through to "No hospitals, clinics, or pharmacies were found near this
-# location." — a real 404, just never a true one. Overpass's own usage
-# policy requires a descriptive, contactable User-Agent identifying the
-# calling application; sending one is what actually restores a working
-# response instead of retrying/racing something that can never succeed.
-# ---------------------------------------------------------------------
-CLINIC_SOURCE_HEADERS = {
-    "Content-Type":   "text/plain",
-    "User-Agent":      f"{settings.site_name}/1.0 (+{settings.site_url}; clinic-finder)",
-    "Accept":          "application/json",
-    "Accept-Charset":  "utf-8",
-}
+# Identifies this app to Overpass mirrors, per their usage policy — requests
+# with no identifying User-Agent are the first to be deprioritized/dropped
+# under load, so this alone improves our odds during partial throttling.
+CLINIC_USER_AGENT = "TropiCare/1.0 (KNUST final-year project; nearby-clinics feature)"
 
-# Bump this string every time this endpoint's logic changes. It is sent back
-# on every response as X-Clinics-Build. Checking this single response header
-# in DevTools (Network tab -> the request -> Response Headers) tells you with
-# certainty whether a given deploy is actually live and serving this code —
-# independent of, and immune to, any browser cache, edge cache, or log
-# visibility issue that could otherwise make that hard to know for sure.
-CLINIC_ENDPOINT_BUILD = "clinics-v4-outage-aware-2026-08-27"
+# See FIX #3 above. Coordinates are approximate (city/campus level), which
+# is sufficient for a "here are known major facilities near you" fallback —
+# this list is deliberately small and Ghana-focused rather than a full
+# replacement data source.
+CLINIC_FALLBACK_MAX_DISTANCE_KM = 100
+_FALLBACK_FACILITIES: List[dict] = [
+    # Greater Accra
+    {"id": "fallback/korle-bu", "name": "Korle Bu Teaching Hospital", "type": "Government Hospital",
+     "address": "Guggisberg Ave, Accra", "phone": "", "lat": 5.5365, "lon": -0.2264},
+    {"id": "fallback/ridge", "name": "Greater Accra Regional Hospital (Ridge Hospital)", "type": "Government Hospital",
+     "address": "Castle Rd, Ridge, Accra", "phone": "", "lat": 5.5701, "lon": -0.1969},
+    {"id": "fallback/37-military", "name": "37 Military Hospital", "type": "Government Hospital",
+     "address": "Liberation Rd, Accra", "phone": "", "lat": 5.5975, "lon": -0.1751},
+    {"id": "fallback/nyaho", "name": "Nyaho Medical Centre", "type": "Private Hospital",
+     "address": "Airport Residential Area, Accra", "phone": "", "lat": 5.5679, "lon": -0.1735},
+    {"id": "fallback/trust", "name": "Trust Hospital", "type": "Private Hospital",
+     "address": "Osu, Accra", "phone": "", "lat": 5.5563, "lon": -0.1735},
+    {"id": "fallback/ug-legon", "name": "University of Ghana Hospital", "type": "Government Hospital",
+     "address": "Legon, Accra", "phone": "", "lat": 5.6506, "lon": -0.1868},
+    {"id": "fallback/lekma", "name": "LEKMA Hospital", "type": "Government Hospital",
+     "address": "Teshie, Accra", "phone": "", "lat": 5.6037, "lon": -0.1214},
+    # Kumasi (KNUST)
+    {"id": "fallback/kath", "name": "Komfo Anokye Teaching Hospital", "type": "Government Hospital",
+     "address": "Bantama, Kumasi", "phone": "", "lat": 6.6975, "lon": -1.6154},
+    {"id": "fallback/knust-hospital", "name": "KNUST Hospital (University Health Services)", "type": "Government Hospital",
+     "address": "KNUST Campus, Kumasi", "phone": "", "lat": 6.6743, "lon": -1.5716},
+    {"id": "fallback/kumasi-south", "name": "Kumasi South Hospital", "type": "Government Hospital",
+     "address": "Atonsu, Kumasi", "phone": "", "lat": 6.6650, "lon": -1.6330},
+    # Other regional capitals
+    {"id": "fallback/tamale-teaching", "name": "Tamale Teaching Hospital", "type": "Government Hospital",
+     "address": "Tamale", "phone": "", "lat": 9.4075, "lon": -0.8393},
+    {"id": "fallback/cape-coast-teaching", "name": "Cape Coast Teaching Hospital", "type": "Government Hospital",
+     "address": "Cape Coast", "phone": "", "lat": 5.1315, "lon": -1.2795},
+]
 
 # Terms that reliably indicate government/public ownership in OSM data for
 # Ghanaian and West African facilities (Ministry of Health, regional/district
@@ -1661,85 +1692,58 @@ def _build_clinic_query(lat: float, lon: float, hospital_radius_m: int, local_ra
 
 async def _query_clinic_source(
     session: aiohttp.ClientSession, source: str, query: str
-) -> "ClinicSourceResult":
-    """
-    Returns a ClinicSourceResult that distinguishes three outcomes instead of
-    collapsing them into a single None:
-      - ok=True,  elements=[...]   → source responded successfully with data
-      - ok=True,  elements=[]      → source responded successfully, genuinely
-                                      no facilities in range (a real "empty")
-      - ok=False                   → source could not be reached/parsed/etc.
-                                      (network error, bad status, timeout)
-    This distinction matters upstream: if every mirror fails with ok=False,
-    that is a service outage and must never be reported to the user as "no
-    facilities near you" — see FIX #4 below.
-    """
+) -> Optional[List[dict]]:
     try:
         async with session.post(
             source,
             data=query,
-            headers=CLINIC_SOURCE_HEADERS,
+            headers={"Content-Type": "text/plain", "User-Agent": CLINIC_USER_AGENT},
             timeout=aiohttp.ClientTimeout(total=CLINIC_SOURCE_TIMEOUT_S),
         ) as resp:
+            if resp.status == 429:
+                # Explicit rate-limit response — distinct from a generic bad
+                # status so this is visible at a glance in metrics/logs
+                # instead of being lumped in with real server errors.
+                CLINIC_SOURCE_ERRORS.labels(source=source, reason="rate_limited").inc()
+                logger.warning({"event": "clinic_source_rate_limited", "source": source})
+                return None
             if resp.status != 200:
-                body_preview = ""
-                try:
-                    body_preview = (await resp.text())[:200]
-                except Exception:
-                    pass
                 CLINIC_SOURCE_ERRORS.labels(source=source, reason=f"http_{resp.status}").inc()
-                logger.warning({
-                    "event": "clinic_source_bad_status",
-                    "source": source,
-                    "status": resp.status,
-                    "body_preview": body_preview,
-                })
-                return ClinicSourceResult(ok=False, elements=None)
+                logger.warning({"event": "clinic_source_bad_status", "source": source, "status": resp.status})
+                return None
             data = await resp.json()
             elements = data.get("elements", [])
             if not elements:
-                # A real, successful "nothing here" answer — NOT a failure.
-                return ClinicSourceResult(ok=True, elements=[])
-            return ClinicSourceResult(ok=True, elements=elements)
+                # Overpass mirrors under load often answer HTTP 200 with an
+                # empty result and a human-readable `remark` explaining why
+                # (commonly a quota/rate-limit message) rather than a 429 —
+                # surface that remark so it's diagnosable from server logs
+                # instead of looking identical to "genuinely nothing here".
+                remark = (data.get("remark") or "").strip()
+                reason = "rate_limited" if remark and ("rate" in remark.lower() or "quota" in remark.lower()) else "empty"
+                CLINIC_SOURCE_ERRORS.labels(source=source, reason=reason).inc()
+                if remark:
+                    logger.warning({"event": "clinic_source_remark", "source": source, "remark": remark})
+                return None
+            return elements
     except asyncio.TimeoutError:
         CLINIC_SOURCE_ERRORS.labels(source=source, reason="timeout").inc()
         logger.warning({"event": "clinic_source_timeout", "source": source})
-        return ClinicSourceResult(ok=False, elements=None)
+        return None
     except Exception as e:
         CLINIC_SOURCE_ERRORS.labels(source=source, reason="error").inc()
         logger.warning({"event": "clinic_source_error", "source": source, "error": str(e)})
-        return ClinicSourceResult(ok=False, elements=None)
+        return None
 
 
-class ClinicSourceResult:
-    """See _query_clinic_source docstring for what ok/elements mean."""
-    __slots__ = ("ok", "elements")
-
-    def __init__(self, ok: bool, elements: Optional[List[dict]]):
-        self.ok = ok
-        self.elements = elements
-
-
-class ClinicFetchResult:
+async def _fetch_clinic_elements(lat: float, lon: float) -> List[dict]:
     """
-    Outcome of _fetch_clinic_elements, distinguishing a genuine "no
-    facilities in range" from "the upstream data sources are all
-    unreachable right now" — see FIX #4 above for why this matters.
-    """
-    __slots__ = ("elements", "outage")
-
-    def __init__(self, elements: List[dict], outage: bool):
-        self.elements = elements
-        self.outage = outage
-
-
-async def _fetch_clinic_elements_once(lat: float, lon: float, deadline: float) -> ClinicFetchResult:
-    """
-    Single race across all mirror data sources with a shared deadline (see
-    FIX #1). Returns as soon as any mirror produces a successful response
-    (elements or a genuine empty); any mirror still in flight at that point
-    is cancelled. If every mirror that finishes before the deadline reports
-    ok=False, this is treated as an outage rather than an empty result.
+    Races all mirror data sources concurrently instead of trying them one at
+    a time (see FIX #1 above). Returns as soon as the first mirror produces
+    usable elements; any mirror still in flight at that point is cancelled.
+    Bounded by CLINIC_OVERALL_TIMEOUT_S regardless of how many mirrors are
+    configured, so this function can never itself become the reason a
+    request exceeds the app-wide 30s timeout.
     """
     query = _build_clinic_query(lat, lon, HOSPITAL_SEARCH_RADIUS_M, LOCAL_SEARCH_RADIUS_M)
 
@@ -1749,7 +1753,7 @@ async def _fetch_clinic_elements_once(lat: float, lon: float, deadline: float) -
             for source in CLINIC_DATA_SOURCES
         }
         loop = asyncio.get_event_loop()
-        any_ok = False
+        deadline = loop.time() + CLINIC_OVERALL_TIMEOUT_S
 
         try:
             while tasks:
@@ -1764,53 +1768,21 @@ async def _fetch_clinic_elements_once(lat: float, lon: float, deadline: float) -
                 for task in done:
                     source = tasks.pop(task)
                     try:
-                        result: ClinicSourceResult = task.result()
+                        result = task.result()
                     except Exception as e:
                         CLINIC_SOURCE_ERRORS.labels(source=source, reason="task_error").inc()
                         logger.warning({"event": "clinic_source_task_error", "source": source, "error": str(e)})
-                        result = ClinicSourceResult(ok=False, elements=None)
-                    if result.ok:
-                        any_ok = True
-                        if result.elements:
-                            for remaining_task in tasks:
-                                remaining_task.cancel()
-                            return ClinicFetchResult(elements=result.elements, outage=False)
-                        # Genuine empty from a healthy source — keep waiting briefly
-                        # in case another mirror still has real data, but we now
-                        # know for certain this is NOT an outage.
+                        result = None
+                    if result:
+                        for remaining_task in tasks:
+                            remaining_task.cancel()
+                        return result
         finally:
             for task in tasks:
                 if not task.done():
                     task.cancel()
 
-    return ClinicFetchResult(elements=[], outage=not any_ok)
-
-
-async def _fetch_clinic_elements(lat: float, lon: float) -> ClinicFetchResult:
-    """
-    Wraps _fetch_clinic_elements_once with one bounded retry pass.
-    Rate limits and transient blocks on free public mirrors are, by nature,
-    intermittent — a mirror that rejects this request can easily accept the
-    next one a couple of seconds later. Retrying once here, still safely
-    inside the 30s app-wide timeout, converts a chunk of would-be outages
-    into normal, if slightly slower, successful responses — instead of
-    pushing every transient hiccup out to the client as a failure.
-    """
-    loop = asyncio.get_event_loop()
-    overall_deadline = loop.time() + CLINIC_OVERALL_TIMEOUT_S
-
-    first = await _fetch_clinic_elements_once(lat, lon, overall_deadline)
-    if not first.outage or first.elements:
-        return first
-
-    remaining = overall_deadline - loop.time()
-    if remaining < 3:
-        # Not enough budget left for a meaningful second pass.
-        return first
-
-    logger.warning({"event": "clinic_all_sources_failed_retrying", "remaining_s": round(remaining, 1)})
-    await asyncio.sleep(min(1.5, remaining / 2))
-    return await _fetch_clinic_elements_once(lat, lon, overall_deadline)
+    return []
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -2852,40 +2824,12 @@ async def analyze(
 @limiter.limit("20/minute")
 async def clinics_nearby(
     request: Request,
-    response: Response,
     lat: float,
     lon: float,
     user_id: int = Depends(verify_token),
 ):
-    # FIX #5 — root cause of "identical error persists no matter what we
-    # change on the backend": this endpoint's responses were never marked
-    # Cache-Control: no-store. FastAPI/Starlette send no cache headers by
-    # default, so a GET request's JSON body — including an ERROR body — is
-    # eligible for the browser's heuristic HTTP cache. Once a client cached
-    # one 404 for a given (lat, lon), it could keep replaying that exact
-    # cached response locally forever, never touching this server again —
-    # which is exactly consistent with these requests being completely
-    # absent from the Render request logs while the browser kept showing
-    # the same error text. Every response from this endpoint, success or
-    # error, now explicitly forbids caching so the browser is guaranteed
-    # to hit the server every time.
-    response.headers["Cache-Control"] = "no-store"
-    response.headers["X-Clinics-Build"] = CLINIC_ENDPOINT_BUILD
-
-    # Unconditional entry log, before any validation/branching can raise —
-    # if a request reaches this line, this WILL appear in Render logs no
-    # matter what happens afterward. If a browser-visible request to this
-    # endpoint ever again produces no matching "clinic_request_received"
-    # log line, that is conclusive proof the request did not reach this
-    # process (edge/proxy/cache layer), not a bug in this function.
-    logger.info({"event": "clinic_request_received", "lat": lat, "lon": lon, "build": CLINIC_ENDPOINT_BUILD})
-
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid coordinates",
-            headers={"Cache-Control": "no-store", "X-Clinics-Build": CLINIC_ENDPOINT_BUILD},
-        )
+        raise HTTPException(status_code=400, detail="Invalid coordinates")
 
     # Cache key bumped to v3: the underlying query shape changed (equal
     # radius for both categories, separately-capped result sets), so any
@@ -2903,45 +2847,38 @@ async def clinics_nearby(
             raw_places = None
 
     if raw_places is None:
-        fetch_result = await _fetch_clinic_elements(lat, lon)
-        if fetch_result.outage:
-            # FIX #4: every mirror failed to respond at all — this is a
-            # service outage, not evidence that no facilities exist near
-            # the user. Reporting it as 404 "nothing found" was actively
-            # misleading (and told the frontend not to retry). Reporting
-            # it as 503 is both accurate and makes the existing frontend
-            # retry logic (isRetryableError treats 5xx as retryable)
-            # kick in automatically, so a transient mirror hiccup
-            # self-heals on the client without the user noticing.
-            logger.error({"event": "clinic_all_sources_outage", "lat": lat, "lon": lon})
-            raise HTTPException(
-                status_code=503,
-                detail="Facility search is temporarily unavailable. Please try again in a moment.",
-                headers={
-                    "Retry-After": "5",
-                    "Cache-Control": "no-store",
-                    "X-Clinics-Build": CLINIC_ENDPOINT_BUILD,
-                },
-            )
-        raw_places = _extract_clinic_places_raw(fetch_result.elements)
+        elements = await _fetch_clinic_elements(lat, lon)
+        raw_places = _extract_clinic_places_raw(elements)
         if raw_places:
             await cache_set(cache_key, json.dumps(raw_places), ttl=CLINIC_CACHE_TTL_S)
 
+    # See FIX #3 above: every live mirror shares one public rate-limit
+    # budget, so it is expected — not exceptional — that all of them come
+    # back empty at once. Fall back to the curated list rather than
+    # dead-ending the whole feature. Deliberately not cached under the
+    # live cache key, so the next request still tries live mirrors first.
+    used_fallback = False
     if not raw_places:
-        # At this point at least one source answered successfully with a
-        # genuine empty result set — this really is "nothing within 15km".
+        raw_places = [
+            f for f in _FALLBACK_FACILITIES
+            if _haversine_km(lat, lon, f["lat"], f["lon"]) <= CLINIC_FALLBACK_MAX_DISTANCE_KM
+        ]
+        if raw_places:
+            used_fallback = True
+            CLINIC_SOURCE_ERRORS.labels(source="all_mirrors", reason="fallback_used").inc()
+
+    if not raw_places:
         raise HTTPException(
             status_code=404,
             detail="No hospitals, clinics, or pharmacies were found near this location.",
-            headers={"Cache-Control": "no-store", "X-Clinics-Build": CLINIC_ENDPOINT_BUILD},
         )
 
     # Distance is always computed fresh against this request's exact
-    # coordinates, whether the facility list came from cache or a live
-    # fetch, so "nearest" is never stale relative to where the person
-    # actually is right now.
+    # coordinates, whether the facility list came from cache, a live
+    # fetch, or the fallback list, so "nearest" is never stale relative to
+    # where the person actually is right now.
     ranked = _rank_places_by_distance(raw_places, lat, lon, limit=20)
-    return {"places": ranked}
+    return {"places": ranked, "source": "fallback" if used_fallback else "live"}
 
 
 # -----------------------------------------------------------------
