@@ -1609,8 +1609,14 @@ HOSPITAL_SEARCH_RADIUS_M = 15000   # both categories now share one radius (see F
 LOCAL_SEARCH_RADIUS_M    = 15000
 HOSPITAL_OUT_LIMIT       = 40      # each category gets its own guaranteed slice of results
 LOCAL_OUT_LIMIT          = 60
-CLINIC_SOURCE_TIMEOUT_S  = 12      # per-mirror HTTP timeout
-CLINIC_OVERALL_TIMEOUT_S = 18      # total budget racing all mirrors — stays under the 30s app timeout
+CLINIC_SOURCE_TIMEOUT_S  = 7       # per-mirror HTTP timeout — kept short: with the fallback
+                                    # list now covering the miss case (see FIX #3), there is no
+                                    # upside to waiting a full 12s per mirror before giving up;
+                                    # production logs show overpass-api.de currently fails
+                                    # instantly (connection refused) while the other mirrors were
+                                    # the ones burning the full timeout, so shortening this gets
+                                    # people an answer noticeably faster on the all-mirrors-down path
+CLINIC_OVERALL_TIMEOUT_S = 10      # total budget racing all mirrors — stays under the 30s app timeout
 CLINIC_CACHE_TTL_S       = 21600   # 6 hours
 
 # Identifies this app to Overpass mirrors, per their usage policy — requests
@@ -2866,6 +2872,11 @@ async def clinics_nearby(
         if raw_places:
             used_fallback = True
             CLINIC_SOURCE_ERRORS.labels(source="all_mirrors", reason="fallback_used").inc()
+            logger.info({
+                "event": "clinic_fallback_used",
+                "lat": lat, "lon": lon,
+                "matched_count": len(raw_places),
+            })
 
     if not raw_places:
         raise HTTPException(
