@@ -1653,7 +1653,19 @@ def _build_clinic_query(lat: float, lon: float, hospital_radius_m: int, local_ra
 
 async def _query_clinic_source(
     session: aiohttp.ClientSession, source: str, query: str
-) -> Optional[List[dict]]:
+) -> "ClinicSourceResult":
+    """
+    Returns a ClinicSourceResult that distinguishes three outcomes instead of
+    collapsing them into a single None:
+      - ok=True,  elements=[...]   → source responded successfully with data
+      - ok=True,  elements=[]      → source responded successfully, genuinely
+                                      no facilities in range (a real "empty")
+      - ok=False                   → source could not be reached/parsed/etc.
+                                      (network error, bad status, timeout)
+    This distinction matters upstream: if every mirror fails with ok=False,
+    that is a service outage and must never be reported to the user as "no
+    facilities near you" — see FIX #4 below.
+    """
     try:
         async with session.post(
             source,
@@ -1674,31 +1686,52 @@ async def _query_clinic_source(
                     "status": resp.status,
                     "body_preview": body_preview,
                 })
-                return None
+                return ClinicSourceResult(ok=False, elements=None)
             data = await resp.json()
             elements = data.get("elements", [])
             if not elements:
-                CLINIC_SOURCE_ERRORS.labels(source=source, reason="empty").inc()
-                return None
-            return elements
+                # A real, successful "nothing here" answer — NOT a failure.
+                return ClinicSourceResult(ok=True, elements=[])
+            return ClinicSourceResult(ok=True, elements=elements)
     except asyncio.TimeoutError:
         CLINIC_SOURCE_ERRORS.labels(source=source, reason="timeout").inc()
         logger.warning({"event": "clinic_source_timeout", "source": source})
-        return None
+        return ClinicSourceResult(ok=False, elements=None)
     except Exception as e:
         CLINIC_SOURCE_ERRORS.labels(source=source, reason="error").inc()
         logger.warning({"event": "clinic_source_error", "source": source, "error": str(e)})
-        return None
+        return ClinicSourceResult(ok=False, elements=None)
 
 
-async def _fetch_clinic_elements(lat: float, lon: float) -> List[dict]:
+class ClinicSourceResult:
+    """See _query_clinic_source docstring for what ok/elements mean."""
+    __slots__ = ("ok", "elements")
+
+    def __init__(self, ok: bool, elements: Optional[List[dict]]):
+        self.ok = ok
+        self.elements = elements
+
+
+class ClinicFetchResult:
     """
-    Races all mirror data sources concurrently instead of trying them one at
-    a time (see FIX #1 above). Returns as soon as the first mirror produces
-    usable elements; any mirror still in flight at that point is cancelled.
-    Bounded by CLINIC_OVERALL_TIMEOUT_S regardless of how many mirrors are
-    configured, so this function can never itself become the reason a
-    request exceeds the app-wide 30s timeout.
+    Outcome of _fetch_clinic_elements, distinguishing a genuine "no
+    facilities in range" from "the upstream data sources are all
+    unreachable right now" — see FIX #4 above for why this matters.
+    """
+    __slots__ = ("elements", "outage")
+
+    def __init__(self, elements: List[dict], outage: bool):
+        self.elements = elements
+        self.outage = outage
+
+
+async def _fetch_clinic_elements_once(lat: float, lon: float, deadline: float) -> ClinicFetchResult:
+    """
+    Single race across all mirror data sources with a shared deadline (see
+    FIX #1). Returns as soon as any mirror produces a successful response
+    (elements or a genuine empty); any mirror still in flight at that point
+    is cancelled. If every mirror that finishes before the deadline reports
+    ok=False, this is treated as an outage rather than an empty result.
     """
     query = _build_clinic_query(lat, lon, HOSPITAL_SEARCH_RADIUS_M, LOCAL_SEARCH_RADIUS_M)
 
@@ -1708,7 +1741,7 @@ async def _fetch_clinic_elements(lat: float, lon: float) -> List[dict]:
             for source in CLINIC_DATA_SOURCES
         }
         loop = asyncio.get_event_loop()
-        deadline = loop.time() + CLINIC_OVERALL_TIMEOUT_S
+        any_ok = False
 
         try:
             while tasks:
@@ -1723,21 +1756,53 @@ async def _fetch_clinic_elements(lat: float, lon: float) -> List[dict]:
                 for task in done:
                     source = tasks.pop(task)
                     try:
-                        result = task.result()
+                        result: ClinicSourceResult = task.result()
                     except Exception as e:
                         CLINIC_SOURCE_ERRORS.labels(source=source, reason="task_error").inc()
                         logger.warning({"event": "clinic_source_task_error", "source": source, "error": str(e)})
-                        result = None
-                    if result:
-                        for remaining_task in tasks:
-                            remaining_task.cancel()
-                        return result
+                        result = ClinicSourceResult(ok=False, elements=None)
+                    if result.ok:
+                        any_ok = True
+                        if result.elements:
+                            for remaining_task in tasks:
+                                remaining_task.cancel()
+                            return ClinicFetchResult(elements=result.elements, outage=False)
+                        # Genuine empty from a healthy source — keep waiting briefly
+                        # in case another mirror still has real data, but we now
+                        # know for certain this is NOT an outage.
         finally:
             for task in tasks:
                 if not task.done():
                     task.cancel()
 
-    return []
+    return ClinicFetchResult(elements=[], outage=not any_ok)
+
+
+async def _fetch_clinic_elements(lat: float, lon: float) -> ClinicFetchResult:
+    """
+    Wraps _fetch_clinic_elements_once with one bounded retry pass.
+    Rate limits and transient blocks on free public mirrors are, by nature,
+    intermittent — a mirror that rejects this request can easily accept the
+    next one a couple of seconds later. Retrying once here, still safely
+    inside the 30s app-wide timeout, converts a chunk of would-be outages
+    into normal, if slightly slower, successful responses — instead of
+    pushing every transient hiccup out to the client as a failure.
+    """
+    loop = asyncio.get_event_loop()
+    overall_deadline = loop.time() + CLINIC_OVERALL_TIMEOUT_S
+
+    first = await _fetch_clinic_elements_once(lat, lon, overall_deadline)
+    if not first.outage or first.elements:
+        return first
+
+    remaining = overall_deadline - loop.time()
+    if remaining < 3:
+        # Not enough budget left for a meaningful second pass.
+        return first
+
+    logger.warning({"event": "clinic_all_sources_failed_retrying", "remaining_s": round(remaining, 1)})
+    await asyncio.sleep(min(1.5, remaining / 2))
+    return await _fetch_clinic_elements_once(lat, lon, overall_deadline)
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -2802,12 +2867,29 @@ async def clinics_nearby(
             raw_places = None
 
     if raw_places is None:
-        elements = await _fetch_clinic_elements(lat, lon)
-        raw_places = _extract_clinic_places_raw(elements)
+        fetch_result = await _fetch_clinic_elements(lat, lon)
+        if fetch_result.outage:
+            # FIX #4: every mirror failed to respond at all — this is a
+            # service outage, not evidence that no facilities exist near
+            # the user. Reporting it as 404 "nothing found" was actively
+            # misleading (and told the frontend not to retry). Reporting
+            # it as 503 is both accurate and makes the existing frontend
+            # retry logic (isRetryableError treats 5xx as retryable)
+            # kick in automatically, so a transient mirror hiccup
+            # self-heals on the client without the user noticing.
+            logger.error({"event": "clinic_all_sources_outage", "lat": lat, "lon": lon})
+            raise HTTPException(
+                status_code=503,
+                detail="Facility search is temporarily unavailable. Please try again in a moment.",
+                headers={"Retry-After": "5"},
+            )
+        raw_places = _extract_clinic_places_raw(fetch_result.elements)
         if raw_places:
             await cache_set(cache_key, json.dumps(raw_places), ttl=CLINIC_CACHE_TTL_S)
 
     if not raw_places:
+        # At this point at least one source answered successfully with a
+        # genuine empty result set — this really is "nothing within 15km".
         raise HTTPException(
             status_code=404,
             detail="No hospitals, clinics, or pharmacies were found near this location.",
