@@ -2844,12 +2844,31 @@ async def analyze(
 @limiter.limit("20/minute")
 async def clinics_nearby(
     request: Request,
+    response: Response,
     lat: float,
     lon: float,
     user_id: int = Depends(verify_token),
 ):
+    # FIX #5 — root cause of "identical error persists no matter what we
+    # change on the backend": this endpoint's responses were never marked
+    # Cache-Control: no-store. FastAPI/Starlette send no cache headers by
+    # default, so a GET request's JSON body — including an ERROR body — is
+    # eligible for the browser's heuristic HTTP cache. Once a client cached
+    # one 404 for a given (lat, lon), it could keep replaying that exact
+    # cached response locally forever, never touching this server again —
+    # which is exactly consistent with these requests being completely
+    # absent from the Render request logs while the browser kept showing
+    # the same error text. Every response from this endpoint, success or
+    # error, now explicitly forbids caching so the browser is guaranteed
+    # to hit the server every time.
+    response.headers["Cache-Control"] = "no-store"
+
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
-        raise HTTPException(status_code=400, detail="Invalid coordinates")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid coordinates",
+            headers={"Cache-Control": "no-store"},
+        )
 
     # Cache key bumped to v3: the underlying query shape changed (equal
     # radius for both categories, separately-capped result sets), so any
@@ -2881,7 +2900,7 @@ async def clinics_nearby(
             raise HTTPException(
                 status_code=503,
                 detail="Facility search is temporarily unavailable. Please try again in a moment.",
-                headers={"Retry-After": "5"},
+                headers={"Retry-After": "5", "Cache-Control": "no-store"},
             )
         raw_places = _extract_clinic_places_raw(fetch_result.elements)
         if raw_places:
@@ -2893,6 +2912,7 @@ async def clinics_nearby(
         raise HTTPException(
             status_code=404,
             detail="No hospitals, clinics, or pharmacies were found near this location.",
+            headers={"Cache-Control": "no-store"},
         )
 
     # Distance is always computed fresh against this request's exact
