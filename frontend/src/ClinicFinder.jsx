@@ -232,7 +232,7 @@ function animateMarkerTo(marker, toLatLng, duration = 650) {
 // connectivity hiccup self-heals instead of surfacing as an error the
 // person has to notice and tap through.
 // ─────────────────────────────────────────────
-const FETCH_TIMEOUT_MS = 25000;   // stays above the backend's 18s clinic budget, below its 30s hard cutoff
+const FETCH_TIMEOUT_MS = 25000;   // stays above the backend's ~10s clinic budget, below its 30s hard cutoff
 const FETCH_MAX_RETRIES = 2;      // total of 3 attempts
 const FETCH_RETRY_BASE_MS = 1200; // backoff: ~1.2s, then ~2.4s
 
