@@ -253,12 +253,28 @@ async function fetchNearbyClinicsOnce(lat, lon) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
+  // FIX: belt-and-suspenders cache defeat. The backend now sends
+  // Cache-Control: no-store, which is correct and sufficient for
+  // well-behaved browsers — but it relies on every layer between this
+  // device and Render honoring that header. Mobile carrier networks in
+  // particular sometimes run transparent HTTP caching proxies that key
+  // purely on the request URL and ignore response cache directives
+  // entirely. Appending a changing, meaningless query param makes every
+  // request's URL unique, which defeats that class of cache outright
+  // regardless of whether it respects Cache-Control — and explicit
+  // no-cache request headers cover browsers/proxies that do inspect them.
+  const cacheBuster = Date.now();
   let res;
   try {
     res = await fetch(
-      `${API_BASE}/clinics/nearby?lat=${lat}&lon=${lon}`,
+      `${API_BASE}/clinics/nearby?lat=${lat}&lon=${lon}&_=${cacheBuster}`,
       {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          "Cache-Control": "no-cache",
+          Pragma: "no-cache",
+        },
+        cache: "no-store",
         signal: controller.signal,
       }
     );
@@ -276,6 +292,10 @@ async function fetchNearbyClinicsOnce(lat, lon) {
     const body = await res.json().catch(() => ({}));
     const error = new Error(body.detail || `HTTP ${res.status}`);
     error.status = res.status;
+    // Surfaced only in dev tools, not to the user — lets you confirm from
+    // the browser console alone which backend build actually answered,
+    // without needing to open the Network tab.
+    error.build = res.headers.get("X-Clinics-Build") || "unknown";
     throw error;
   }
 
@@ -526,7 +546,7 @@ export default function ClinicFinder({ onClose }) {
       setErrorMsg("");
       setSearchNote("");
     } catch (err) {
-      console.error("ClinicFinder: search failed:", err.message);
+      console.error("ClinicFinder: search failed:", err.message, "| backend build:", err.build || "n/a");
       if (!background) {
         setStatus("error");
         setSearchNote("");
