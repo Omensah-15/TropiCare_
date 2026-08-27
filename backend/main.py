@@ -15,6 +15,7 @@ import math
 import os
 import re
 import secrets
+import socket
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -1627,8 +1628,11 @@ CLINIC_USER_AGENT = "TropiCare/1.0 (KNUST final-year project; nearby-clinics fea
 # See FIX #3 above. Coordinates are approximate (city/campus level), which
 # is sufficient for a "here are known major facilities near you" fallback —
 # this list is deliberately small and Ghana-focused rather than a full
-# replacement data source.
-CLINIC_FALLBACK_MAX_DISTANCE_KM = 100
+# replacement data source. Kept tight (not stretched to cover "anywhere in
+# Ghana") so a person in Accra is never shown a Kumasi hospital as if it
+# were nearby — an honest "nothing found" is better than a misleading
+# "nearby" facility that's actually an hours-long drive away.
+CLINIC_FALLBACK_MAX_DISTANCE_KM = 25
 _FALLBACK_FACILITIES: List[dict] = [
     # Greater Accra
     {"id": "fallback/korle-bu", "name": "Korle Bu Teaching Hospital", "type": "Government Hospital",
@@ -1753,7 +1757,19 @@ async def _fetch_clinic_elements(lat: float, lon: float) -> List[dict]:
     """
     query = _build_clinic_query(lat, lon, HOSPITAL_SEARCH_RADIUS_M, LOCAL_SEARCH_RADIUS_M)
 
-    async with aiohttp.ClientSession() as session:
+    # force_ipv4: Render (and several other cloud hosts) route outbound
+    # traffic over IPv6 when a target advertises an AAAA record, even when
+    # that IPv6 path is broken end-to-end for that specific host. That
+    # produces exactly the symptom seen in production —
+    # "Cannot connect to host overpass-api.de:443 ssl:default [None]",
+    # failing instantly on every attempt — which looks like the mirror is
+    # down even though it's reachable over IPv4 the whole time. Forcing
+    # IPv4 here is what actually restores live data; the curated fallback
+    # list below stays in place purely as a safety net for the (separate,
+    # real) case where every mirror is genuinely rate-limited or down.
+    connector = aiohttp.TCPConnector(family=socket.AF_INET)
+
+    async with aiohttp.ClientSession(connector=connector) as session:
         tasks: Dict[asyncio.Task, str] = {
             asyncio.create_task(_query_clinic_source(session, source, query)): source
             for source in CLINIC_DATA_SOURCES
