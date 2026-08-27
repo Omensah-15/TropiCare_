@@ -1614,6 +1614,14 @@ CLINIC_SOURCE_HEADERS = {
     "Accept-Charset":  "utf-8",
 }
 
+# Bump this string every time this endpoint's logic changes. It is sent back
+# on every response as X-Clinics-Build. Checking this single response header
+# in DevTools (Network tab -> the request -> Response Headers) tells you with
+# certainty whether a given deploy is actually live and serving this code —
+# independent of, and immune to, any browser cache, edge cache, or log
+# visibility issue that could otherwise make that hard to know for sure.
+CLINIC_ENDPOINT_BUILD = "clinics-v4-outage-aware-2026-08-27"
+
 # Terms that reliably indicate government/public ownership in OSM data for
 # Ghanaian and West African facilities (Ministry of Health, regional/district
 # hospitals, teaching hospitals run by public universities, etc).
@@ -2862,12 +2870,21 @@ async def clinics_nearby(
     # error, now explicitly forbids caching so the browser is guaranteed
     # to hit the server every time.
     response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Clinics-Build"] = CLINIC_ENDPOINT_BUILD
+
+    # Unconditional entry log, before any validation/branching can raise —
+    # if a request reaches this line, this WILL appear in Render logs no
+    # matter what happens afterward. If a browser-visible request to this
+    # endpoint ever again produces no matching "clinic_request_received"
+    # log line, that is conclusive proof the request did not reach this
+    # process (edge/proxy/cache layer), not a bug in this function.
+    logger.info({"event": "clinic_request_received", "lat": lat, "lon": lon, "build": CLINIC_ENDPOINT_BUILD})
 
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
         raise HTTPException(
             status_code=400,
             detail="Invalid coordinates",
-            headers={"Cache-Control": "no-store"},
+            headers={"Cache-Control": "no-store", "X-Clinics-Build": CLINIC_ENDPOINT_BUILD},
         )
 
     # Cache key bumped to v3: the underlying query shape changed (equal
@@ -2900,7 +2917,11 @@ async def clinics_nearby(
             raise HTTPException(
                 status_code=503,
                 detail="Facility search is temporarily unavailable. Please try again in a moment.",
-                headers={"Retry-After": "5", "Cache-Control": "no-store"},
+                headers={
+                    "Retry-After": "5",
+                    "Cache-Control": "no-store",
+                    "X-Clinics-Build": CLINIC_ENDPOINT_BUILD,
+                },
             )
         raw_places = _extract_clinic_places_raw(fetch_result.elements)
         if raw_places:
@@ -2912,7 +2933,7 @@ async def clinics_nearby(
         raise HTTPException(
             status_code=404,
             detail="No hospitals, clinics, or pharmacies were found near this location.",
-            headers={"Cache-Control": "no-store"},
+            headers={"Cache-Control": "no-store", "X-Clinics-Build": CLINIC_ENDPOINT_BUILD},
         )
 
     # Distance is always computed fresh against this request's exact
