@@ -253,28 +253,12 @@ async function fetchNearbyClinicsOnce(lat, lon) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
 
-  // FIX: belt-and-suspenders cache defeat. The backend now sends
-  // Cache-Control: no-store, which is correct and sufficient for
-  // well-behaved browsers — but it relies on every layer between this
-  // device and Render honoring that header. Mobile carrier networks in
-  // particular sometimes run transparent HTTP caching proxies that key
-  // purely on the request URL and ignore response cache directives
-  // entirely. Appending a changing, meaningless query param makes every
-  // request's URL unique, which defeats that class of cache outright
-  // regardless of whether it respects Cache-Control — and explicit
-  // no-cache request headers cover browsers/proxies that do inspect them.
-  const cacheBuster = Date.now();
   let res;
   try {
     res = await fetch(
-      `${API_BASE}/clinics/nearby?lat=${lat}&lon=${lon}&_=${cacheBuster}`,
+      `${API_BASE}/clinics/nearby?lat=${lat}&lon=${lon}`,
       {
-        headers: {
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-          "Cache-Control": "no-cache",
-          Pragma: "no-cache",
-        },
-        cache: "no-store",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: controller.signal,
       }
     );
@@ -292,23 +276,25 @@ async function fetchNearbyClinicsOnce(lat, lon) {
     const body = await res.json().catch(() => ({}));
     const error = new Error(body.detail || `HTTP ${res.status}`);
     error.status = res.status;
-    // Surfaced only in dev tools, not to the user — lets you confirm from
-    // the browser console alone which backend build actually answered,
-    // without needing to open the Network tab.
-    error.build = res.headers.get("X-Clinics-Build") || "unknown";
     throw error;
   }
 
   const data = await res.json();
-  return (data.places || []).map((p) => ({
-    id: p.id,
-    name: p.name,
-    type: p.type,
-    address: p.address,
-    lat: p.lat,
-    lon: p.lon,
-    distanceKm: p.distance_km,
-  }));
+  return {
+    places: (data.places || []).map((p) => ({
+      id: p.id,
+      name: p.name,
+      type: p.type,
+      address: p.address,
+      lat: p.lat,
+      lon: p.lon,
+      distanceKm: p.distance_km,
+    })),
+    // "fallback" means the live map-data source was unavailable (a shared
+    // public rate limit, not a per-user problem) and the backend answered
+    // from its own curated list of major facilities instead.
+    source: data.source || "live",
+  };
 }
 
 /**
@@ -502,6 +488,7 @@ export default function ClinicFinder({ onClose }) {
   const [refining, setRefining] = useState(false);
   const [resultsUpdating, setResultsUpdating] = useState(false);
   const [clinics, setClinics] = useState([]);
+  const [resultSource, setResultSource] = useState("live");
 
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
@@ -531,7 +518,7 @@ export default function ClinicFinder({ onClose }) {
     }
 
     try {
-      const places = await fetchNearbyClinics(lat, lon, {
+      const { places, source } = await fetchNearbyClinics(lat, lon, {
         // A transient failure (network blip, 5xx, backend 504) is being
         // retried automatically — surface that quietly instead of the
         // person staring at an unexplained delay past the usual load time.
@@ -542,11 +529,12 @@ export default function ClinicFinder({ onClose }) {
         },
       });
       setClinics(places);
+      setResultSource(source);
       setStatus("ready");
       setErrorMsg("");
       setSearchNote("");
     } catch (err) {
-      console.error("ClinicFinder: search failed:", err.message, "| backend build:", err.build || "n/a");
+      console.error("ClinicFinder: search failed:", err.message);
       if (!background) {
         setStatus("error");
         setSearchNote("");
@@ -871,6 +859,13 @@ export default function ClinicFinder({ onClose }) {
                 <div className="cf-updating-banner">
                   <div className="cf-spinner cf-spinner-sm" />
                   Updating results for your exact location…
+                </div>
+              )}
+
+              {!resultsUpdating && resultSource === "fallback" && (
+                <div className="cf-updating-banner">
+                  <InfoIcon />
+                  Live map data is temporarily unavailable — showing well-known facilities near you.
                 </div>
               )}
 
