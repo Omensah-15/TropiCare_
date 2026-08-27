@@ -1581,6 +1581,7 @@ CLINIC_DATA_SOURCES: List[str] = [
     "https://overpass-api.de/api/interpreter",
     "https://overpass.kumi.systems/api/interpreter",
     "https://overpass.osm.ch/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
 ]
 HOSPITAL_SEARCH_RADIUS_M = 15000   # both categories now share one radius (see FIX #2 above)
 LOCAL_SEARCH_RADIUS_M    = 15000
@@ -1589,6 +1590,29 @@ LOCAL_OUT_LIMIT          = 60
 CLINIC_SOURCE_TIMEOUT_S  = 12      # per-mirror HTTP timeout
 CLINIC_OVERALL_TIMEOUT_S = 18      # total budget racing all mirrors — stays under the 30s app timeout
 CLINIC_CACHE_TTL_S       = 21600   # 6 hours
+
+# ---------------------------------------------------------------------
+# FIX #3 — "search fails 100% of the time, not just occasionally":
+# Every Overpass mirror was being called with aiohttp's default User-Agent
+# ("Python/3.x aiohttp/3.x"). As of the mirrors' current usage policies,
+# that generic, non-identifying User-Agent is rejected outright (403/406,
+# and on some mirrors 429) before the query is even evaluated — so every
+# single request to every single mirror failed the same way, every time,
+# for every user. _query_clinic_source correctly treated each of those as
+# a source failure and moved on, so _fetch_clinic_elements always ended
+# up with zero elements from all sources and the endpoint always fell
+# through to "No hospitals, clinics, or pharmacies were found near this
+# location." — a real 404, just never a true one. Overpass's own usage
+# policy requires a descriptive, contactable User-Agent identifying the
+# calling application; sending one is what actually restores a working
+# response instead of retrying/racing something that can never succeed.
+# ---------------------------------------------------------------------
+CLINIC_SOURCE_HEADERS = {
+    "Content-Type":   "text/plain",
+    "User-Agent":      f"{settings.site_name}/1.0 (+{settings.site_url}; clinic-finder)",
+    "Accept":          "application/json",
+    "Accept-Charset":  "utf-8",
+}
 
 # Terms that reliably indicate government/public ownership in OSM data for
 # Ghanaian and West African facilities (Ministry of Health, regional/district
@@ -1634,12 +1658,22 @@ async def _query_clinic_source(
         async with session.post(
             source,
             data=query,
-            headers={"Content-Type": "text/plain"},
+            headers=CLINIC_SOURCE_HEADERS,
             timeout=aiohttp.ClientTimeout(total=CLINIC_SOURCE_TIMEOUT_S),
         ) as resp:
             if resp.status != 200:
+                body_preview = ""
+                try:
+                    body_preview = (await resp.text())[:200]
+                except Exception:
+                    pass
                 CLINIC_SOURCE_ERRORS.labels(source=source, reason=f"http_{resp.status}").inc()
-                logger.warning({"event": "clinic_source_bad_status", "source": source, "status": resp.status})
+                logger.warning({
+                    "event": "clinic_source_bad_status",
+                    "source": source,
+                    "status": resp.status,
+                    "body_preview": body_preview,
+                })
                 return None
             data = await resp.json()
             elements = data.get("elements", [])
