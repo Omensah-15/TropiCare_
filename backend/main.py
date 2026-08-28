@@ -15,7 +15,6 @@ import math
 import os
 import re
 import secrets
-import socket
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -142,6 +141,16 @@ class Settings(BaseSettings):
     facebook_app_id: str     = ""
     facebook_app_secret: str = ""
     apple_client_id: str     = ""
+
+    # -------------------------------------------------------------
+    # CLINIC FINDER (GEOAPIFY)
+    # -------------------------------------------------------------
+    # Used by the /api/v1/clinics/nearby route to query Geoapify's Places
+    # API for nearby hospitals, clinics, pharmacies, and dentists/doctors'
+    # offices. Read from the GEOAPIFY_API_KEY environment variable; get a
+    # free-tier key at https://www.geoapify.com/. If left blank, the route
+    # logs a geoapify_error and falls back to the curated facility list.
+    geoapify_api_key: str = ""
 
     @property
     def origins_list(self) -> list[str]:
@@ -1531,140 +1540,68 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
 # -----------------------------------------------------------------
 # CLINIC FINDER (server-side proxy)
 #
-# The nearby-clinics feature was originally implemented by calling public
-# Overpass API mirrors directly from the browser. In production this proved
-# unreliable: overpass-api.de intermittently omits CORS headers on its GET
-# endpoint (the browser reports this as a CORS failure even though the
-# underlying cause is server-side, often rate limiting), and the remaining
-# free mirrors vary widely in latency and uptime. None of that is fixable
-# from client-side code.
+# HISTORY: this feature originally queried public Overpass API mirrors
+# (racing several free servers concurrently, each with its own timeout,
+# plus a curated fallback list for when every mirror failed at once). That
+# was unreliable in production for reasons entirely outside our control:
+# every app hosted on the same egress IP shares one Overpass rate-limit
+# quota, and overpass-api.de specifically failed outright on Render due to
+# a broken IPv6 route ("Cannot connect to host overpass-api.de:443
+# ssl:default [None]", failing instantly on every attempt).
 #
-# Routing the request through this backend removes the problem entirely:
-# server-to-server HTTP calls are not subject to CORS at all, and this
-# server controls its own timeouts, retries, and caching. Results are
-# cached in Redis per rounded coordinate so repeat lookups near the same
-# location do not re-hit the upstream data source.
+# The feature now calls Geoapify's Places API (https://www.geoapify.com/)
+# instead of Overpass. That removes the whole class of problems above at
+# the source: it's a single, key-authenticated, reliably-hosted API, so
+# there is no shared public quota to exhaust, no need to race multiple
+# mirrors against each other, and no IPv4-forcing workaround required.
 #
-# ---------------------------------------------------------------------
-# FIX #1 — reliability / "keeps needing a manual retry":
-# The previous implementation tried the 3 mirrors strictly one after the
-# other, each with its own timeout. In the worst case that is
-# len(CLINIC_DATA_SOURCES) * CLINIC_SOURCE_TIMEOUT_S seconds — with the
-# original values, 3 * 12s = 36s — which is LONGER than the 30s app-wide
-# request timeout enforced in `request_middleware`. That meant a single
-# slow or unreachable mirror could cause the whole request to be killed
-# with a 504 before the other, perfectly healthy mirrors ever got a turn,
-# surfacing as an error the user then had to manually retry. All mirrors
-# are now raced concurrently with one shared deadline
-# (CLINIC_OVERALL_TIMEOUT_S) safely under the app-wide timeout, so the
-# request succeeds as soon as the first mirror responds and a slow mirror
-# can never block a healthy one.
-#
-# FIX #2 — "skips clinics close by and finds ones far away":
-# Hospitals were searched over a 15km radius while clinics, doctors'
-# offices, and pharmacies were only searched over 6km. That meant a
-# pharmacy 7km away was invisible to the query entirely, while a hospital
-# 12km away was still fetched and could legitimately show up as
-# "Nearest" — not because it actually was closer, but because the truly
-# closer facility was never even requested. On top of that, both
-# categories were combined into a single Overpass query with one shared
-# `out center 60` cap, so in hospital-dense areas the hospital results
-# alone could exhaust that cap before a single clinic or pharmacy was
-# ever added to the output. Both categories now search the SAME radius,
-# in two separately labelled result sets with their own `out` limits, so
-# neither category can starve the other and nothing genuinely close to
-# the user is silently excluded. Final ordering is still computed purely
-# by real distance in `_rank_places_by_distance`, exactly like Google
-# Maps / Uber.
-#
-# FIX #3 — "404s every single time, for every user, everywhere":
-# All three public Overpass mirrors apply per-IP rate limiting, and that
-# quota is shared across every app hosted on the same egress IP — which,
-# on shared/free hosting tiers like Render, means our quota is also spent
-# by traffic from other, unrelated services. When it is exhausted, the
-# mirror still answers with HTTP 200 but an empty `elements: []` (or a
-# `remark` explaining the throttle), which every mirror hits identically
-# since they are all subject to the same public-abuse pressure. That is
-# indistinguishable, from this server's side, from "there is genuinely
-# nothing nearby" — so every request from that IP fails the exact same
-# way, which matches what was reported: not one unlucky user, everyone.
-# This has no fix on our end (it is the upstream free service being
-# overloaded, a widely-reported ongoing issue — see
-# community.openstreetmap.org, "Overpass API performance issues"), so
-# instead of leaving the feature hard-down whenever that shared quota is
-# spent, a small hand-curated list of major Ghanaian hospitals, clinics
-# and pharmacies (`_FALLBACK_FACILITIES` below) is used to answer the
-# request when every live mirror comes back empty. It is intentionally
-# never written to the live Redis cache, so the very next request still
-# tries the live mirrors first and switches back automatically the
-# moment they recover.
-# ---------------------------------------------------------------------
+# Results are still cached in Redis per rounded coordinate (unchanged),
+# and the curated `_FALLBACK_FACILITIES` list still exists as a safety
+# net for the — now much rarer — case where the Geoapify call itself
+# fails (missing/invalid API key, network error, non-200 response, or a
+# genuinely empty result for that area). It is intentionally never
+# written to the live Redis cache, so the very next request still tries
+# the live API first and switches back automatically the moment it
+# succeeds.
+# -----------------------------------------------------------------
 
-CLINIC_DATA_SOURCES: List[str] = [
-    "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.osm.ch/api/interpreter",
-    "https://overpass.openstreetmap.ru/api/interpreter",
-]
-HOSPITAL_SEARCH_RADIUS_M = 15000   # both categories now share one radius (see FIX #2 above)
-LOCAL_SEARCH_RADIUS_M    = 15000
-HOSPITAL_OUT_LIMIT       = 40      # each category gets its own guaranteed slice of results
-LOCAL_OUT_LIMIT          = 60
-CLINIC_SOURCE_TIMEOUT_S  = 7       # per-mirror HTTP timeout — kept short: with the fallback
-                                    # list now covering the miss case (see FIX #3), there is no
-                                    # upside to waiting a full 12s per mirror before giving up;
-                                    # production logs show overpass-api.de currently fails
-                                    # instantly (connection refused) while the other mirrors were
-                                    # the ones burning the full timeout, so shortening this gets
-                                    # people an answer noticeably faster on the all-mirrors-down path
-CLINIC_OVERALL_TIMEOUT_S = 10      # total budget racing all mirrors — stays under the 30s app timeout
-CLINIC_CACHE_TTL_S       = 21600   # 6 hours
+GEOAPIFY_PLACES_URL = "https://api.geoapify.com/v2/places"
 
-# FIX #5 (this pass): the Overpass query itself previously asked for
-# [timeout:25] while the HTTP client that sends it (CLINIC_SOURCE_TIMEOUT_S)
-# only waits 7s. Overpass would still be building the answer when the
-# client gave up and aborted the connection — a self-inflicted timeout on
-# every single request, which pushed every query onto the fallback path
-# and made the "hospital-only" fallback gap (FIX #4) visible on effectively
-# every search. The value Overpass is told to budget for must stay safely
-# BELOW the client-side timeout, not above it.
-CLINIC_OVERPASS_QUERY_TIMEOUT_S = 5
-CLINIC_RESULTS_LIMIT     = 15      # "genuinely nearby, combined across every category" — see FIX #2
+# healthcare.clinic_or_praxis covers general/walk-in clinics AND doctors'
+# offices in Geoapify's taxonomy (there is no separate "doctors" category);
+# healthcare.dentist is mapped onto the app's "Doctor's Office" label too,
+# since the app has no dedicated "Dentist" type — see
+# _classify_geoapify_facility below.
+GEOAPIFY_CATEGORIES = "healthcare.hospital,healthcare.clinic_or_praxis,healthcare.pharmacy,healthcare.dentist"
 
-# Identifies this app to Overpass mirrors, per their usage policy — requests
-# with no identifying User-Agent are the first to be deprioritized/dropped
-# under load, so this alone improves our odds during partial throttling.
-CLINIC_USER_AGENT = "TropiCare/1.0 (KNUST final-year project; nearby-clinics feature)"
+CLINIC_SEARCH_RADIUS_M   = 15000   # every facility type is searched over the same radius, so nothing
+                                    # genuinely close to the user is ever silently excluded
+CLINIC_FETCH_LIMIT       = 40      # over-fetch beyond CLINIC_RESULTS_LIMIT so ranking-by-distance has a
+                                    # real pool spanning every category to pick the nearest facilities
+                                    # from, instead of just whatever page the API happened to return first
+CLINIC_SOURCE_TIMEOUT_S  = 8       # a single authenticated call now — no per-mirror racing budget needed
+                                    # — stays comfortably under the 30s app-wide request timeout
+CLINIC_CACHE_TTL_S       = 21600   # 6 hours, unchanged
+CLINIC_RESULTS_LIMIT     = 15      # "genuinely nearby, combined across every category"
 
-# See FIX #3 above. Coordinates are approximate (city/campus level), which
-# is sufficient for a "here are known major facilities near you" fallback —
-# this list is deliberately small and Ghana-focused rather than a full
-# replacement data source. Kept tight (not stretched to cover "anywhere in
-# Ghana") so a person in Accra is never shown a Kumasi hospital as if it
-# were nearby — an honest "nothing found" is better than a misleading
-# "nearby" facility that's actually an hours-long drive away.
+# Coordinates are approximate (city/campus level), which is sufficient for
+# a "here are known major facilities near you" fallback — this list is
+# deliberately small and Ghana-focused rather than a full replacement data
+# source. Kept tight (not stretched to cover "anywhere in Ghana") so a
+# person in Accra is never shown a Kumasi hospital as if it were nearby —
+# an honest "nothing found" is better than a misleading "nearby" facility
+# that's actually an hours-long drive away.
 CLINIC_FALLBACK_MAX_DISTANCE_KM = 25
 
-# ---------------------------------------------------------------------
-# FIX #4 (this pass) — "it only searches for hospital":
-# The curated fallback list previously contained ONLY hospitals. That was
-# invisible on the happy path (live Overpass data includes every category),
-# but the moment live mirrors failed — which, per FIX #3 above, is the
-# *expected* outcome under shared-IP rate limiting, not a rare edge case —
-# every fallback response was 100% hospitals, spread across whole regions.
-# That is exactly the reported symptom: "spread hospitals, long distance,
-# only ever hospitals." The fallback list now includes verified pharmacies
-# and government polyclinics alongside hospitals, so a fallback response
-# still reflects "all kinds of health facilities," not just one category.
-#
-# Individual private doctors' offices are deliberately NOT included here:
-# unlike hospitals/polyclinics/pharmacy chains, standalone GP practices
-# have no reliably-documented, stable address/coordinate source, and
-# showing a wrong location for a doctor in a health app is worse than not
-# showing one at all. That category is served from live OSM data
-# (amenity=doctors is already in the Overpass query) and simply won't
-# appear when the fallback list is what's answering the request.
-# ---------------------------------------------------------------------
+# The curated fallback list spans hospitals, government polyclinics, and
+# pharmacies so a fallback answer still reflects "all kinds of health
+# facilities," not just one category. Individual private doctors' offices
+# are deliberately NOT included: unlike hospitals/polyclinics/pharmacy
+# chains, standalone GP practices have no reliably-documented, stable
+# address/coordinate source, and showing a wrong location for a doctor in
+# a health app is worse than not showing one at all. That category is
+# served from live Geoapify data and simply won't appear when the fallback
+# list is what's answering the request.
 _FALLBACK_FACILITIES: List[dict] = [
     # Greater Accra — Hospitals
     {"id": "fallback/korle-bu", "name": "Korle Bu Teaching Hospital", "type": "Government Hospital",
@@ -1707,7 +1644,10 @@ _FALLBACK_FACILITIES: List[dict] = [
 
 # Terms that reliably indicate government/public ownership in OSM data for
 # Ghanaian and West African facilities (Ministry of Health, regional/district
-# hospitals, teaching hospitals run by public universities, etc).
+# hospitals, teaching hospitals run by public universities, etc). Geoapify
+# passes the underlying OSM tags through under properties.datasource.raw
+# for OSM-sourced places, so these terms apply there exactly as they did
+# against raw Overpass tags.
 _GOV_OPERATOR_TYPE_TERMS = {"government", "public", "national", "state", "municipal"}
 _GOV_OPERATOR_NAME_HINTS = (
     "ministry of health", "moh", "government", "municipal", "district assembly",
@@ -1716,137 +1656,114 @@ _GOV_OPERATOR_NAME_HINTS = (
 _PRIVATE_OPERATOR_TYPE_TERMS = {"private", "ngo", "religious", "community", "cooperative"}
 
 
-def _build_clinic_query(lat: float, lon: float, hospital_radius_m: int, local_radius_m: int) -> str:
+def _classify_geoapify_facility(properties: dict) -> str:
     """
-    Builds two separately-labelled, separately-capped result sets — hospitals
-    and "local" facilities (clinics, doctors' offices, pharmacies) — instead
-    of one combined query sharing a single `out` limit. See FIX #2 above for
-    why a shared cap silently dropped nearby local facilities in
-    hospital-dense areas.
+    Maps a Geoapify Places `properties` object to a clean, user-facing
+    facility category, mirroring the app's existing type labels
+    ("Government Hospital", "Private Hospital", "Hospital", "Clinic",
+    "Doctor's Office", "Pharmacy"). Hospitals are further split into
+    Government / Private where OSM ownership tags (passed through under
+    properties.datasource.raw for OSM-sourced places) or well-known
+    operator name patterns make that determination possible; otherwise
+    they fall back to a neutral "Hospital" label rather than guessing
+    ownership without evidence.
     """
-    return (
-        f'[out:json][timeout:{CLINIC_OVERPASS_QUERY_TIMEOUT_S}];'
-        f'('
-        f'node["amenity"="hospital"](around:{hospital_radius_m},{lat},{lon});'
-        f'way["amenity"="hospital"](around:{hospital_radius_m},{lat},{lon});'
-        f')->.hospitals;'
-        f'('
-        f'node["amenity"="clinic"](around:{local_radius_m},{lat},{lon});'
-        f'way["amenity"="clinic"](around:{local_radius_m},{lat},{lon});'
-        f'node["amenity"="doctors"](around:{local_radius_m},{lat},{lon});'
-        f'node["amenity"="pharmacy"](around:{local_radius_m},{lat},{lon});'
-        f'node["healthcare"="pharmacy"](around:{local_radius_m},{lat},{lon});'
-        f')->.local;'
-        f'.hospitals out center {HOSPITAL_OUT_LIMIT};'
-        f'.local out center {LOCAL_OUT_LIMIT};'
-    )
+    categories = properties.get("categories") or []
+    raw = (properties.get("datasource") or {}).get("raw") or {}
+    raw_amenity = (raw.get("amenity") or "").strip().lower()
+    raw_healthcare = (raw.get("healthcare") or "").strip().lower()
+
+    def _has_category(prefix: str) -> bool:
+        return any(c == prefix or c.startswith(prefix + ".") for c in categories)
+
+    if raw_amenity == "hospital" or _has_category("healthcare.hospital"):
+        operator_type = (raw.get("operator:type") or raw.get("ownership") or "").strip().lower()
+        operator_name = (raw.get("operator") or properties.get("name") or "").strip().lower()
+
+        if operator_type in _GOV_OPERATOR_TYPE_TERMS:
+            return "Government Hospital"
+        if operator_type in _PRIVATE_OPERATOR_TYPE_TERMS:
+            return "Private Hospital"
+        if any(hint in operator_name for hint in _GOV_OPERATOR_NAME_HINTS):
+            return "Government Hospital"
+        return "Hospital"
+
+    # Geoapify has no standalone "doctors" category — general practices
+    # fall under healthcare.clinic_or_praxis (handled below as "Clinic")
+    # unless the underlying OSM tag says otherwise, or the place is a
+    # dentist, which the app's type set has no dedicated label for either.
+    if raw_amenity == "doctors" or _has_category("healthcare.dentist"):
+        return "Doctor's Office"
+
+    if raw_amenity == "pharmacy" or raw_healthcare == "pharmacy" or _has_category("healthcare.pharmacy"):
+        return "Pharmacy"
+
+    if raw_amenity == "clinic" or _has_category("healthcare.clinic_or_praxis"):
+        return "Clinic"
+
+    return "Health Facility"
 
 
-async def _query_clinic_source(
-    session: aiohttp.ClientSession, source: str, query: str
-) -> Optional[List[dict]]:
+async def _fetch_geoapify_features(lat: float, lon: float) -> List[dict]:
+    """
+    Single call to Geoapify Places — replaces the old multi-mirror Overpass
+    race entirely (see HISTORY above). No IPv4 forcing, no per-mirror
+    timeout budget, no User-Agent spoofing needed: Geoapify is a normal
+    key-authenticated HTTPS API, so one aiohttp call with one timeout is
+    all this needs. Returns raw GeoJSON features (or an empty list on any
+    failure) — extraction into the app's place shape happens separately in
+    _extract_geoapify_places, mirroring the old two-step fetch/extract
+    pattern.
+    """
+    if not settings.geoapify_api_key:
+        CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="missing_api_key").inc()
+        logger.warning({"event": "geoapify_error", "reason": "missing_api_key", "lat": lat, "lon": lon})
+        return []
+
+    params = {
+        "categories": GEOAPIFY_CATEGORIES,
+        "filter": f"circle:{lon},{lat},{CLINIC_SEARCH_RADIUS_M}",
+        "bias": f"proximity:{lon},{lat}",
+        "limit": str(CLINIC_FETCH_LIMIT),
+        "apiKey": settings.geoapify_api_key,
+    }
+
     try:
-        async with session.post(
-            source,
-            data=query,
-            headers={"Content-Type": "text/plain", "User-Agent": CLINIC_USER_AGENT},
-            timeout=aiohttp.ClientTimeout(total=CLINIC_SOURCE_TIMEOUT_S),
-        ) as resp:
-            if resp.status == 429:
-                # Explicit rate-limit response — distinct from a generic bad
-                # status so this is visible at a glance in metrics/logs
-                # instead of being lumped in with real server errors.
-                CLINIC_SOURCE_ERRORS.labels(source=source, reason="rate_limited").inc()
-                logger.warning({"event": "clinic_source_rate_limited", "source": source})
-                return None
-            if resp.status != 200:
-                CLINIC_SOURCE_ERRORS.labels(source=source, reason=f"http_{resp.status}").inc()
-                logger.warning({"event": "clinic_source_bad_status", "source": source, "status": resp.status})
-                return None
-            data = await resp.json()
-            elements = data.get("elements", [])
-            if not elements:
-                # Overpass mirrors under load often answer HTTP 200 with an
-                # empty result and a human-readable `remark` explaining why
-                # (commonly a quota/rate-limit message) rather than a 429 —
-                # surface that remark so it's diagnosable from server logs
-                # instead of looking identical to "genuinely nothing here".
-                remark = (data.get("remark") or "").strip()
-                reason = "rate_limited" if remark and ("rate" in remark.lower() or "quota" in remark.lower()) else "empty"
-                CLINIC_SOURCE_ERRORS.labels(source=source, reason=reason).inc()
-                if remark:
-                    logger.warning({"event": "clinic_source_remark", "source": source, "remark": remark})
-                return None
-            return elements
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                GEOAPIFY_PLACES_URL,
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=CLINIC_SOURCE_TIMEOUT_S),
+            ) as resp:
+                if resp.status != 200:
+                    body_snippet = (await resp.text())[:300]
+                    CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason=f"http_{resp.status}").inc()
+                    logger.warning({
+                        "event": "geoapify_error",
+                        "reason": f"http_{resp.status}",
+                        "status": resp.status,
+                        "lat": lat, "lon": lon,
+                        "body": body_snippet,
+                    })
+                    return []
+
+                data = await resp.json()
+                features = data.get("features", [])
+                if not features:
+                    # A genuinely empty result for this area is not an
+                    # error — no separate geoapify_error log for this case,
+                    # same nuance the old Overpass code applied to a
+                    # remark-free empty response.
+                    CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="empty").inc()
+                return features
     except asyncio.TimeoutError:
-        CLINIC_SOURCE_ERRORS.labels(source=source, reason="timeout").inc()
-        logger.warning({"event": "clinic_source_timeout", "source": source})
-        return None
+        CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="timeout").inc()
+        logger.warning({"event": "geoapify_error", "reason": "timeout", "lat": lat, "lon": lon})
+        return []
     except Exception as e:
-        CLINIC_SOURCE_ERRORS.labels(source=source, reason="error").inc()
-        logger.warning({"event": "clinic_source_error", "source": source, "error": str(e)})
-        return None
-
-
-async def _fetch_clinic_elements(lat: float, lon: float) -> List[dict]:
-    """
-    Races all mirror data sources concurrently instead of trying them one at
-    a time (see FIX #1 above). Returns as soon as the first mirror produces
-    usable elements; any mirror still in flight at that point is cancelled.
-    Bounded by CLINIC_OVERALL_TIMEOUT_S regardless of how many mirrors are
-    configured, so this function can never itself become the reason a
-    request exceeds the app-wide 30s timeout.
-    """
-    query = _build_clinic_query(lat, lon, HOSPITAL_SEARCH_RADIUS_M, LOCAL_SEARCH_RADIUS_M)
-
-    # force_ipv4: Render (and several other cloud hosts) route outbound
-    # traffic over IPv6 when a target advertises an AAAA record, even when
-    # that IPv6 path is broken end-to-end for that specific host. That
-    # produces exactly the symptom seen in production —
-    # "Cannot connect to host overpass-api.de:443 ssl:default [None]",
-    # failing instantly on every attempt — which looks like the mirror is
-    # down even though it's reachable over IPv4 the whole time. Forcing
-    # IPv4 here is what actually restores live data; the curated fallback
-    # list below stays in place purely as a safety net for the (separate,
-    # real) case where every mirror is genuinely rate-limited or down.
-    connector = aiohttp.TCPConnector(family=socket.AF_INET)
-
-    async with aiohttp.ClientSession(connector=connector) as session:
-        tasks: Dict[asyncio.Task, str] = {
-            asyncio.create_task(_query_clinic_source(session, source, query)): source
-            for source in CLINIC_DATA_SOURCES
-        }
-        loop = asyncio.get_event_loop()
-        deadline = loop.time() + CLINIC_OVERALL_TIMEOUT_S
-
-        try:
-            while tasks:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    break
-                done, _pending = await asyncio.wait(
-                    tasks.keys(), timeout=remaining, return_when=asyncio.FIRST_COMPLETED
-                )
-                if not done:
-                    break
-                for task in done:
-                    source = tasks.pop(task)
-                    try:
-                        result = task.result()
-                    except Exception as e:
-                        CLINIC_SOURCE_ERRORS.labels(source=source, reason="task_error").inc()
-                        logger.warning({"event": "clinic_source_task_error", "source": source, "error": str(e)})
-                        result = None
-                    if result:
-                        for remaining_task in tasks:
-                            remaining_task.cancel()
-                        return result
-        finally:
-            for task in tasks:
-                if not task.done():
-                    task.cancel()
-
-    return []
+        CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="error").inc()
+        logger.warning({"event": "geoapify_error", "reason": "error", "error": str(e), "lat": lat, "lon": lon})
+        return []
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -1860,78 +1777,48 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
-def _classify_facility(tags: dict) -> str:
+def _extract_geoapify_places(features: List[dict]) -> List[dict]:
     """
-    Maps raw OSM tags to a clean, user-facing facility category. Hospitals
-    are further split into Government / Private where OSM ownership tags
-    (or well-known operator name patterns used in Ghanaian OSM data) make
-    that determination possible; otherwise they fall back to a neutral
-    "Hospital" label rather than guessing.
-    """
-    amenity    = tags.get("amenity")
-    healthcare = tags.get("healthcare")
+    Extracts facility name/type/address/coordinates from a Geoapify Places
+    GeoJSON FeatureCollection into the SAME shape the rest of this feature
+    already expects — {id, name, type, address, phone, lat, lon} — so
+    _rank_places_by_distance, the Redis caching layer, and the
+    _FALLBACK_FACILITIES safety net all keep working completely unchanged.
 
-    if amenity == "hospital":
-        operator_type = (tags.get("operator:type") or tags.get("ownership") or "").strip().lower()
-        operator_name = (tags.get("operator") or tags.get("name") or "").strip().lower()
-
-        if operator_type in _GOV_OPERATOR_TYPE_TERMS:
-            return "Government Hospital"
-        if operator_type in _PRIVATE_OPERATOR_TYPE_TERMS:
-            return "Private Hospital"
-        if any(hint in operator_name for hint in _GOV_OPERATOR_NAME_HINTS):
-            return "Government Hospital"
-        return "Hospital"
-
-    if amenity == "clinic":
-        return "Clinic"
-    if amenity == "doctors":
-        return "Doctor's Office"
-    if amenity == "pharmacy" or healthcare == "pharmacy":
-        return "Pharmacy"
-    return "Health Facility"
-
-
-def _extract_clinic_places_raw(elements: List[dict]) -> List[dict]:
-    """
-    Extracts facility name/type/address/coordinates only — deliberately no
-    distance calculation here. This is the shape that gets cached, and a
-    cached facility list must remain valid no matter which nearby
-    coordinate a future request comes from. Baking a distance-from-point
-    into the cached value would silently return one person's distances to
-    a different person searching from a slightly different spot within
-    the same cached area — that is a correctness bug, not a caching
-    detail, so distance is always computed fresh in `_rank_places_by_distance`.
+    Deliberately no distance calculation here — this is the shape that
+    gets cached, and a cached facility list must remain valid no matter
+    which nearby coordinate a future request comes from. Distance is
+    always computed fresh in _rank_places_by_distance.
     """
     places: List[dict] = []
     seen: set = set()
 
-    for el in elements:
-        lat = el.get("lat")
-        lon = el.get("lon")
-        if lat is None or lon is None:
-            center = el.get("center") or {}
-            lat = center.get("lat")
-            lon = center.get("lon")
+    for feature in features:
+        properties = feature.get("properties") or {}
+        coords = (feature.get("geometry") or {}).get("coordinates") or []
+        lon = coords[0] if len(coords) > 0 else properties.get("lon")
+        lat = coords[1] if len(coords) > 1 else properties.get("lat")
         if lat is None or lon is None:
             continue
 
-        tags = el.get("tags", {})
-        name = tags.get("name") or tags.get("name:en") or "Unnamed facility"
-        facility_type = _classify_facility(tags)
+        name = properties.get("name") or "Unnamed facility"
+        facility_type = _classify_geoapify_facility(properties)
 
         address = ", ".join(
-            p for p in (tags.get("addr:street"), tags.get("addr:city") or tags.get("addr:suburb")) if p
-        )
-        phone = tags.get("phone") or tags.get("contact:phone") or ""
+            p for p in (properties.get("address_line1"), properties.get("address_line2")) if p
+        ) or (properties.get("formatted") or "")
 
+        raw = (properties.get("datasource") or {}).get("raw") or {}
+        phone = raw.get("phone") or raw.get("contact:phone") or properties.get("phone") or ""
+
+        place_id = properties.get("place_id") or feature.get("id")
         dedupe_key = f"{name}-{round(lat, 5)}-{round(lon, 5)}"
         if dedupe_key in seen:
             continue
         seen.add(dedupe_key)
 
         places.append({
-            "id":      f"{el.get('type')}/{el.get('id')}",
+            "id":      f"geoapify/{place_id}" if place_id else dedupe_key,
             "name":    name,
             "type":    facility_type,
             "address": address,
@@ -2880,8 +2767,9 @@ async def analyze(
 # ROUTES - Clinics
 #
 # See the "CLINIC FINDER (server-side proxy)" section above for why this
-# proxies to the upstream data source rather than the frontend calling it
-# directly, and for the two reliability/coverage fixes applied there.
+# proxies to Geoapify's Places API rather than the frontend calling a
+# public data source directly, and for the curated-fallback safety net
+# used when that call itself fails.
 # -----------------------------------------------------------------
 
 @app.get("/api/v1/clinics/nearby")
@@ -2895,12 +2783,11 @@ async def clinics_nearby(
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
         raise HTTPException(status_code=400, detail="Invalid coordinates")
 
-    # Cache key bumped to v3: the underlying query shape changed (equal
-    # radius for both categories, separately-capped result sets), so any
-    # entries written under the old v2 key/logic must never be served —
-    # they were generated with a query that could silently exclude nearby
-    # local facilities.
-    cache_key = f"clinics:elements:v3:{round(lat, 2)}:{round(lon, 2)}"
+    # Cache key bumped to v4: the underlying data source changed from
+    # Overpass to Geoapify, so any entries written under the old v3
+    # key/logic must never be served — they were generated by a different
+    # provider with different place IDs and coverage.
+    cache_key = f"clinics:elements:v4:{round(lat, 2)}:{round(lon, 2)}"
     cached = await cache_get(cache_key, key_type="clinics")
 
     raw_places: Optional[List[dict]] = None
@@ -2911,16 +2798,17 @@ async def clinics_nearby(
             raw_places = None
 
     if raw_places is None:
-        elements = await _fetch_clinic_elements(lat, lon)
-        raw_places = _extract_clinic_places_raw(elements)
+        features = await _fetch_geoapify_features(lat, lon)
+        raw_places = _extract_geoapify_places(features)
         if raw_places:
             await cache_set(cache_key, json.dumps(raw_places), ttl=CLINIC_CACHE_TTL_S)
 
-    # See FIX #3 above: every live mirror shares one public rate-limit
-    # budget, so it is expected — not exceptional — that all of them come
-    # back empty at once. Fall back to the curated list rather than
-    # dead-ending the whole feature. Deliberately not cached under the
-    # live cache key, so the next request still tries live mirrors first.
+    # Fall back to the curated list rather than dead-ending the whole
+    # feature whenever the live Geoapify call itself fails (missing/invalid
+    # API key, network error, non-200 response, or a genuinely empty
+    # result — see _fetch_geoapify_features above). Deliberately not
+    # cached under the live cache key, so the next request still tries the
+    # live API first and switches back automatically the moment it works.
     used_fallback = False
     if not raw_places:
         raw_places = [
@@ -2929,7 +2817,7 @@ async def clinics_nearby(
         ]
         if raw_places:
             used_fallback = True
-            CLINIC_SOURCE_ERRORS.labels(source="all_mirrors", reason="fallback_used").inc()
+            CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="fallback_used").inc()
             logger.info({
                 "event": "clinic_fallback_used",
                 "lat": lat, "lon": lon,
