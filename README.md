@@ -19,7 +19,7 @@ TropiCare helps individuals identify tropical disease risks through adaptive sym
 
 <div align="center">
 
-<img src="https://github.com/Omensah-15/TropiCare_/blob/180e4fb97ea3a38bc6fae90a6ae9e62d6c340c9d/assets/app_overview.png"
+<img src="https://github.com/Omensah-15/TropiCare_/blob/80033a3d52f672b459fbfedea78d75276443397d/assets/overview.png"
 alt="app">
 
 </div>
