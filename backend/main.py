@@ -1620,6 +1620,17 @@ CLINIC_SOURCE_TIMEOUT_S  = 7       # per-mirror HTTP timeout — kept short: wit
 CLINIC_OVERALL_TIMEOUT_S = 10      # total budget racing all mirrors — stays under the 30s app timeout
 CLINIC_CACHE_TTL_S       = 21600   # 6 hours
 
+# FIX #5 (this pass): the Overpass query itself previously asked for
+# [timeout:25] while the HTTP client that sends it (CLINIC_SOURCE_TIMEOUT_S)
+# only waits 7s. Overpass would still be building the answer when the
+# client gave up and aborted the connection — a self-inflicted timeout on
+# every single request, which pushed every query onto the fallback path
+# and made the "hospital-only" fallback gap (FIX #4) visible on effectively
+# every search. The value Overpass is told to budget for must stay safely
+# BELOW the client-side timeout, not above it.
+CLINIC_OVERPASS_QUERY_TIMEOUT_S = 5
+CLINIC_RESULTS_LIMIT     = 15      # "genuinely nearby, combined across every category" — see FIX #2
+
 # Identifies this app to Overpass mirrors, per their usage policy — requests
 # with no identifying User-Agent are the first to be deprioritized/dropped
 # under load, so this alone improves our odds during partial throttling.
@@ -1633,8 +1644,29 @@ CLINIC_USER_AGENT = "TropiCare/1.0 (KNUST final-year project; nearby-clinics fea
 # were nearby — an honest "nothing found" is better than a misleading
 # "nearby" facility that's actually an hours-long drive away.
 CLINIC_FALLBACK_MAX_DISTANCE_KM = 25
+
+# ---------------------------------------------------------------------
+# FIX #4 (this pass) — "it only searches for hospital":
+# The curated fallback list previously contained ONLY hospitals. That was
+# invisible on the happy path (live Overpass data includes every category),
+# but the moment live mirrors failed — which, per FIX #3 above, is the
+# *expected* outcome under shared-IP rate limiting, not a rare edge case —
+# every fallback response was 100% hospitals, spread across whole regions.
+# That is exactly the reported symptom: "spread hospitals, long distance,
+# only ever hospitals." The fallback list now includes verified pharmacies
+# and government polyclinics alongside hospitals, so a fallback response
+# still reflects "all kinds of health facilities," not just one category.
+#
+# Individual private doctors' offices are deliberately NOT included here:
+# unlike hospitals/polyclinics/pharmacy chains, standalone GP practices
+# have no reliably-documented, stable address/coordinate source, and
+# showing a wrong location for a doctor in a health app is worse than not
+# showing one at all. That category is served from live OSM data
+# (amenity=doctors is already in the Overpass query) and simply won't
+# appear when the fallback list is what's answering the request.
+# ---------------------------------------------------------------------
 _FALLBACK_FACILITIES: List[dict] = [
-    # Greater Accra
+    # Greater Accra — Hospitals
     {"id": "fallback/korle-bu", "name": "Korle Bu Teaching Hospital", "type": "Government Hospital",
      "address": "Guggisberg Ave, Accra", "phone": "", "lat": 5.5365, "lon": -0.2264},
     {"id": "fallback/ridge", "name": "Greater Accra Regional Hospital (Ridge Hospital)", "type": "Government Hospital",
@@ -1649,6 +1681,14 @@ _FALLBACK_FACILITIES: List[dict] = [
      "address": "Legon, Accra", "phone": "", "lat": 5.6506, "lon": -0.1868},
     {"id": "fallback/lekma", "name": "LEKMA Hospital", "type": "Government Hospital",
      "address": "Teshie, Accra", "phone": "", "lat": 5.6037, "lon": -0.1214},
+    # Greater Accra — Clinics (government polyclinics)
+    {"id": "fallback/kaneshie-polyclinic", "name": "Kaneshie Polyclinic", "type": "Clinic",
+     "address": "Palace St, Kaneshie, Accra", "phone": "0302228288", "lat": 5.5560, "lon": -0.2350},
+    # Greater Accra — Pharmacies (Ernest Chemists, Ghana's largest pharmacy chain)
+    {"id": "fallback/ernest-chemists-ring-road", "name": "Ernest Chemists — Ring Road Central", "type": "Pharmacy",
+     "address": "Ring Road Central, Accra", "phone": "0302908674", "lat": 5.5686, "lon": -0.2010},
+    {"id": "fallback/ernest-chemists-east-legon", "name": "Ernest Chemists — East Legon", "type": "Pharmacy",
+     "address": "Christian Center, Jungle Ave, East Legon, Accra", "phone": "", "lat": 5.6350, "lon": -0.1600},
     # Kumasi (KNUST)
     {"id": "fallback/kath", "name": "Komfo Anokye Teaching Hospital", "type": "Government Hospital",
      "address": "Bantama, Kumasi", "phone": "", "lat": 6.6975, "lon": -1.6154},
@@ -1656,6 +1696,8 @@ _FALLBACK_FACILITIES: List[dict] = [
      "address": "KNUST Campus, Kumasi", "phone": "", "lat": 6.6743, "lon": -1.5716},
     {"id": "fallback/kumasi-south", "name": "Kumasi South Hospital", "type": "Government Hospital",
      "address": "Atonsu, Kumasi", "phone": "", "lat": 6.6650, "lon": -1.6330},
+    {"id": "fallback/ernest-chemists-adum", "name": "Ernest Chemists — Adum", "type": "Pharmacy",
+     "address": "Adum, Kumasi", "phone": "", "lat": 6.6885, "lon": -1.6244},
     # Other regional capitals
     {"id": "fallback/tamale-teaching", "name": "Tamale Teaching Hospital", "type": "Government Hospital",
      "address": "Tamale", "phone": "", "lat": 9.4075, "lon": -0.8393},
@@ -1683,7 +1725,7 @@ def _build_clinic_query(lat: float, lon: float, hospital_radius_m: int, local_ra
     hospital-dense areas.
     """
     return (
-        f'[out:json][timeout:25];'
+        f'[out:json][timeout:{CLINIC_OVERPASS_QUERY_TIMEOUT_S}];'
         f'('
         f'node["amenity"="hospital"](around:{hospital_radius_m},{lat},{lon});'
         f'way["amenity"="hospital"](around:{hospital_radius_m},{lat},{lon});'
@@ -2904,7 +2946,7 @@ async def clinics_nearby(
     # coordinates, whether the facility list came from cache, a live
     # fetch, or the fallback list, so "nearest" is never stale relative to
     # where the person actually is right now.
-    ranked = _rank_places_by_distance(raw_places, lat, lon, limit=20)
+    ranked = _rank_places_by_distance(raw_places, lat, lon, limit=CLINIC_RESULTS_LIMIT)
     return {"places": ranked, "source": "fallback" if used_fallback else "live"}
 
 
