@@ -232,7 +232,7 @@ function animateMarkerTo(marker, toLatLng, duration = 650) {
 // connectivity hiccup self-heals instead of surfacing as an error the
 // person has to notice and tap through.
 // ─────────────────────────────────────────────
-const FETCH_TIMEOUT_MS = 25000;   // stays above the backend's ~10s clinic budget, below its 30s hard cutoff
+const FETCH_TIMEOUT_MS = 25000;   // stays above the backend's 18s clinic budget, below its 30s hard cutoff
 const FETCH_MAX_RETRIES = 2;      // total of 3 attempts
 const FETCH_RETRY_BASE_MS = 1200; // backoff: ~1.2s, then ~2.4s
 
@@ -280,21 +280,20 @@ async function fetchNearbyClinicsOnce(lat, lon) {
   }
 
   const data = await res.json();
-  return {
-    places: (data.places || []).map((p) => ({
-      id: p.id,
-      name: p.name,
-      type: p.type,
-      address: p.address,
-      lat: p.lat,
-      lon: p.lon,
-      distanceKm: p.distance_km,
-    })),
-    // "fallback" means the live map-data source was unavailable (a shared
-    // public rate limit, not a per-user problem) and the backend answered
-    // from its own curated list of major facilities instead.
-    source: data.source || "live",
-  };
+  const places = (data.places || []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    type: p.type,
+    address: p.address,
+    lat: p.lat,
+    lon: p.lon,
+    distanceKm: p.distance_km,
+  }));
+  // The backend tells us whether this answer came from live map data or
+  // the curated offline directory (used when every live mirror is down —
+  // see main.py's clinics_nearby route). Surfacing that honestly instead
+  // of presenting curated data as if it were identical to real-time data.
+  return { places, source: data.source === "fallback" ? "fallback" : "live" };
 }
 
 /**
@@ -324,6 +323,39 @@ async function fetchNearbyClinics(lat, lon, { onRetry } = {}) {
 
 function directionsUrl(originLat, originLon, destLat, destLon) {
   return `https://www.google.com/maps/dir/?api=1&origin=${originLat},${originLon}&destination=${destLat},${destLon}&travelmode=driving`;
+}
+
+// ─────────────────────────────────────────────
+// ROUTE LINE (embedded map)
+//
+// The map previously only ever dropped pins — there was no line showing
+// the actual road path to the nearest facility, which is what "show route"
+// means on a map. OSRM's public demo routing server returns a real
+// driving-route geometry for free, no API key required. This is only for
+// the line drawn on OUR embedded Leaflet map; the "Directions" buttons
+// still open Google Maps for turn-by-turn navigation, unchanged.
+// ─────────────────────────────────────────────
+const ROUTE_FETCH_TIMEOUT_MS = 8000;
+
+async function fetchDrivingRoute(originLat, originLon, destLat, destLon) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ROUTE_FETCH_TIMEOUT_MS);
+  try {
+    const url = `https://router.project-osrm.org/route/v1/driving/${originLon},${originLat};${destLon},${destLat}?overview=full&geometries=geojson`;
+    const res = await fetch(url, { signal: controller.signal });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const coords = data?.routes?.[0]?.geometry?.coordinates;
+    if (!Array.isArray(coords) || coords.length < 2) return null;
+    // OSRM returns [lon, lat] pairs — Leaflet wants [lat, lon].
+    return coords.map(([lon, lat]) => [lat, lon]);
+  } catch {
+    // Network hiccup or the free demo server is throttling us — the map
+    // still works fine with just pins, so this fails silently.
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -361,6 +393,8 @@ const injectClinicFinderStyles = () => {
     .cf-retry-btn{margin-top:6px;padding:11px 22px;border-radius:10px;border:none;font-weight:600;font-size:14px;cursor:pointer;background:linear-gradient(160deg,var(--teal,#0c8a7e) 0%,var(--teal-d,#0a6b62) 100%);color:#fff;}
     .cf-directions-btn{display:block;width:100%;text-align:center;padding:13px 18px;border-radius:10px;font-weight:600;font-size:14px;text-decoration:none;background:linear-gradient(160deg,var(--teal,#0c8a7e) 0%,var(--teal-d,#0a6b62) 100%);color:#fff;margin-bottom:14px;box-sizing:border-box;}
     .cf-updating-banner{display:flex;align-items:center;gap:9px;padding:9px 12px;margin-bottom:12px;background:var(--teal-xl,#eefcfa);border:1px solid var(--teal-l,#bdf0ea);border-radius:10px;font-size:12px;font-weight:600;color:var(--teal-dd,#074d47);}
+    .cf-fallback-banner{display:flex;align-items:flex-start;gap:8px;padding:10px 12px;margin-bottom:12px;background:var(--amber-l,#fef3e0);border:1px solid var(--amber,#e2a53a);border-radius:10px;font-size:12px;font-weight:600;color:var(--amber-d,#8a5c07);line-height:1.5;}
+    .cf-fallback-banner svg{flex-shrink:0;margin-top:1px;}
     .cf-list{display:flex;flex-direction:column;gap:8px;}
     .cf-item{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--border,#dde4ea);border-radius:14px;}
     .cf-item.nearest{border-color:var(--teal,#0c8a7e);background:var(--teal-xl,#eefcfa);}
@@ -488,11 +522,13 @@ export default function ClinicFinder({ onClose }) {
   const [refining, setRefining] = useState(false);
   const [resultsUpdating, setResultsUpdating] = useState(false);
   const [clinics, setClinics] = useState([]);
-  const [resultSource, setResultSource] = useState("live");
+  const [dataSource, setDataSource] = useState("live"); // "live" | "fallback" — see fetchNearbyClinicsOnce
 
   const mapRef = useRef(null);
   const mapInstance = useRef(null);
   const clinicLayerRef = useRef(null);
+  const routeLayerRef = useRef(null);
+  const routeRequestIdRef = useRef(0);
   const userMarkerRef = useRef(null);
   const accuracyCircleRef = useRef(null);
   const refineHandleRef = useRef(null);
@@ -529,7 +565,7 @@ export default function ClinicFinder({ onClose }) {
         },
       });
       setClinics(places);
-      setResultSource(source);
+      setDataSource(source);
       setStatus("ready");
       setErrorMsg("");
       setSearchNote("");
@@ -672,6 +708,7 @@ export default function ClinicFinder({ onClose }) {
       }).addTo(mapInstance.current);
 
       clinicLayerRef.current = L.layerGroup().addTo(mapInstance.current);
+      routeLayerRef.current = L.layerGroup().addTo(mapInstance.current);
 
       const marker = L.marker([position.lat, position.lon], {
         icon: USER_ICON,
@@ -770,6 +807,35 @@ export default function ClinicFinder({ onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, clinics]);
 
+  // ── Route line to the nearest facility — the actual road path, not
+  //    just two pins. Re-fetches only when the nearest facility or the
+  //    searched position changes; a stale in-flight request is dropped
+  //    if a newer one starts before it resolves. ──
+  useEffect(() => {
+    if (!mapInstance.current || !routeLayerRef.current) return;
+    routeLayerRef.current.clearLayers();
+    if (status !== "ready" || !position || clinics.length === 0) return;
+
+    const nearestFacility = clinics[0];
+    const requestId = ++routeRequestIdRef.current;
+
+    fetchDrivingRoute(position.lat, position.lon, nearestFacility.lat, nearestFacility.lon).then(
+      (latlngs) => {
+        // A newer request superseded this one, or the sheet/map closed
+        // while we were waiting — drop the stale result.
+        if (requestId !== routeRequestIdRef.current) return;
+        if (!latlngs || !mapInstance.current || !routeLayerRef.current) return;
+        L.polyline(latlngs, {
+          color: "#2f6fed",
+          weight: 4,
+          opacity: 0.75,
+          lineJoin: "round",
+        }).addTo(routeLayerRef.current);
+      }
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, clinics, position?.lat, position?.lon]);
+
   const nearest = clinics[0];
   const showMap = !!position;
 
@@ -855,17 +921,16 @@ export default function ClinicFinder({ onClose }) {
 
           {status === "ready" && (
             <>
+              {dataSource === "fallback" && (
+                <div className="cf-fallback-banner">
+                  <InfoIcon />
+                  <span>Showing our offline facility directory — live map data is temporarily unavailable, so distances may be less precise.</span>
+                </div>
+              )}
               {resultsUpdating && (
                 <div className="cf-updating-banner">
                   <div className="cf-spinner cf-spinner-sm" />
                   Updating results for your exact location…
-                </div>
-              )}
-
-              {!resultsUpdating && resultSource === "fallback" && (
-                <div className="cf-updating-banner">
-                  <InfoIcon />
-                  Live map data is temporarily unavailable — showing well-known facilities near you.
                 </div>
               )}
 
