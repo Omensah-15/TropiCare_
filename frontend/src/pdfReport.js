@@ -54,85 +54,136 @@ function getStoredUser() {
 // it maps to, without requiring an extra network round-trip at PDF time.
 // ─────────────────────────────────────────────
 const QUESTION_BANK = [
-  {id:"high_fever",question:"Do you have a high fever?",category:"General"},
-  {id:"mild_fever",question:"Do you have a mild fever?",category:"General"},
-  {id:"fatigue",question:"Do you feel unusually tired or weak?",category:"General"},
-  {id:"malaise",question:"Do you feel generally unwell?",category:"General"},
-  {id:"chills",question:"Do you have chills or shivering?",category:"General"},
-  {id:"sweating",question:"Do you have episodes of sweating?",category:"General"},
-  {id:"headache",question:"Do you have headaches?",category:"General"},
-  {id:"muscle_pain",question:"Do you have muscle pain or body aches?",category:"General"},
-  {id:"joint_pain",question:"Do you have joint pain?",category:"General"},
   {id:"back_pain",question:"Do you have back pain?",category:"General"},
-  {id:"cough",question:"Do you have a cough?",category:"Respiratory"},
-  {id:"phlegm",question:"Are you coughing up phlegm or mucus?",category:"Respiratory"},
-  {id:"rusty_sputum",question:"Are you coughing up rusty or brown-coloured sputum?",category:"Respiratory"},
+  {id:"chills",question:"Do you have chills or shivering?",category:"General"},
+  {id:"dehydration",question:"Do you feel severely dehydrated?",category:"General"},
+  {id:"fatigue",question:"Do you feel unusually tired or weak?",category:"General"},
+  {id:"headache",question:"Do you have headaches?",category:"General"},
+  {id:"high_fever",question:"Do you have a high fever?",category:"General"},
+  {id:"joint_pain",question:"Do you have joint pain?",category:"General"},
+  {id:"lethargy",question:"Do you feel a lack of energy or sluggishness?",category:"General"},
+  {id:"malaise",question:"Do you feel generally unwell or sick?",category:"General"},
+  {id:"mild_fever",question:"Do you have a mild fever?",category:"General"},
+  {id:"muscle_pain",question:"Do you have muscle pain or body aches?",category:"General"},
+  {id:"shivering",question:"Are you shivering?",category:"General"},
+  {id:"sweating",question:"Do you have episodes of sweating?",category:"General"},
   {id:"blood_in_sputum",question:"Are you coughing up blood?",category:"Respiratory"},
-  {id:"breathlessness",question:"Do you have difficulty breathing?",category:"Respiratory"},
+  {id:"breathlessness",question:"Do you have difficulty breathing or shortness of breath?",category:"Respiratory"},
   {id:"chest_pain",question:"Do you have chest pain?",category:"Respiratory"},
-  {id:"runny_nose",question:"Do you have a runny nose?",category:"Respiratory"},
+  {id:"congestion",question:"Do you have nasal or chest congestion?",category:"Respiratory"},
   {id:"continuous_sneezing",question:"Do you sneeze frequently?",category:"Respiratory"},
-  {id:"throat_irritation",question:"Do you have a sore or irritated throat?",category:"Respiratory"},
-  {id:"sinus_pressure",question:"Do you have sinus pressure or nasal congestion?",category:"Respiratory"},
-  {id:"watering_from_eyes",question:"Do you have watery eyes?",category:"Respiratory"},
+  {id:"cough",question:"Do you have a cough?",category:"Respiratory"},
   {id:"loss_of_smell",question:"Have you lost your sense of smell?",category:"Respiratory"},
-  {id:"nausea",question:"Do you feel nauseous?",category:"Digestive"},
-  {id:"vomiting",question:"Have you been vomiting?",category:"Digestive"},
-  {id:"diarrhoea",question:"Do you have diarrhoea?",category:"Digestive"},
-  {id:"stomach_pain",question:"Do you have stomach pain?",category:"Digestive"},
+  {id:"mucoid_sputum",question:"Are you coughing up thick, mucus-like sputum?",category:"Respiratory"},
+  {id:"phlegm",question:"Are you coughing up phlegm or mucus?",category:"Respiratory"},
+  {id:"runny_nose",question:"Do you have a runny nose?",category:"Respiratory"},
+  {id:"rusty_sputum",question:"Are you coughing up rusty or brown-coloured sputum?",category:"Respiratory"},
+  {id:"sinus_pressure",question:"Do you have sinus pressure or nasal congestion?",category:"Respiratory"},
+  {id:"throat_irritation",question:"Do you have a sore or irritated throat?",category:"Respiratory"},
+  {id:"watering_from_eyes",question:"Do you have watery eyes?",category:"Respiratory"},
   {id:"abdominal_pain",question:"Do you have abdominal or belly pain?",category:"Digestive"},
-  {id:"indigestion",question:"Do you have indigestion or acidity?",category:"Digestive"},
-  {id:"distension_of_abdomen",question:"Do you feel bloated or have a distended abdomen?",category:"Digestive"},
-  {id:"constipation",question:"Do you have constipation?",category:"Digestive"},
-  {id:"passage_of_gases",question:"Do you have excessive gas?",category:"Digestive"},
+  {id:"acidity",question:"Do you have acidity or a burning sensation in your stomach?",category:"Digestive"},
+  {id:"belly_pain",question:"Do you have persistent belly pain?",category:"Digestive"},
   {id:"bloody_stool",question:"Do you notice blood in your stool?",category:"Digestive"},
+  {id:"constipation",question:"Do you have constipation?",category:"Digestive"},
+  {id:"diarrhoea",question:"Do you have diarrhoea?",category:"Digestive"},
+  {id:"distention_of_abdomen",question:"Do you feel bloated or have a distended abdomen?",category:"Digestive"},
+  {id:"heartburn",question:"Do you have heartburn?",category:"Digestive"},
+  {id:"indigestion",question:"Do you have indigestion?",category:"Digestive"},
   {id:"loss_of_appetite",question:"Have you lost your appetite?",category:"Digestive"},
+  {id:"nausea",question:"Do you feel nauseous?",category:"Digestive"},
+  {id:"passage_of_gases",question:"Do you have excessive gas?",category:"Digestive"},
   {id:"stomach_bleeding",question:"Do you have stomach bleeding?",category:"Digestive"},
-  {id:"yellowish_skin",question:"Is your skin yellowish or jaundiced?",category:"Liver"},
-  {id:"yellowing_of_eyes",question:"Are the whites of your eyes turning yellow?",category:"Liver"},
+  {id:"stomach_pain",question:"Do you have stomach pain?",category:"Digestive"},
+  {id:"sunken_eyes",question:"Do your eyes look sunken?",category:"Digestive"},
+  {id:"swelling_of_stomach",question:"Is your stomach area swollen?",category:"Digestive"},
+  {id:"ulcers_on_tongue",question:"Do you have ulcers on your tongue?",category:"Digestive"},
+  {id:"vomiting",question:"Have you been vomiting?",category:"Digestive"},
+  {id:"acute_liver_failure",question:"Do you have confusion, severe swelling, or very dark urine along with yellowing of your skin or eyes?",category:"Liver"},
   {id:"dark_urine",question:"Is your urine dark or tea-coloured?",category:"Liver"},
-  {id:"yellow_urine",question:"Is your urine unusually yellow?",category:"Liver"},
-  {id:"internal_itching",question:"Do you experience internal itching?",category:"Liver"},
-  {id:"acute_liver_failure",question:"Do you have signs of acute liver failure?",category:"Liver"},
   {id:"fluid_overload",question:"Do you have abnormal body swelling or fluid retention?",category:"Liver"},
-  {id:"itching",question:"Do you have itchy skin?",category:"Skin"},
-  {id:"skin_rash",question:"Do you have a skin rash?",category:"Skin"},
-  {id:"red_spots_over_body",question:"Do you have red spots on your body?",category:"Skin"},
-  {id:"nodal_skin_eruptions",question:"Do you have nodules or skin eruptions?",category:"Skin"},
+  {id:"internal_itching",question:"Do you experience internal itching?",category:"Liver"},
+  {id:"yellow_urine",question:"Is your urine unusually yellow?",category:"Liver"},
+  {id:"yellowing_of_eyes",question:"Are the whites of your eyes turning yellow?",category:"Liver"},
+  {id:"yellowish_skin",question:"Is your skin yellowish or jaundiced?",category:"Liver"},
+  {id:"blackheads",question:"Do you have blackheads?",category:"Skin"},
+  {id:"blister",question:"Do you have fluid-filled blisters?",category:"Skin"},
+  {id:"bruising",question:"Do you bruise easily?",category:"Skin"},
   {id:"dischromic_patches",question:"Do you have discoloured patches on your skin?",category:"Skin"},
+  {id:"itching",question:"Do you have itchy skin?",category:"Skin"},
+  {id:"nodal_skin_eruptions",question:"Do you have nodules or skin eruptions?",category:"Skin"},
+  {id:"pus_filled_pimples",question:"Do you have pus-filled pimples?",category:"Skin"},
+  {id:"red_sore_around_nose",question:"Do you have red sores around your nose or mouth?",category:"Skin"},
+  {id:"red_spots_over_body",question:"Do you have red spots on your body?",category:"Skin"},
+  {id:"scurring",question:"Do you have scarring on your skin?",category:"Skin"},
+  {id:"silver_like_dusting",question:"Do you have silvery, scale-like patches on your skin?",category:"Skin"},
+  {id:"skin_peeling",question:"Is your skin peeling?",category:"Skin"},
+  {id:"skin_rash",question:"Do you have a skin rash?",category:"Skin"},
+  {id:"yellow_crust_ooze",question:"Do your skin sores ooze a yellow crust?",category:"Skin"},
+  {id:"blurred_and_distorted_vision",question:"Do you have blurred or distorted vision?",category:"Eyes"},
+  {id:"pain_behind_the_eyes",question:"Do you have pain behind your eyes?",category:"Eyes"},
+  {id:"puffy_face_and_eyes",question:"Do you have puffiness around your face or eyes?",category:"Eyes"},
   {id:"redness_of_eyes",question:"Do you have red or irritated eyes?",category:"Eyes"},
-  {id:"blurred_vision",question:"Do you have blurred or distorted vision?",category:"Eyes"},
-  {id:"pain_behind_eyes",question:"Do you have pain behind your eyes?",category:"Eyes"},
-  {id:"burning_micturition",question:"Do you feel a burning sensation when urinating?",category:"Urinary"},
-  {id:"urinating_frequently",question:"Do you urinate much more than usual?",category:"Urinary"},
-  {id:"continuous_feel_of_urine",question:"Do you have a persistent urge to urinate?",category:"Urinary"},
+  {id:"visual_disturbances",question:"Do you have visual disturbances, such as flashing lights or blind spots?",category:"Eyes"},
+  {id:"abnormal_menstruation",question:"Have you noticed abnormal or irregular menstrual periods?",category:"Urinary"},
   {id:"bladder_discomfort",question:"Do you have bladder discomfort?",category:"Urinary"},
+  {id:"burning_micturition",question:"Do you feel a burning sensation when urinating?",category:"Urinary"},
+  {id:"continuous_feel_of_urine",question:"Do you feel like you need to urinate again right after you've just gone?",category:"Urinary"},
   {id:"foul_smell_of_urine",question:"Does your urine have an unusual smell?",category:"Urinary"},
+  {id:"polyuria",question:"When you do urinate, are you passing much larger amounts than usual each time?",category:"Urinary"},
   {id:"spotting_urination",question:"Do you notice spotting during urination?",category:"Urinary"},
-  {id:"pain_anal_region",question:"Do you have pain in your anal region?",category:"Rectal"},
-  {id:"pain_bowel_movements",question:"Do you have pain during bowel movements?",category:"Rectal"},
-  {id:"irritation_anus",question:"Do you have irritation around the anus?",category:"Rectal"},
-  {id:"restlessness",question:"Do you feel restless or agitated?",category:"Neurological"},
-  {id:"mood_swings",question:"Have you been experiencing mood swings?",category:"Neurological"},
-  {id:"confusion",question:"Do you feel confused or disoriented?",category:"Neurological"},
+  {id:"urinating_a_lot",question:"Are you making more trips to the bathroom to urinate than usual?",category:"Urinary"},
+  {id:"irritation_in_anus",question:"Do you have irritation around the anus?",category:"Rectal"},
+  {id:"pain_during_bowel_movements",question:"Do you have pain during bowel movements?",category:"Rectal"},
+  {id:"pain_in_anal_region",question:"Do you have pain in your anal region?",category:"Rectal"},
+  {id:"altered_sensorium",question:"Do you feel confused or disoriented?",category:"Neurological"},
+  {id:"anxiety",question:"Have you been feeling anxious?",category:"Neurological"},
   {id:"coma",question:"Have you experienced any loss of consciousness?",category:"Neurological"},
+  {id:"depression",question:"Have you been feeling persistently low or depressed?",category:"Neurological"},
+  {id:"dizziness",question:"Do you feel dizzy?",category:"Neurological"},
+  {id:"irritability",question:"Have you been feeling unusually irritable?",category:"Neurological"},
+  {id:"lack_of_concentration",question:"Do you have trouble concentrating?",category:"Neurological"},
+  {id:"loss_of_balance",question:"Do you have trouble keeping your balance?",category:"Neurological"},
+  {id:"mood_swings",question:"Have you been experiencing mood swings?",category:"Neurological"},
+  {id:"muscle_weakness",question:"Do you have general muscle weakness?",category:"Neurological"},
+  {id:"restlessness",question:"Do you feel restless or agitated?",category:"Neurological"},
+  {id:"slurred_speech",question:"Have you had episodes of slurred speech?",category:"Neurological"},
+  {id:"spinning_movements",question:"Do you feel a spinning sensation (vertigo)?",category:"Neurological"},
+  {id:"toxic_look_typhos",question:"Do you look or feel severely, acutely ill?",category:"Neurological"},
+  {id:"unsteadiness",question:"Do you feel unsteady on your feet?",category:"Neurological"},
+  {id:"weakness_in_limbs",question:"Do you have weakness in your arms or legs?",category:"Neurological"},
+  {id:"weakness_of_one_body_side",question:"Do you have sudden weakness on one side of your body?",category:"Neurological"},
+  {id:"brittle_nails",question:"Do you have brittle nails?",category:"Metabolic"},
+  {id:"cold_hands_and_feets",question:"Do your hands and feet often feel unusually cold?",category:"Metabolic"},
+  {id:"drying_and_tingling_lips",question:"Do you have dry or tingling lips?",category:"Metabolic"},
+  {id:"enlarged_thyroid",question:"Have you noticed swelling in the front of your neck (thyroid area)?",category:"Metabolic"},
   {id:"excessive_hunger",question:"Are you excessively hungry?",category:"Metabolic"},
   {id:"increased_appetite",question:"Has your appetite increased significantly?",category:"Metabolic"},
   {id:"irregular_sugar_level",question:"Do you have an irregular blood sugar level?",category:"Metabolic"},
-  {id:"polyuria",question:"Do you urinate in unusually large amounts?",category:"Metabolic"},
-  {id:"dehydration",question:"Do you feel severely dehydrated?",category:"Metabolic"},
-  {id:"weight_loss",question:"Have you experienced unexplained weight loss?",category:"Metabolic"},
   {id:"obesity",question:"Are you significantly overweight?",category:"Metabolic"},
+  {id:"palpitations",question:"Do you have a racing or pounding heartbeat?",category:"Metabolic"},
+  {id:"swollen_extremeties",question:"Do you have swelling in your arms or legs?",category:"Metabolic"},
+  {id:"weight_gain",question:"Have you experienced unexplained weight gain?",category:"Metabolic"},
+  {id:"weight_loss",question:"Have you experienced unexplained weight loss?",category:"Metabolic"},
+  {id:"cramps",question:"Do you get muscle cramps?",category:"Cardiovascular"},
+  {id:"fast_heart_rate",question:"Do you have a fast or irregular heartbeat?",category:"Cardiovascular"},
+  {id:"prominent_veins_on_calf",question:"Do you have prominent, visible veins on your calves?",category:"Cardiovascular"},
+  {id:"swollen_blood_vessels",question:"Do you have visibly swollen or bulging blood vessels?",category:"Cardiovascular"},
+  {id:"swollen_legs",question:"Do you have swollen legs?",category:"Cardiovascular"},
+  {id:"hip_joint_pain",question:"Do you have hip joint pain?",category:"Musculoskeletal"},
+  {id:"inflammatory_nails",question:"Are your nails inflamed or discoloured?",category:"Musculoskeletal"},
+  {id:"knee_pain",question:"Do you have knee pain?",category:"Musculoskeletal"},
+  {id:"movement_stiffness",question:"Do you feel stiffness when moving?",category:"Musculoskeletal"},
+  {id:"neck_pain",question:"Do you have neck pain?",category:"Musculoskeletal"},
+  {id:"painful_walking",question:"Is walking painful for you?",category:"Musculoskeletal"},
+  {id:"small_dents_in_nails",question:"Do you have small dents or pits in your nails?",category:"Musculoskeletal"},
+  {id:"stiff_neck",question:"Do you have a stiff neck?",category:"Musculoskeletal"},
+  {id:"swelling_joints",question:"Do you have swelling in your joints?",category:"Musculoskeletal"},
   {id:"swelled_lymph_nodes",question:"Do you have swollen lymph nodes?",category:"Infection"},
-  {id:"swelling_stomach",question:"Is your stomach area swollen?",category:"Infection"},
-  {id:"fast_heart_rate",question:"Do you have a fast or irregular heartbeat?",category:"Infection"},
-  {id:"toxic_look",question:"Do you look or feel severely ill?",category:"Infection"},
-  {id:"swollen_lymph_neck",question:"Do you have swollen lymph nodes in the neck or armpit?",category:"Infection"},
-  {id:"loss_of_appetite_fever",question:"Have you lost your appetite alongside a fever?",category:"Infection"},
-  {id:"family_history",question:"Do you have a family history of this condition?",category:"History"},
-  {id:"blood_transfusion",question:"Have you received a blood transfusion recently?",category:"History"},
-  {id:"unsterile_injections",question:"Have you been injected with unsterile equipment?",category:"History"},
-  {id:"alcohol_history",question:"Do you have a history of heavy alcohol use?",category:"History"},
+  {id:"family_history",question:"Does anyone in your close family have asthma?",category:"History"},
+  {id:"history_of_alcohol_consumption",question:"Do you have a history of heavy alcohol use?",category:"History"},
+  {id:"receiving_blood_transfusion",question:"Have you received a blood transfusion recently?",category:"History"},
+  {id:"receiving_unsterile_injections",question:"Have you been injected with unsterile equipment?",category:"History"},
 ];
 
 const QUESTION_INDEX = Object.fromEntries(QUESTION_BANK.map((q) => [q.id, q]));
@@ -271,33 +322,30 @@ function drawHeader(doc, reportId, dateStr) {
 // PATIENT INFO
 // Merges the caller-supplied patient object with the stored session so
 // email / age / gender are always available, regardless of which screen
-// triggered the download.
+// triggered the download -- but ONLY for a self-report (the assessment is
+// about the logged-in user themself). When a `worker` is passed, this is a
+// report for a worker-entered patient, and any field that patient object
+// doesn't have must show "Not provided" -- it must never silently borrow
+// the worker's own stored email/age/gender.
 // ─────────────────────────────────────────────
-function drawPatientInfo(doc, patient, y) {
+function drawPatientInfo(doc, patient, worker, y) {
   const stored = getStoredUser();
+  const isSelfReport = !worker;
 
-  const name = field(
-    patient?.name,
-    patient?.full_name,
-    patient?.patient_name,
-    stored?.name
-  );
-  const email = field(
-    patient?.email,
-    patient?.patient_email,
-    stored?.email
-  );
-  const ageRaw = field(
-    patient?.age,
-    patient?.patient_age,
-    stored?.age
-  );
+  const name = isSelfReport
+    ? field(patient?.name, patient?.full_name, patient?.patient_name, stored?.name)
+    : field(patient?.name, patient?.full_name, patient?.patient_name);
+  const email = isSelfReport
+    ? field(patient?.email, patient?.patient_email, stored?.email)
+    : field(patient?.email, patient?.patient_email);
+  const ageRaw = isSelfReport
+    ? field(patient?.age, patient?.patient_age, stored?.age)
+    : field(patient?.age, patient?.patient_age);
   const age    = ageRaw !== "Not provided" ? `${ageRaw} years` : "Not provided";
-  const gender = field(
-    patient?.gender,
-    patient?.patient_gender,
-    stored?.gender
-  );
+  const gender = isSelfReport
+    ? field(patient?.gender, patient?.patient_gender, stored?.gender)
+    : field(patient?.gender, patient?.patient_gender);
+  const community = field(patient?.community, patient?.patient_community);
 
   y = sectionLabel(doc, "Patient Information", y);
 
@@ -307,13 +355,23 @@ function drawPatientInfo(doc, patient, y) {
     ["Age",           age   ],
     ["Gender",        gender],
   ];
+  // Community and "Screened By" only apply to a worker-entered patient's
+  // report -- a self-report (no separate patient, or the patient IS the
+  // logged-in user) never has these rows, so its layout stays exactly as
+  // it was before this change.
+  if (!isSelfReport) {
+    rows.push(["Community", community]);
+    if (worker?.name) rows.push(["Screened By", field(worker.name)]);
+  }
 
-  const colW = CONTENT_W / 2;
-  const rowH = 14;
+  const colW   = CONTENT_W / 2;
+  const rowH   = 14;
+  const nRows  = Math.ceil(rows.length / 2);
+  const boxH   = rowH * nRows;
 
   doc.setFillColor(...PANEL);
   doc.setDrawColor(...BORDER);
-  doc.roundedRect(MARGIN, y, CONTENT_W, rowH * 2, 2, 2, "FD");
+  doc.roundedRect(MARGIN, y, CONTENT_W, boxH, 2, 2, "FD");
 
   rows.forEach((row, i) => {
     const col    = i % 2;
@@ -333,7 +391,7 @@ function drawPatientInfo(doc, patient, y) {
     doc.text(valueLines[0], x, ry + 5.5);
   });
 
-  return y + rowH * 2 + 8;
+  return y + boxH + 8;
 }
 
 // ─────────────────────────────────────────────
@@ -390,6 +448,44 @@ function drawClinicalSummary(doc, diagnosis, y) {
     doc.text(explLines, MARGIN + 6, y + 30);
   }
 
+  return y + boxH + 8;
+}
+
+// ─────────────────────────────────────────────
+// RED FLAGS
+// High-visibility warning block for dangerous symptom patterns, rendered
+// right after the clinical summary so a clinician skimming the report
+// cannot miss it. Omitted entirely when there are no red flags, so a
+// report with none is byte-for-byte unchanged from before this feature.
+// ─────────────────────────────────────────────
+function drawRedFlags(doc, redFlags, y) {
+  if (!redFlags || redFlags.length === 0) return y;
+
+  const rgb = RISK_RGB.High;
+  const msgLines = redFlags.map((msg) => doc.splitTextToSize(String(msg), CONTENT_W - 20));
+  const totalLines = msgLines.reduce((sum, lines) => sum + lines.length, 0);
+  const boxH = 14 + totalLines * 4.6 + (redFlags.length - 1) * 2;
+
+  doc.setFillColor(253, 236, 236);
+  doc.setDrawColor(...rgb);
+  doc.setLineWidth(0.6);
+  doc.roundedRect(MARGIN, y, CONTENT_W, boxH, 2, 2, "FD");
+
+  doc.setFontSize(9.5);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...rgb);
+  doc.text("URGENT — SEEK CARE NOW", MARGIN + 6, y + 8);
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(8.5);
+  doc.setTextColor(...INK);
+  let ly = y + 15;
+  msgLines.forEach((lines) => {
+    doc.text(lines, MARGIN + 6, ly);
+    ly += lines.length * 4.6 + 2;
+  });
+
+  doc.setTextColor(...INK);
   return y + boxH + 8;
 }
 
@@ -750,7 +846,7 @@ function drawConfidenceChart(doc, trajectory, y) {
 // ─────────────────────────────────────────────
 // MAIN ENTRY POINT
 // ─────────────────────────────────────────────
-export function generateTropiCareReport({ patient, diagnosis }) {
+export function generateTropiCareReport({ patient, diagnosis, worker }) {
   if (!diagnosis) {
     throw new Error("No diagnosis data available to generate a report.");
   }
@@ -762,10 +858,13 @@ export function generateTropiCareReport({ patient, diagnosis }) {
   const dateStr  = fmtDate(diagnosis.created_at);
 
   let y = drawHeader(doc, reportId, dateStr);
-  y = drawPatientInfo(doc, patient, y);
+  y = drawPatientInfo(doc, patient, worker, y);
 
   y = ensureSpace(doc, y, 40);
   y = drawClinicalSummary(doc, diagnosis, y);
+
+  y = ensureSpace(doc, y, 20);
+  y = drawRedFlags(doc, diagnosis.red_flags, y);
 
   y = ensureSpace(doc, y, 30);
   y = drawDifferential(doc, diagnosis, y);
@@ -793,11 +892,12 @@ export function generateTropiCareReport({ patient, diagnosis }) {
 
   drawPageFooter(doc);
 
+  const isSelfReport = !worker;
   const stored   = getStoredUser();
-  const safeName = field(
-    patient?.name,
-    patient?.patient_name,
-    stored?.name
+  const safeName = (
+    isSelfReport
+      ? field(patient?.name, patient?.patient_name, stored?.name)
+      : field(patient?.name, patient?.patient_name, "Patient")
   ).replace(/[^a-z0-9]+/gi, "_");
   const fileDate = new Date().toISOString().slice(0, 10);
   doc.save(`TropiCare_Report_${safeName}_${fileDate}.pdf`);
