@@ -1391,6 +1391,14 @@ export default function App() {
   // profile (see HomeScreen's worker view). Null for every self-screening
   // flow, which is what keeps that flow byte-for-byte unchanged.
   const [assessmentPatient, setAssessmentPatient] = useState(null);
+  // App-level mirror of the logged-in account's role, used only to route
+  // the "Check" and "Records" bottom-nav tabs to WorkerHome for a health
+  // worker instead of the individual self-screening/records screens.
+  // HomeScreen keeps its own separate /user/profile fetch for the Home
+  // tab -- this is intentionally not shared with it. Stays null (falling
+  // through to today's patient-facing behavior everywhere) until the
+  // fetch resolves, and on any fetch failure.
+  const [role, setRole] = useState(null);
 
   // ── Theme ──────────────────────────────────
   const [theme, setTheme] = useState(() => {
@@ -1493,6 +1501,19 @@ export default function App() {
     };
     return () => { api.onUnauthorized = null; };
   }, [logout, toast, user]);
+
+  // App-level role fetch, used only to route the "Check" and "Records"
+  // bottom-nav tabs (see renderPage() below). Resilient by design: any
+  // failure just leaves role as null, which falls through to today's
+  // unchanged patient-facing behavior for both tabs.
+  useEffect(() => {
+    if (!user) { setRole(null); return; }
+    let cancelled = false;
+    api.get("/user/profile")
+      .then((data) => { if (!cancelled && !_loggingOut) setRole(data?.role || null); })
+      .catch(() => { if (!cancelled) setRole(null); });
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   // ── Assessment flow ────────────────────────
   const startAssessment = async (patient = null) => {
@@ -1656,9 +1677,13 @@ export default function App() {
       case "home":
         return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
       case "assessment":
-        return <AssessmentLanding onStart={startAssessment} />;
+        return role === "worker"
+          ? <WorkerHome user={user} onStart={startAssessment} />
+          : <AssessmentLanding onStart={startAssessment} />;
       case "records":
-        return <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
+        return role === "worker"
+          ? <WorkerHome user={user} onStart={startAssessment} />
+          : <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
       case "profile":
         return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
       case "settings":
