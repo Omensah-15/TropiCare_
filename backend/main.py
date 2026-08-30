@@ -32,6 +32,7 @@ from pythonjsonlogger import jsonlogger
 
 from fastapi import (
     BackgroundTasks,
+    Body,
     Depends,
     FastAPI,
     HTTPException,
@@ -328,7 +329,35 @@ class UserModel(Base):
     # NULL for accounts created with an email + password only.
     auth_provider = Column(String(20), nullable=True)
     oauth_sub     = Column(String(255), nullable=True)
+    # "patient" (default, self-screening individual) or "worker" (a health
+    # worker who can register patients and run assessments on their behalf).
+    # NOT NULL with a default so every pre-existing row remains valid with
+    # no backfill required.
+    role          = Column(String(20), nullable=False, default="patient")
     created_at    = Column(DateTime, default=datetime.utcnow)
+
+
+class PatientModel(Base):
+    """
+    A patient entered by a health worker (role="worker"). Distinct from
+    UserModel: a PatientModel row has no login of its own -- it exists only
+    so a worker can run and track assessments on someone else's behalf.
+    """
+    __tablename__ = "patients"
+
+    id                 = Column(Integer, primary_key=True, index=True)
+    worker_id          = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    name               = Column(String(255), nullable=False)
+    age                = Column(Integer, nullable=True)
+    gender             = Column(String(20), nullable=True)
+    community          = Column(String(255), nullable=True)
+    consent_given      = Column(Boolean, nullable=False, default=False)
+    consent_timestamp  = Column(DateTime, nullable=True)
+    created_at         = Column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        Index("ix_patients_worker_created", "worker_id", "created_at"),
+    )
 
 
 class DiagnosisModel(Base):
@@ -350,6 +379,11 @@ class DiagnosisModel(Base):
     ai_explanation        = Column(Text, nullable=True)
     ml_scores             = Column(Text, nullable=True)
     confidence_trajectory = Column(Text, nullable=True)
+    # Additive metadata only: who the assessment was ABOUT, when a worker
+    # ran it on behalf of a registered patient. user_id keeps its unchanged
+    # meaning -- the authenticated account that owns/ran the record. NULL
+    # here means today's self-screening flow, byte-for-byte unchanged.
+    patient_id            = Column(Integer, ForeignKey("patients.id"), nullable=True)
     created_at            = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -368,6 +402,8 @@ class SessionModel(Base):
     asked_questions = Column(Text, default="[]")
     trajectory      = Column(Text, default="[]")
     completed       = Column(Boolean, default=False)
+    # Same additive-nullable rule as DiagnosisModel.patient_id above.
+    patient_id      = Column(Integer, ForeignKey("patients.id"), nullable=True)
     created_at      = Column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -403,7 +439,7 @@ def run_schema_migrations() -> None:
         logger.error({"event": "schema_migration_inspect_failed", "error": str(e)})
         return
 
-    for model in (UserModel, SessionModel, DiagnosisModel):
+    for model in (UserModel, SessionModel, DiagnosisModel, PatientModel):
         table = model.__table__
         if table.name not in existing_tables:
             # Brand-new table: Base.metadata.create_all() already created it
@@ -1861,6 +1897,9 @@ class RegisterRequest(BaseModel):
     name:     str
     age:      Optional[str] = None
     gender:   Optional[str] = None
+    # Optional so any existing client that doesn't send it still registers
+    # exactly as before, defaulting to a self-screening "patient" account.
+    role:     Optional[str] = "patient"
 
 
 class LoginRequest(BaseModel):
@@ -1884,6 +1923,18 @@ class AppleAuthRequest(BaseModel):
 class AnswerRequest(BaseModel):
     question_id: str
     answer:      bool
+    # Optional, must match the session's own patient_id when provided (the
+    # session already carries it from /symptoms/start) -- included here so
+    # every step of the flow can be explicit about which patient it's for.
+    patient_id:  Optional[int] = None
+
+
+class PatientCreateRequest(BaseModel):
+    name:          str
+    age:           Optional[int] = None
+    gender:        Optional[str] = None
+    community:     Optional[str] = None
+    consent_given: bool = False
 
 
 class ProfileUpdate(BaseModel):
@@ -1924,6 +1975,14 @@ def verify_admin(user_id: int = Depends(verify_token)) -> int:
     if user_id != settings.admin_user_id:
         raise HTTPException(status_code=403, detail="Admin access only")
     return user_id
+
+
+def _require_worker(user_id: int, db: Session) -> UserModel:
+    """Loads the authenticated user and confirms they are a health worker."""
+    user = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not user or user.role != "worker":
+        raise HTTPException(status_code=403, detail="Worker access only")
+    return user
 
 
 def hash_pw(pw: str) -> str:
@@ -2453,12 +2512,16 @@ async def health_startup():
 async def register(request: Request, req: RegisterRequest, db: Session = Depends(get_db)):
     if db.query(UserModel).filter(UserModel.email == req.email).first():
         raise HTTPException(status_code=400, detail="Email already registered")
+    role = req.role or "patient"
+    if role not in ("patient", "worker"):
+        raise HTTPException(status_code=400, detail="role must be 'patient' or 'worker'")
     user = UserModel(
         email=_sanitize(req.email),
         name=_sanitize(req.name),
         pw_hash=hash_pw(req.password),
         age=req.age,
         gender=req.gender,
+        role=role,
     )
     db.add(user)
     db.commit()
@@ -2551,6 +2614,142 @@ async def auth_apple(request: Request, req: AppleAuthRequest, db: Session = Depe
 
 
 # -----------------------------------------------------------------
+# ROUTES - Patients (health worker feature)
+#
+# A PatientModel row represents someone a health worker (role="worker")
+# is screening on the worker's behalf. It has no login of its own. Every
+# endpoint below is scoped to worker_id == the authenticated worker, so a
+# worker can never see, list, or act on another worker's patients.
+# -----------------------------------------------------------------
+
+@app.post("/api/v1/patients", status_code=201)
+@limiter.limit("100/hour")
+async def create_patient(
+    request: Request,
+    req: PatientCreateRequest,
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    _require_worker(user_id, db)
+    if not req.consent_given:
+        raise HTTPException(status_code=400, detail="Patient consent is required")
+
+    patient = PatientModel(
+        worker_id=user_id,
+        name=_sanitize(req.name),
+        age=req.age,
+        gender=req.gender,
+        community=_sanitize(req.community) if req.community else None,
+        consent_given=True,
+        consent_timestamp=datetime.utcnow(),
+    )
+    db.add(patient)
+    db.commit()
+    db.refresh(patient)
+
+    return {
+        "id":                patient.id,
+        "name":              patient.name,
+        "age":               patient.age,
+        "gender":            patient.gender,
+        "community":         patient.community,
+        "consent_given":     patient.consent_given,
+        "consent_timestamp": patient.consent_timestamp.isoformat(),
+        "created_at":        patient.created_at.isoformat(),
+    }
+
+
+@app.get("/api/v1/patients")
+async def list_patients(
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    _require_worker(user_id, db)
+
+    patients = db.query(PatientModel).filter(PatientModel.worker_id == user_id).all()
+
+    risk_order = {"High": 0, "Medium": 1, "Low": 2, "None": 3}
+    result = []
+    for p in patients:
+        latest = (
+            db.query(DiagnosisModel)
+            .filter(DiagnosisModel.patient_id == p.id)
+            .order_by(DiagnosisModel.created_at.desc())
+            .first()
+        )
+        result.append({
+            "id":         p.id,
+            "name":       p.name,
+            "age":        p.age,
+            "gender":     p.gender,
+            "community":  p.community,
+            "created_at": p.created_at.isoformat(),
+            "latest_risk":          latest.risk if latest else None,
+            "latest_assessment_at": latest.created_at.isoformat() if latest else None,
+        })
+
+    # Stable multi-key sort: most-recent-first within each risk tier, then
+    # sorted highest-risk first overall (sort by least-significant key first).
+    result.sort(key=lambda r: r["latest_assessment_at"] or "", reverse=True)
+    result.sort(key=lambda r: risk_order.get(r["latest_risk"], 4))
+
+    return result
+
+
+@app.get("/api/v1/patients/{patient_id}")
+async def get_patient(
+    patient_id: int,
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    _require_worker(user_id, db)
+
+    patient = db.query(PatientModel).filter(
+        PatientModel.id == patient_id,
+        PatientModel.worker_id == user_id,
+    ).first()
+    if not patient:
+        raise HTTPException(status_code=403, detail="Not authorized for this patient")
+
+    diagnoses = (
+        db.query(DiagnosisModel)
+        .filter(DiagnosisModel.patient_id == patient.id)
+        .order_by(DiagnosisModel.id.desc())
+        .all()
+    )
+
+    return {
+        "id":                patient.id,
+        "name":              patient.name,
+        "age":               patient.age,
+        "gender":            patient.gender,
+        "community":         patient.community,
+        "consent_given":     patient.consent_given,
+        "consent_timestamp": patient.consent_timestamp.isoformat() if patient.consent_timestamp else None,
+        "created_at":        patient.created_at.isoformat(),
+        "history": [
+            {
+                "id":           d.id,
+                "disease":      d.disease,
+                "risk":         d.risk,
+                "confidence":   d.confidence,
+                "created_at":   d.created_at.isoformat(),
+                "recommendation": {
+                    "home_care": d.rec_home_care,
+                    "test":      d.rec_test,
+                    "doctor":    d.rec_doctor,
+                    "safety":    d.rec_safety,
+                },
+                "red_flags":       _load_json(d.rec_red_flags, []),
+                "explanation":     d.ai_explanation,
+                "active_symptoms": _load_json(d.active_symptoms, []),
+            }
+            for d in diagnoses
+        ],
+    }
+
+
+# -----------------------------------------------------------------
 # ROUTES - Assessment
 # -----------------------------------------------------------------
 
@@ -2558,13 +2757,24 @@ async def auth_apple(request: Request, req: AppleAuthRequest, db: Session = Depe
 @limiter.limit("5/second")
 async def start_assessment(
     request: Request,
+    patient_id: Optional[int] = Body(default=None, embed=True),
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
+    if patient_id is not None:
+        worker = _require_worker(user_id, db)
+        owned = db.query(PatientModel).filter(
+            PatientModel.id == patient_id,
+            PatientModel.worker_id == worker.id,
+        ).first()
+        if not owned:
+            raise HTTPException(status_code=403, detail="Not authorized for this patient")
+
     sid     = str(uuid.uuid4())
     session = SessionModel(
         session_id=sid,
         user_id=user_id,
+        patient_id=patient_id,
         answers=_dump_json({}),
         asked_questions=_dump_json([]),
         trajectory=_dump_json([]),
@@ -2598,6 +2808,9 @@ async def next_question(
     ).first()
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if req.patient_id is not None and req.patient_id != s.patient_id:
+        raise HTTPException(status_code=403, detail="patient_id does not match this session")
 
     answers = _load_json(s.answers, {})
     asked   = _load_json(s.asked_questions, [])
@@ -2653,6 +2866,7 @@ async def analyze(
     request: Request,
     session_id: str,
     background_tasks: BackgroundTasks,
+    patient_id: Optional[int] = Body(default=None, embed=True),
     user_id: int = Depends(verify_token),
     db: Session = Depends(get_db),
 ):
@@ -2668,6 +2882,9 @@ async def analyze(
     ).first()
     if not s:
         raise HTTPException(status_code=404, detail="Session not found")
+
+    if patient_id is not None and patient_id != s.patient_id:
+        raise HTTPException(status_code=403, detail="patient_id does not match this session")
 
     answers    = _load_json(s.answers, {})
     trajectory = _load_json(s.trajectory, [])
@@ -2718,6 +2935,7 @@ async def analyze(
     diag = DiagnosisModel(
         user_id               = user_id,
         session_id            = session_id,
+        patient_id            = s.patient_id,
         disease               = pred["disease"],
         risk                  = pred["risk"],
         confidence            = pred["confidence"],
@@ -2969,6 +3187,7 @@ async def get_profile(
         "name":             u.name,
         "age":              u.age,
         "gender":           u.gender,
+        "role":             u.role or "patient",
         "joined_at":        u.created_at.isoformat(),
         "assessment_count": count,
         "high_risk_count":  high,
@@ -3134,7 +3353,7 @@ async def sync_schema(admin_id: int = Depends(verify_admin)):
     run_schema_migrations()
     inspector = inspect(engine)
     report = {}
-    for model in (UserModel, SessionModel, DiagnosisModel):
+    for model in (UserModel, SessionModel, DiagnosisModel, PatientModel):
         table = model.__table__
         try:
             cols = {c["name"] for c in inspector.get_columns(table.name)}
