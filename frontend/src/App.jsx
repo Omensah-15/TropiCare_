@@ -1387,6 +1387,10 @@ export default function App() {
   const [analyzing,  setAnalyzing]  = useState(false);
   const [result,     setResult]     = useState(null);
   const [trajectory, setTrajectory] = useState([]);
+  // Set only when a health worker starts an assessment from a patient's
+  // profile (see HomeScreen's worker view). Null for every self-screening
+  // flow, which is what keeps that flow byte-for-byte unchanged.
+  const [assessmentPatient, setAssessmentPatient] = useState(null);
 
   // ── Theme ──────────────────────────────────
   const [theme, setTheme] = useState(() => {
@@ -1474,6 +1478,7 @@ export default function App() {
     setSessionId(null);
     setTrajectory([]);
     setDetailRec(null);
+    setAssessmentPatient(null);
     setPage("home");
     setUser(null);
     setNotif("");
@@ -1490,7 +1495,7 @@ export default function App() {
   }, [logout, toast, user]);
 
   // ── Assessment flow ────────────────────────
-  const startAssessment = async () => {
+  const startAssessment = async (patient = null) => {
     setAnswers({});
     setAsked([]);
     setQIdx(0);
@@ -1498,12 +1503,13 @@ export default function App() {
     setAnalyzing(false);
     setSessionId(null);
     setTrajectory([]);
+    setAssessmentPatient(patient);
 
     let firstQ = ALL_QUESTIONS[0];
     let sid    = null;
 
     try {
-      const data = await api.post("/symptoms/start", {});
+      const data = await api.post("/symptoms/start", patient?.id ? { patient_id: patient.id } : {});
       if (_loggingOut) return;
       sid    = data.session_id;
       firstQ = data.first_question || ALL_QUESTIONS[0];
@@ -1571,7 +1577,7 @@ export default function App() {
 
     if (sessionId) {
       try {
-        pred = await api.post(`/diagnosis/analyze?session_id=${sessionId}`, {});
+        pred = await api.post(`/diagnosis/analyze?session_id=${sessionId}`, assessmentPatient?.id ? { patient_id: assessmentPatient.id } : {});
         if (_loggingOut) return;
         savedToHistory = true;
       } catch (e) {
@@ -1604,6 +1610,7 @@ export default function App() {
     setQIdx(0);
     setSessionId(null);
     setTrajectory([]);
+    setAssessmentPatient(null);
     setPage("home");
   };
 
@@ -1624,7 +1631,16 @@ export default function App() {
   if (!user)     return <AuthScreen onLogin={login} toast={toast} />;
   if (analyzing) return <AnalyzingScreen />;
   if (page === "result" && result)
-    return <ResultScreen result={result} user={user} onReset={resetAssessment} onNewCheck={startAssessment} toast={toast} />;
+    return (
+      <ResultScreen
+        result={result}
+        user={user}
+        assessmentPatient={assessmentPatient}
+        onReset={resetAssessment}
+        onNewCheck={() => startAssessment(assessmentPatient)}
+        toast={toast}
+      />
+    );
   if (assActive && currentQ)
     return <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />;
 
@@ -1731,13 +1747,14 @@ function AuthScreen({ onLogin, toast }) {
   const [pw,           setPw]           = useState("");
   const [age,          setAge]          = useState("");
   const [gender,       setGender]       = useState("");
+  const [role,         setRole]         = useState("patient");
   const [showPw,       setShowPw]       = useState(false);
   const [loading,      setLoading]      = useState(false);
   const [socialLoading, setSocialLoading] = useState(null); // "google" | "facebook" | "apple" | null
 
   const switchMode = (m) => {
     setMode(m);
-    setName(""); setEmail(""); setPw(""); setAge(""); setGender("");
+    setName(""); setEmail(""); setPw(""); setAge(""); setGender(""); setRole("patient");
   };
 
   const submit = async () => {
@@ -1749,7 +1766,7 @@ function AuthScreen({ onLogin, toast }) {
       let data;
       if (mode === "register") {
         data = await api.post("/auth/register", {
-          email: email.trim(), password: pw, name: name.trim(), age, gender,
+          email: email.trim(), password: pw, name: name.trim(), age, gender, role,
         });
       } else {
         data = await api.post("/auth/login", { email: email.trim(), password: pw });
@@ -1911,6 +1928,27 @@ function AuthScreen({ onLogin, toast }) {
                 onChange={(e) => setName(e.target.value)} />
             </div>
           )}
+          {mode === "register" && (
+            <div className="field">
+              <label className="field-label">I'm using this for</label>
+              <div className="tabs">
+                <button
+                  type="button"
+                  className={`tab${role === "patient" ? " active" : ""}`}
+                  onClick={() => setRole("patient")}
+                >
+                  Myself
+                </button>
+                <button
+                  type="button"
+                  className={`tab${role === "worker" ? " active" : ""}`}
+                  onClick={() => setRole("worker")}
+                >
+                  I'm a health worker
+                </button>
+              </div>
+            </div>
+          )}
           <div className="field">
             <label className="field-label">Email Address</label>
             <div className="field-icon-wrap">
@@ -2048,6 +2086,13 @@ function HomeScreen({ userId, user, onStart, onNav }) {
     return () => { cancelled = true; };
   }, [userId]);
 
+  // Role-gated worker view. role === "patient" (or an older account with no
+  // role at all, which defaults to "patient" server-side) always falls
+  // through to the existing view below, completely untouched.
+  if (profile?.role === "worker") {
+    return <WorkerHome user={user} onStart={onStart} />;
+  }
+
   // Use profile API counts for accuracy (never limited by fetch page size)
   const totalAssessments = profile?.assessment_count ?? records.length;
   const highRiskCount    = profile?.high_risk_count  ?? records.filter((r) => r.risk === "High").length;
@@ -2152,6 +2197,315 @@ function HomeScreen({ userId, user, onStart, onNav }) {
       </div>
 
       <div style={{ height: 24 }} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// WORKER HOME
+// Shown instead of the personal HomeScreen above when the logged-in
+// account has role === "worker". Lists the worker's registered patients,
+// sorted highest-risk first (as returned by GET /patients), lets the
+// worker register a new patient, and opens a patient's history or starts
+// a new assessment on their behalf.
+// ─────────────────────────────────────────────
+function WorkerHome({ user, onStart }) {
+  const [view,          setView]          = useState("list"); // "list" | "new" | "detail"
+  const [patients,      setPatients]      = useState([]);
+  const [loading,       setLoading]       = useState(true);
+  const [error,         setError]         = useState(false);
+  const [selectedId,    setSelectedId]    = useState(null);
+
+  const loadPatients = async () => {
+    setLoading(true);
+    setError(false);
+    try {
+      const data = await api.get("/patients");
+      if (_loggingOut) return;
+      setPatients(Array.isArray(data) ? data : []);
+    } catch {
+      if (!_loggingOut) { setPatients([]); setError(true); }
+    } finally {
+      if (!_loggingOut) setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadPatients(); }, []);
+
+  if (view === "new") {
+    return (
+      <NewPatientForm
+        onCancel={() => setView("list")}
+        onCreated={() => { setView("list"); loadPatients(); }}
+      />
+    );
+  }
+
+  if (view === "detail" && selectedId) {
+    return (
+      <WorkerPatientDetail
+        patientId={selectedId}
+        onBack={() => { setView("list"); loadPatients(); }}
+        onStart={onStart}
+      />
+    );
+  }
+
+  return (
+    <div>
+      <div className="home-header">
+        <div>
+          <div className="greeting">{getGreeting()}</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, color: "var(--ink)" }}>
+            {(user?.name || "Health Worker").split(" ")[0]}
+          </div>
+        </div>
+        <div className="avatar">{(user?.name || "W")[0].toUpperCase()}</div>
+      </div>
+
+      <div className="section">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+          <div className="section-ttl" style={{ margin: 0 }}>
+            My Patients {loading ? "" : `(${patients.length})`}
+          </div>
+          <button className="btn btn-primary" onClick={() => setView("new")}>
+            <Icon name="activity" size={15} color="#fff" />
+            New Patient
+          </button>
+        </div>
+
+        {loading ? (
+          <div style={{ textAlign: "center", padding: "24px 0", color: "var(--muted)", fontSize: 13 }}>
+            Loading patients...
+          </div>
+        ) : error ? (
+          <div style={{ textAlign: "center", padding: "24px 0" }}>
+            <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 10 }}>
+              Could not load your patients. Check your connection.
+            </div>
+            <button className="btn btn-secondary" onClick={loadPatients}>Retry</button>
+          </div>
+        ) : patients.length === 0 ? (
+          <div className="card card-p" style={{ textAlign: "center", padding: "32px 20px" }}>
+            <div style={{ width: 56, height: 56, margin: "0 auto 14px" }}><IllusDoctor /></div>
+            <div style={{ fontSize: 14, fontWeight: 700, color: "var(--ink)", marginBottom: 6 }}>
+              No patients yet
+            </div>
+            <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 18, lineHeight: 1.55 }}>
+              Register your first patient to start running assessments on their behalf.
+            </div>
+            <button className="btn btn-primary" onClick={() => setView("new")}>
+              <Icon name="activity" size={15} color="#fff" />
+              New Patient
+            </button>
+          </div>
+        ) : (
+          <div className="rec-list">
+            {patients.map((p) => (
+              <div key={p.id} className="rec-card" onClick={() => { setSelectedId(p.id); setView("detail"); }}>
+                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[p.latest_risk] || "var(--teal)"}18` }}>
+                  <Icon name="user" size={18} color={RISK_COLOR[p.latest_risk] || "var(--teal)"} />
+                </div>
+                <div className="rec-info">
+                  <div className="rec-name">{p.name}</div>
+                  <div className="rec-meta">
+                    {[p.age ? `${p.age}y` : null, p.gender, p.community].filter(Boolean).join(" · ") || "No details on file"}
+                  </div>
+                </div>
+                {p.latest_risk && <span className={`badge badge-${p.latest_risk}`}>{p.latest_risk}</span>}
+                <Icon name="chevR" size={14} color="var(--muted-l)" />
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div style={{ height: 24 }} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// NEW PATIENT FORM (worker)
+// ─────────────────────────────────────────────
+function NewPatientForm({ onCancel, onCreated }) {
+  const [name,      setName]      = useState("");
+  const [age,       setAge]       = useState("");
+  const [gender,    setGender]    = useState("");
+  const [community, setCommunity] = useState("");
+  const [consent,   setConsent]   = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [err,       setErr]       = useState("");
+
+  const submit = async () => {
+    if (!name.trim()) { setErr("Please enter the patient's name."); return; }
+    if (!consent) { setErr("Patient consent is required before registering them."); return; }
+    setErr("");
+    setSubmitting(true);
+    try {
+      await api.post("/patients", {
+        name: name.trim(),
+        age: age ? Number(age) : null,
+        gender: gender || null,
+        community: community.trim() || null,
+        consent_given: true,
+      });
+      onCreated();
+    } catch (e) {
+      setErr(e.message || "Could not register this patient. Please try again.");
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+        <button onClick={onCancel} className="icon-btn"
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>
+          New Patient
+        </div>
+      </div>
+
+      <div className="card card-p">
+        <div className="field">
+          <label className="field-label">Full Name</label>
+          <input className="field-input" placeholder="e.g. Ama Owusu" value={name}
+            onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div className="grid-2">
+          <div className="field">
+            <label className="field-label">Age</label>
+            <input className="field-input" type="number" placeholder="25" value={age}
+              onChange={(e) => setAge(e.target.value)} />
+          </div>
+          <div className="field">
+            <label className="field-label">Gender</label>
+            <select className="field-input field-select" value={gender}
+              onChange={(e) => setGender(e.target.value)}>
+              <option value="">Select</option>
+              <option>Male</option>
+              <option>Female</option>
+              <option>Other</option>
+            </select>
+          </div>
+        </div>
+        <div className="field">
+          <label className="field-label">Community</label>
+          <input className="field-input" placeholder="e.g. Ayigya" value={community}
+            onChange={(e) => setCommunity(e.target.value)} />
+        </div>
+
+        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 4, cursor: "pointer" }}>
+          <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)}
+            style={{ marginTop: 3 }} />
+          <span style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
+            The patient has given consent to be registered and screened using TropiCare.
+          </span>
+        </label>
+
+        {err && (
+          <div className="disclaimer mt-2">
+            <Icon name="alert" size={13} color="var(--amber)" />
+            <p>{err}</p>
+          </div>
+        )}
+
+        <button className="btn btn-primary btn-full mt-3" onClick={submit} disabled={submitting || !consent}>
+          {submitting ? "Registering..." : "Register Patient"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// WORKER PATIENT DETAIL
+// Mirrors RecordDetail's shape (GET /patients/{id}) but for one of a
+// worker's registered patients: their info plus assessment history, with
+// a button to start a new assessment on their behalf.
+// ─────────────────────────────────────────────
+function WorkerPatientDetail({ patientId, onBack, onStart }) {
+  const [patient, setPatient] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(false);
+    api.get(`/patients/${patientId}`)
+      .then((d) => { if (!cancelled && !_loggingOut) setPatient(d); })
+      .catch(() => { if (!cancelled && !_loggingOut) setError(true); })
+      .finally(() => { if (!cancelled && !_loggingOut) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [patientId]);
+
+  if (loading) {
+    return (
+      <div style={{ textAlign: "center", padding: "48px 0", color: "var(--muted)", fontSize: 13 }}>
+        Loading patient...
+      </div>
+    );
+  }
+
+  if (error || !patient) {
+    return (
+      <div style={{ textAlign: "center", padding: "48px 0" }}>
+        <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 10 }}>Could not load this patient.</div>
+        <button className="btn btn-secondary" onClick={onBack}>Back</button>
+      </div>
+    );
+  }
+
+  const history = patient.history || [];
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
+        <button onClick={onBack} className="icon-btn"
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>
+          {patient.name}
+        </div>
+      </div>
+
+      <div className="card card-p mb-3">
+        <div className="t-subtitle" style={{ fontSize: 13 }}>
+          {[patient.age ? `${patient.age} years` : null, patient.gender, patient.community].filter(Boolean).join(" · ") || "No details on file"}
+        </div>
+      </div>
+
+      <button className="btn btn-primary btn-full btn-lg mb-4" onClick={() => onStart(patient)}>
+        <Icon name="activity" size={15} color="#fff" />
+        Start New Assessment
+      </button>
+
+      <div className="section-ttl mb-2">Assessment History</div>
+      {history.length === 0 ? (
+        <div className="card card-p" style={{ textAlign: "center", padding: "24px 20px" }}>
+          <div style={{ fontSize: 13, color: "var(--muted)" }}>No assessments recorded for this patient yet.</div>
+        </div>
+      ) : (
+        <div className="rec-list">
+          {history.map((h) => (
+            <div key={h.id} className="rec-card">
+              <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[h.risk] || "var(--teal)"}18` }}>
+                <Icon name="heart" size={18} color={RISK_COLOR[h.risk] || "var(--teal)"} />
+              </div>
+              <div className="rec-info">
+                <div className="rec-name">{h.disease || "No diagnosis"}</div>
+                <div className="rec-meta">{fmtDate(h.created_at)} · {Math.round((h.confidence || 0) * 100)}% match</div>
+              </div>
+              <span className={`badge badge-${h.risk}`}>{h.risk}</span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -2295,14 +2649,20 @@ function AnalyzingScreen() {
 // ─────────────────────────────────────────────
 // RESULT SCREEN
 // ─────────────────────────────────────────────
-function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
+function ResultScreen({ result, user, assessmentPatient, onReset, onNewCheck, toast }) {
   const [downloading, setDownloading] = useState(false);
   const [showClinicFinder, setShowClinicFinder] = useState(false);
+
+  const heading = assessmentPatient?.name ? `${assessmentPatient.name}'s Results` : "Your Result";
 
   const handleDownload = () => {
     setDownloading(true);
     try {
-      generateTropiCareReport({ patient: user, diagnosis: result });
+      if (assessmentPatient) {
+        generateTropiCareReport({ patient: assessmentPatient, diagnosis: result, worker: user });
+      } else {
+        generateTropiCareReport({ patient: user, diagnosis: result });
+      }
     } catch (e) {
       if (toast) toast("Could not generate the PDF report. Please try again.");
       console.error("PDF error:", e);
@@ -2334,7 +2694,7 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
     return (
       <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
         <div style={topBarStyle}>
-          <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Your Result</div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>{heading}</div>
           <CloseBtn />
         </div>
         <div style={{ maxWidth: 600, margin: "0 auto", padding: "48px 16px 64px", textAlign: "center" }}>
@@ -2372,12 +2732,11 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
   const scores = result.all_scores
     ? Object.entries(result.all_scores).filter(([d]) => d !== result.disease).slice(0, 5)
     : [];
-  const showClinicButton = risk === "High" || risk === "Medium";
 
   return (
     <div style={{ minHeight: "100vh", background: "var(--bg)" }}>
       <div style={topBarStyle}>
-        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>Your Result</div>
+        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>{heading}</div>
         <CloseBtn />
       </div>
 
@@ -2444,13 +2803,11 @@ function ResultScreen({ result, user, onReset, onNewCheck, toast }) {
           )}
         </div>
 
-        {/* Clinic finder — Medium and High risk only */}
-        {showClinicButton && (
-          <button className="btn btn-outline btn-full mb-4" onClick={() => setShowClinicFinder(true)}>
-            <Icon name="map" size={16} />
-            Find Nearby Clinics
-          </button>
-        )}
+        {/* Clinic finder — available at every risk level */}
+        <button className="btn btn-outline btn-full mb-4" onClick={() => setShowClinicFinder(true)}>
+          <Icon name="map" size={16} />
+          Find Nearby Clinics
+        </button>
 
         {/* Recommendations */}
         <div className="section-ttl mb-2">What to Do</div>
@@ -2693,7 +3050,6 @@ function RecordDetail({ record, onBack, toast }) {
   const mlScores = full.ml_scores
     ? Object.entries(full.ml_scores).filter(([d]) => d !== full.disease).slice(0, 5)
     : [];
-  const showClinicButton = full.risk === "High" || full.risk === "Medium";
 
   return (
     <div>
@@ -2730,13 +3086,11 @@ function RecordDetail({ record, onBack, toast }) {
           )}
         </div>
 
-        {/* Clinic finder — Medium and High risk only */}
-        {showClinicButton && (
-          <button className="btn btn-outline btn-full mb-4" onClick={() => setShowClinicFinder(true)}>
-            <Icon name="map" size={16} />
-            Find Nearby Clinics
-          </button>
-        )}
+        {/* Clinic finder — available at every risk level */}
+        <button className="btn btn-outline btn-full mb-4" onClick={() => setShowClinicFinder(true)}>
+          <Icon name="map" size={16} />
+          Find Nearby Clinics
+        </button>
 
         {/* Recommendations */}
         <div className="section-ttl mb-2">Recommendations</div>
@@ -3322,7 +3676,7 @@ function AboutScreen({ onBack }) {
     { icon: "shield",    color: "var(--purple)", bg: "var(--purple-l)", title: "Risk Stratification",          desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
     { icon: "heart",     color: "var(--red)",    bg: "var(--red-l)",    title: "AI-Powered Recommendations",   desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
     { icon: "clipboard", color: "var(--amber)",  bg: "var(--amber-l)",  title: "Assessment History",           desc: "All past results are stored securely so you and your care provider can track changes over time." },
-    { icon: "map",       color: "var(--teal)",   bg: "var(--teal-xl)",  title: "Nearby Clinic Finder",         desc: "For Medium and High risk results, locate nearby hospitals and clinics with one tap and get directions." },
+    { icon: "map",       color: "var(--teal)",   bg: "var(--teal-xl)",  title: "Nearby Clinic Finder",         desc: "Locate nearby hospitals and clinics with one tap and get directions, for any assessment result." },
     { icon: "user",      color: "var(--green)",  bg: "var(--green-l)",  title: "Built for West Africa",        desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
   ];
 
