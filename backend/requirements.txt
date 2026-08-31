@@ -21,3 +21,4 @@ aioredis
 redis[hiredis]
 scikit-learn==1.8.0
 xgboost==2.1.4
+email-validator
