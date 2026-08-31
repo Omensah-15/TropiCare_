@@ -1651,6 +1651,18 @@ export default function App() {
 
   if (!user)     return <AuthScreen onLogin={login} toast={toast} />;
   if (analyzing) return <AnalyzingScreen />;
+  // Reached from ResultScreen's "Register Next Patient" action (worker
+  // flow only) -- same pattern as the home dashboard's "Start a Check":
+  // register the new patient, then start their assessment immediately.
+  // startAssessment() below takes page/assActive over from here on its
+  // own, so there is no separate "back to home" step to wire up.
+  if (page === "register")
+    return (
+      <NewPatientForm
+        onCancel={() => setPage("home")}
+        onCreated={(created) => { if (created) startAssessment(created); }}
+      />
+    );
   if (page === "result" && result)
     return (
       <ResultScreen
@@ -1659,6 +1671,7 @@ export default function App() {
         assessmentPatient={assessmentPatient}
         onReset={resetAssessment}
         onNewCheck={() => startAssessment(assessmentPatient)}
+        onRegisterNext={() => setPage("register")}
         toast={toast}
       />
     );
@@ -3211,7 +3224,7 @@ function AnalyzingScreen() {
 // ─────────────────────────────────────────────
 // RESULT SCREEN
 // ─────────────────────────────────────────────
-function ResultScreen({ result, user, assessmentPatient, onReset, onNewCheck, toast }) {
+function ResultScreen({ result, user, assessmentPatient, onReset, onNewCheck, onRegisterNext, toast }) {
   const [downloading, setDownloading] = useState(false);
   const [showClinicFinder, setShowClinicFinder] = useState(false);
 
@@ -3428,10 +3441,23 @@ function ResultScreen({ result, user, assessmentPatient, onReset, onNewCheck, to
             <Icon name="download" size={15} />
             {downloading ? "Preparing PDF..." : "Download PDF Report"}
           </button>
-          <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>
-            <Icon name="activity" size={16} color="#fff" />
-            Start New Assessment
-          </button>
+          {/* For a worker-run check (assessmentPatient set), this moves on
+              to the *next* patient rather than repeating this one -- same
+              register-then-start flow as the dashboard's "Start a Check",
+              so a worker can screen several people back-to-back without
+              detouring through Home in between. Self-checks keep the
+              simple retake behaviour. */}
+          {assessmentPatient ? (
+            <button className="btn btn-primary btn-full btn-lg" onClick={onRegisterNext}>
+              <Icon name="activity" size={16} color="#fff" />
+              Register Next Patient
+            </button>
+          ) : (
+            <button className="btn btn-primary btn-full btn-lg" onClick={onNewCheck}>
+              <Icon name="activity" size={16} color="#fff" />
+              Start New Assessment
+            </button>
+          )}
           <button className="btn btn-secondary btn-full" onClick={onReset}>Return to Home</button>
         </div>
       </div>
