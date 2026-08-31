@@ -1502,15 +1502,31 @@ export default function App() {
     return () => { api.onUnauthorized = null; };
   }, [logout, toast, user]);
 
-  // App-level role fetch, used only to route the "Check" and "Records"
-  // bottom-nav tabs (see renderPage() below). Resilient by design: any
-  // failure just leaves role as null, which falls through to today's
-  // unchanged patient-facing behavior for both tabs.
+  // App-level profile hydration. Fetches the full stored profile (name,
+  // age, gender, role) and merges it onto the current session -- both to
+  // route the "Check" and "Records" bottom-nav tabs below (via `role`)
+  // and to lock in age/gender for the PDF report and every other screen
+  // that reads `user`. Runs on every login, registration, and restored
+  // session (it's keyed on user?.id, which changes for all three), so a
+  // session saved before age/gender were part of the auth response gets
+  // backfilled automatically the next time the app opens -- no re-login
+  // required. Resilient by design: any failure just leaves role as null
+  // and keeps whatever was already stored, which falls through to
+  // today's unchanged patient-facing behavior.
   useEffect(() => {
     if (!user) { setRole(null); return; }
     let cancelled = false;
     api.get("/user/profile")
-      .then((data) => { if (!cancelled && !_loggingOut) setRole(data?.role || null); })
+      .then((data) => {
+        if (cancelled || _loggingOut || !data) return;
+        setRole(data.role || null);
+        setUser((prev) => {
+          if (!prev) return prev;
+          const merged = { ...prev, ...data, token: prev.token };
+          Store.set(USER_KEY, merged);
+          return merged;
+        });
+      })
       .catch(() => { if (!cancelled) setRole(null); });
     return () => { cancelled = true; };
   }, [user?.id]);
@@ -1698,7 +1714,7 @@ export default function App() {
           ? <WorkerRecords user={user} onStart={startAssessment} onNav={setPage} toast={toast} />
           : <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
       case "profile":
-        return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
+        return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} onUserUpdate={setUser} />;
       case "settings":
         return (
           <SettingsScreen
@@ -3752,7 +3768,7 @@ function RecordDetail({ record, onBack, toast }) {
 // ─────────────────────────────────────────────
 // PROFILE SCREEN
 // ─────────────────────────────────────────────
-function ProfileScreen({ user, onLogout, onNav, toast }) {
+function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
   const [editing, setEditing] = useState(false);
   const [name,    setName]    = useState(user?.name   || "");
   const [age,     setAge]     = useState(user?.age    || "");
@@ -3775,8 +3791,14 @@ function ProfileScreen({ user, onLogout, onNav, toast }) {
       const data = await api.put("/user/profile", { name: name.trim(), age, gender });
       if (_loggingOut) return;
       setProfile((prev) => ({ ...prev, ...data }));
+      // Merge the backend's canonical response (not raw form state) onto
+      // whatever's already stored, then push it into the live session too
+      // -- so the PDF report and every other screen see the update
+      // immediately, not just after the next login or reload.
       const existing = Store.get(USER_KEY) || {};
-      Store.set(USER_KEY, { ...existing, name: name.trim(), age, gender });
+      const merged = { ...existing, ...data };
+      Store.set(USER_KEY, merged);
+      if (onUserUpdate) onUserUpdate(merged);
       toast("Profile updated.");
       setEditing(false);
     } catch (e) {
