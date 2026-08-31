@@ -1392,12 +1392,12 @@ export default function App() {
   // flow, which is what keeps that flow byte-for-byte unchanged.
   const [assessmentPatient, setAssessmentPatient] = useState(null);
   // App-level mirror of the logged-in account's role, used only to route
-  // the "Check" and "Records" bottom-nav tabs to WorkerHome for a health
-  // worker instead of the individual self-screening/records screens.
-  // HomeScreen keeps its own separate /user/profile fetch for the Home
-  // tab -- this is intentionally not shared with it. Stays null (falling
-  // through to today's patient-facing behavior everywhere) until the
-  // fetch resolves, and on any fetch failure.
+  // the "Check" and "Records" bottom-nav tabs to WorkerCheck/WorkerRecords
+  // for a health worker instead of the individual self-screening/records
+  // screens. HomeScreen keeps its own separate /user/profile fetch for the
+  // Home tab -- this is intentionally not shared with it. Stays null
+  // (falling through to today's patient-facing behavior everywhere) until
+  // the fetch resolves, and on any fetch failure.
   const [role, setRole] = useState(null);
 
   // ── Theme ──────────────────────────────────
@@ -1678,11 +1678,11 @@ export default function App() {
         return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
       case "assessment":
         return role === "worker"
-          ? <WorkerHome user={user} onStart={startAssessment} />
+          ? <WorkerCheck onStart={startAssessment} />
           : <AssessmentLanding onStart={startAssessment} />;
       case "records":
         return role === "worker"
-          ? <WorkerHome user={user} onStart={startAssessment} />
+          ? <WorkerRecords onStart={startAssessment} />
           : <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
       case "profile":
         return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
@@ -2115,7 +2115,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
   // role at all, which defaults to "patient" server-side) always falls
   // through to the existing view below, completely untouched.
   if (profile?.role === "worker") {
-    return <WorkerHome user={user} onStart={onStart} />;
+    return <WorkerDashboard user={user} onStart={onStart} onNav={onNav} />;
   }
 
   // Use profile API counts for accuracy (never limited by fetch page size)
@@ -2227,21 +2227,18 @@ function HomeScreen({ userId, user, onStart, onNav }) {
 }
 
 // ─────────────────────────────────────────────
-// WORKER HOME
-// Shown instead of the personal HomeScreen above when the logged-in
-// account has role === "worker". Lists the worker's registered patients,
-// sorted highest-risk first (as returned by GET /patients), lets the
-// worker register a new patient, and opens a patient's history or starts
-// a new assessment on their behalf.
+// WORKER PATIENTS — shared data hook
+// Single source of truth for a worker's registered patients (GET
+// /patients, sorted highest-risk first by the backend). Used by all
+// three worker-facing tabs below so the fetch/loading/error logic
+// exists in exactly one place instead of being duplicated per screen.
 // ─────────────────────────────────────────────
-function WorkerHome({ user, onStart }) {
-  const [view,          setView]          = useState("list"); // "list" | "new" | "detail"
-  const [patients,      setPatients]      = useState([]);
-  const [loading,       setLoading]       = useState(true);
-  const [error,         setError]         = useState(false);
-  const [selectedId,    setSelectedId]    = useState(null);
+function useWorkerPatients() {
+  const [patients, setPatients] = useState([]);
+  const [loading,  setLoading]  = useState(true);
+  const [error,    setError]    = useState(false);
 
-  const loadPatients = async () => {
+  const reload = async () => {
     setLoading(true);
     setError(false);
     try {
@@ -2255,13 +2252,51 @@ function WorkerHome({ user, onStart }) {
     }
   };
 
-  useEffect(() => { loadPatients(); }, []);
+  useEffect(() => { reload(); }, []);
+
+  return { patients, loading, error, reload };
+}
+
+// Shared patient-row renderer used by the Dashboard, Check, and Records
+// worker views so a patient's list entry looks and behaves identically
+// everywhere it appears. `onClick` decides what tapping the row does --
+// opening the patient's detail view (Dashboard/Records) or starting an
+// assessment for them directly (Check).
+function WorkerPatientRow({ patient, onClick }) {
+  return (
+    <div className="rec-card" onClick={() => onClick(patient)}>
+      <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[patient.latest_risk] || "var(--teal)"}18` }}>
+        <Icon name="user" size={18} color={RISK_COLOR[patient.latest_risk] || "var(--teal)"} />
+      </div>
+      <div className="rec-info">
+        <div className="rec-name">{patient.name}</div>
+        <div className="rec-meta">
+          {[patient.age ? `${patient.age}y` : null, patient.gender, patient.community].filter(Boolean).join(" · ") || "No details on file"}
+        </div>
+      </div>
+      {patient.latest_risk && <span className={`badge badge-${patient.latest_risk}`}>{patient.latest_risk}</span>}
+      <Icon name="chevR" size={14} color="var(--muted-l)" />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// WORKER DASHBOARD (Home tab)
+// A snapshot, not the full roster: quick stats, the highest-risk /
+// most-recently-screened patients, and fast paths into registering a
+// patient or starting a new check. The full patient list lives on the
+// Records tab (WorkerRecords) instead of being duplicated here.
+// ─────────────────────────────────────────────
+function WorkerDashboard({ user, onStart, onNav }) {
+  const { patients, loading, error, reload } = useWorkerPatients();
+  const [view,       setView]       = useState("dashboard"); // "dashboard" | "new" | "detail"
+  const [selectedId, setSelectedId] = useState(null);
 
   if (view === "new") {
     return (
       <NewPatientForm
-        onCancel={() => setView("list")}
-        onCreated={() => { setView("list"); loadPatients(); }}
+        onCancel={() => setView("dashboard")}
+        onCreated={() => { setView("dashboard"); reload(); }}
       />
     );
   }
@@ -2270,11 +2305,28 @@ function WorkerHome({ user, onStart }) {
     return (
       <WorkerPatientDetail
         patientId={selectedId}
-        onBack={() => { setView("list"); loadPatients(); }}
+        onBack={() => { setView("dashboard"); reload(); }}
         onStart={onStart}
       />
     );
   }
+
+  const highRiskCount = patients.filter((p) => p.latest_risk === "High").length;
+  const lastScreening = patients
+    .map((p) => p.latest_assessment_at)
+    .filter(Boolean)
+    .sort()
+    .reverse()[0];
+
+  const stats = [
+    { label: "Patients",  val: loading ? "..." : patients.length,                icon: "activity", color: "var(--teal)" },
+    { label: "High Risk", val: loading ? "..." : highRiskCount,                  icon: "alert",    color: "var(--red)"  },
+    { label: "Last Check",val: loading ? "..." : (lastScreening ? fmtDate(lastScreening) : "None"), icon: "calendar", color: "var(--blue)" },
+  ];
+
+  // Highest-risk / most-recent first, capped to a short snapshot list --
+  // patients is already sorted this way by GET /patients.
+  const recent = patients.slice(0, 5);
 
   return (
     <div>
@@ -2288,15 +2340,46 @@ function WorkerHome({ user, onStart }) {
         <div className="avatar">{(user?.name || "W")[0].toUpperCase()}</div>
       </div>
 
+      {/* Hero — routes to the Check tab's patient picker */}
+      <div className="hero-card">
+        <div className="hero-bg-icon"><Icon name="activity" size={110} color="#fff" /></div>
+        <div className="hero-eyebrow">Health Worker Screening</div>
+        <div className="hero-headline">Start a new patient check</div>
+        <button className="hero-btn" onClick={() => onNav("assessment")}>
+          Start a Check <Icon name="chevR" size={14} color="var(--teal-dd)" />
+        </button>
+      </div>
+
+      {/* Stats */}
+      <div className="stats-row">
+        {stats.map((s) => (
+          <div key={s.label} className="stat-card">
+            <div className="stat-icon" style={{ background: `${s.color}18` }}>
+              <Icon name={s.icon} size={16} color={s.color} />
+            </div>
+            <div className="stat-val t-mono">{s.val}</div>
+            <div className="stat-lbl">{s.label}</div>
+          </div>
+        ))}
+      </div>
+
       <div className="section">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-          <div className="section-ttl" style={{ margin: 0 }}>
-            My Patients {loading ? "" : `(${patients.length})`}
+          <div className="section-ttl" style={{ margin: 0 }}>Recent Patients</div>
+          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+            {patients.length > 0 && (
+              <button onClick={() => onNav("records")} style={{
+                fontSize: 12, color: "var(--teal-d)", background: "none", border: "none",
+                cursor: "pointer", fontWeight: 700, fontFamily: "var(--font)", padding: "4px 0",
+              }}>
+                View All
+              </button>
+            )}
+            <button className="btn btn-primary" onClick={() => setView("new")}>
+              <Icon name="activity" size={15} color="#fff" />
+              New Patient
+            </button>
           </div>
-          <button className="btn btn-primary" onClick={() => setView("new")}>
-            <Icon name="activity" size={15} color="#fff" />
-            New Patient
-          </button>
         </div>
 
         {loading ? (
@@ -2308,7 +2391,7 @@ function WorkerHome({ user, onStart }) {
             <div style={{ color: "var(--muted)", fontSize: 13, marginBottom: 10 }}>
               Could not load your patients. Check your connection.
             </div>
-            <button className="btn btn-secondary" onClick={loadPatients}>Retry</button>
+            <button className="btn btn-secondary" onClick={reload}>Retry</button>
           </div>
         ) : patients.length === 0 ? (
           <div className="card card-p" style={{ textAlign: "center", padding: "32px 20px" }}>
@@ -2326,26 +2409,196 @@ function WorkerHome({ user, onStart }) {
           </div>
         ) : (
           <div className="rec-list">
-            {patients.map((p) => (
-              <div key={p.id} className="rec-card" onClick={() => { setSelectedId(p.id); setView("detail"); }}>
-                <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[p.latest_risk] || "var(--teal)"}18` }}>
-                  <Icon name="user" size={18} color={RISK_COLOR[p.latest_risk] || "var(--teal)"} />
-                </div>
-                <div className="rec-info">
-                  <div className="rec-name">{p.name}</div>
-                  <div className="rec-meta">
-                    {[p.age ? `${p.age}y` : null, p.gender, p.community].filter(Boolean).join(" · ") || "No details on file"}
-                  </div>
-                </div>
-                {p.latest_risk && <span className={`badge badge-${p.latest_risk}`}>{p.latest_risk}</span>}
-                <Icon name="chevR" size={14} color="var(--muted-l)" />
-              </div>
+            {recent.map((p) => (
+              <WorkerPatientRow key={p.id} patient={p} onClick={(pt) => { setSelectedId(pt.id); setView("detail"); }} />
             ))}
           </div>
         )}
       </div>
 
       <div style={{ height: 24 }} />
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// WORKER CHECK (Check tab)
+// Exists to answer one question fast -- "who am I screening right now."
+// No dashboard framing: search or register a patient, then go straight
+// into the assessment for them. Tapping a row starts their assessment
+// directly rather than opening their history.
+// ─────────────────────────────────────────────
+function WorkerCheck({ onStart }) {
+  const { patients, loading, error, reload } = useWorkerPatients();
+  const [view,   setView]   = useState("picker"); // "picker" | "new"
+  const [search, setSearch] = useState("");
+
+  if (view === "new") {
+    return (
+      <NewPatientForm
+        onCancel={() => setView("picker")}
+        onCreated={(created) => {
+          setView("picker");
+          reload();
+          if (created) onStart(created);
+        }}
+      />
+    );
+  }
+
+  const filtered = patients.filter((p) =>
+    p.name.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div>
+      <div className="page-head">
+        <div className="t-display">Start a Check</div>
+        <div className="t-subtitle mt-1">Select a patient to begin, or register a new one.</div>
+      </div>
+      <div className="page-body">
+        <button className="btn btn-primary btn-full mb-3" onClick={() => setView("new")}>
+          <Icon name="activity" size={15} color="#fff" />
+          New Patient
+        </button>
+
+        {patients.length > 0 && (
+          <div className="search-wrap mb-3">
+            <span className="search-icon"><Icon name="search" size={15} /></span>
+            <input className="search-input" placeholder="Search patients by name..."
+              value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+        )}
+
+        {loading ? (
+          <div className="empty-state"><div className="t-subtitle">Loading patients...</div></div>
+        ) : error ? (
+          <div className="empty-state">
+            <Icon name="alert" size={36} color="var(--muted-l)" />
+            <div className="t-title">Could not load patients</div>
+            <div className="t-subtitle">Check your connection and try again.</div>
+            <button className="btn btn-primary mt-3" onClick={reload}>Retry</button>
+          </div>
+        ) : patients.length === 0 ? (
+          <div className="empty-state">
+            <div style={{ width: 80, height: 80 }}><IllusDoctor /></div>
+            <div className="t-title">No patients yet</div>
+            <div className="t-subtitle">Register a patient above to start their first check.</div>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="empty-state">
+            <div className="t-title">No matching patients</div>
+            <div className="t-subtitle">Try a different search, or register a new patient.</div>
+          </div>
+        ) : (
+          <div className="rec-list">
+            {filtered.map((p) => (
+              <WorkerPatientRow key={p.id} patient={p} onClick={(pt) => onStart(pt)} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// WORKER RECORDS (Records tab)
+// The full, browsable patient roster -- search plus risk-tier filter
+// chips, mirroring RecordsScreen's pattern for individual users but
+// scoped to patient.latest_risk instead of an assessment's own risk.
+// Tapping a patient opens their full detail/history view.
+// ─────────────────────────────────────────────
+function WorkerRecords({ onStart }) {
+  const { patients, loading, error, reload } = useWorkerPatients();
+  const [view,       setView]       = useState("list"); // "list" | "new" | "detail"
+  const [selectedId, setSelectedId] = useState(null);
+  const [search,     setSearch]     = useState("");
+  const [filter,     setFilter]     = useState("All");
+
+  if (view === "new") {
+    return (
+      <NewPatientForm
+        onCancel={() => setView("list")}
+        onCreated={() => { setView("list"); reload(); }}
+      />
+    );
+  }
+
+  if (view === "detail" && selectedId) {
+    return (
+      <WorkerPatientDetail
+        patientId={selectedId}
+        onBack={() => { setView("list"); reload(); }}
+        onStart={onStart}
+      />
+    );
+  }
+
+  const filtered = patients.filter((p) => {
+    const ms = p.name.toLowerCase().includes(search.toLowerCase());
+    const mf = filter === "All" || p.latest_risk === filter;
+    return ms && mf;
+  });
+
+  return (
+    <div>
+      <div className="page-head">
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <div>
+            <div className="t-display">Patients</div>
+            <div className="t-subtitle mt-1">{patients.length} total patient{patients.length !== 1 ? "s" : ""}</div>
+          </div>
+          <button onClick={reload} className="icon-btn"
+            style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+            <Icon name="refresh" size={16} color="var(--muted)" />
+          </button>
+        </div>
+      </div>
+      <div className="page-body">
+        <div className="search-wrap">
+          <span className="search-icon"><Icon name="search" size={15} /></span>
+          <input className="search-input" placeholder="Search by patient name..."
+            value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+        <div className="chip-row">
+          {["All", "High", "Medium", "Low"].map((f) => (
+            <button key={f} className={`chip${filter === f ? " on" : ""}`} onClick={() => setFilter(f)}>{f}</button>
+          ))}
+        </div>
+
+        <button className="btn btn-primary btn-full mt-3 mb-1" onClick={() => setView("new")}>
+          <Icon name="activity" size={15} color="#fff" />
+          New Patient
+        </button>
+
+        {loading ? (
+          <div className="empty-state"><div className="t-subtitle">Loading patients...</div></div>
+        ) : error ? (
+          <div className="empty-state">
+            <Icon name="alert" size={36} color="var(--muted-l)" />
+            <div className="t-title">Could not load patients</div>
+            <div className="t-subtitle">Check your connection and try again.</div>
+            <button className="btn btn-primary mt-3" onClick={reload}>Retry</button>
+          </div>
+        ) : filtered.length === 0 ? (
+          <div className="empty-state">
+            <div style={{ width: 80, height: 80 }}><IllusDoctor /></div>
+            <div className="t-title">{search || filter !== "All" ? "No matching patients" : "No patients yet"}</div>
+            <div className="t-subtitle">
+              {search || filter !== "All"
+                ? "Try a different search or filter."
+                : "Register your first patient to start running assessments on their behalf."}
+            </div>
+          </div>
+        ) : (
+          <div className="rec-list">
+            {filtered.map((p) => (
+              <WorkerPatientRow key={p.id} patient={p} onClick={(pt) => { setSelectedId(pt.id); setView("detail"); }} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -2368,14 +2621,19 @@ function NewPatientForm({ onCancel, onCreated }) {
     setErr("");
     setSubmitting(true);
     try {
-      await api.post("/patients", {
+      const created = await api.post("/patients", {
         name: name.trim(),
         age: age ? Number(age) : null,
         gender: gender || null,
         community: community.trim() || null,
         consent_given: true,
       });
-      onCreated();
+      // Pass the created patient back so a caller that needs it (WorkerCheck,
+      // to start an assessment immediately) can use it. Callers that only
+      // need to refresh their list (WorkerDashboard, WorkerRecords) can
+      // simply ignore the argument -- their existing onCreated() calls
+      // remain valid with no changes required on their end.
+      onCreated(created);
     } catch (e) {
       setErr(e.message || "Could not register this patient. Please try again.");
       setSubmitting(false);
