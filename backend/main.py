@@ -44,7 +44,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from sqlalchemy import (
@@ -1892,7 +1892,11 @@ def _rank_places_by_distance(
 # -----------------------------------------------------------------
 
 class RegisterRequest(BaseModel):
-    email:    str
+    # EmailStr enforces a valid email shape server-side. The frontend's
+    # regex check is a UX nicety only -- anyone calling this endpoint
+    # directly (curl, Postman, a script) bypasses it entirely, so the
+    # server must not trust client-side validation alone.
+    email:    EmailStr
     password: str
     name:     str
     age:      Optional[str] = None
@@ -1903,7 +1907,7 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email:    str
+    email:    EmailStr
     password: str
 
 
