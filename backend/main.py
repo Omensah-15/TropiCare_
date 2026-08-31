@@ -2138,11 +2138,29 @@ async def verify_apple_id_token(id_token: str) -> dict:
     )
 
 
+def _user_response(user: "UserModel") -> dict:
+    """
+    Canonical shape for the "user" object returned by every auth entry
+    point (register, login, Google/Facebook/Apple). Mirrors the fields
+    GET /api/v1/user/profile returns for the same user, so age, gender,
+    and role are locked in on the client the moment someone registers or
+    logs in -- instead of only appearing after a later profile fetch.
+    """
+    return {
+        "id":     user.id,
+        "email":  user.email,
+        "name":   user.name,
+        "age":    user.age,
+        "gender": user.gender,
+        "role":   user.role or "patient",
+    }
+
+
 def _oauth_token_response(user: "UserModel") -> dict:
     return {
         "access_token": create_token(user.id),
         "token_type":   "bearer",
-        "user":         {"id": user.id, "email": user.email, "name": user.name},
+        "user":         _user_response(user),
     }
 
 
@@ -2529,7 +2547,7 @@ async def register(request: Request, req: RegisterRequest, db: Session = Depends
     return {
         "access_token": create_token(user.id),
         "token_type":   "bearer",
-        "user":         {"id": user.id, "email": user.email, "name": user.name},
+        "user":         _user_response(user),
     }
 
 
@@ -2543,7 +2561,7 @@ async def login(request: Request, req: LoginRequest, db: Session = Depends(get_d
     return {
         "access_token": create_token(user.id),
         "token_type":   "bearer",
-        "user":         {"id": user.id, "email": user.email, "name": user.name},
+        "user":         _user_response(user),
     }
 
 
