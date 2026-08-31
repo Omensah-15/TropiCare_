@@ -74,7 +74,7 @@ alt="Clinic Finder Navigation Demo"
 width="300">
 </div>
 
-Nearby clinics and directions are available for every assessment result, regardless of risk tier.
+Nearby clinics and directions are available for every assessment result.
 
 ---
 
