@@ -1909,15 +1909,21 @@ class LoginRequest(BaseModel):
 
 class GoogleAuthRequest(BaseModel):
     access_token: str
+    # Only used the first time this email signs in (i.e. when the account
+    # is created) -- ignored for a returning user, whose role was already
+    # decided at signup and must not silently change on a later login.
+    role: Optional[str] = None
 
 
 class FacebookAuthRequest(BaseModel):
     access_token: str
+    role: Optional[str] = None
 
 
 class AppleAuthRequest(BaseModel):
     id_token: str
     name: Optional[str] = None  # Apple only ever sends this on first authorization
+    role: Optional[str] = None
 
 
 class AnswerRequest(BaseModel):
@@ -2165,10 +2171,14 @@ def _oauth_token_response(user: "UserModel") -> dict:
 
 
 def _find_or_create_oauth_user(
-    db: Session, email: str, name: str, provider: str, oauth_sub: str
+    db: Session, email: str, name: str, provider: str, oauth_sub: str, role: Optional[str] = None
 ) -> "UserModel":
     clean_email = _sanitize(email.strip().lower())
     clean_name  = _sanitize(name.strip()) if name and name.strip() else clean_email.split("@")[0]
+    # Only a validated role is honored, and only for a brand-new account --
+    # an unrecognized value (or none at all) falls back to the same
+    # "patient" default a plain email/password signup gets.
+    clean_role = role if role in ("patient", "worker") else "patient"
 
     user = db.query(UserModel).filter(UserModel.email == clean_email).first()
     if user is None:
@@ -2178,13 +2188,15 @@ def _find_or_create_oauth_user(
             pw_hash=None,
             auth_provider=provider,
             oauth_sub=oauth_sub,
+            role=clean_role,
         )
         db.add(user)
         db.commit()
         db.refresh(user)
     elif not user.auth_provider:
         # Existing email/password account signing in with a provider for the
-        # first time — link the provider without touching their password.
+        # first time — link the provider without touching their password or
+        # their existing role.
         user.auth_provider = provider
         user.oauth_sub = oauth_sub
         db.commit()
@@ -2583,6 +2595,7 @@ async def auth_google(request: Request, req: GoogleAuthRequest, db: Session = De
         name=profile.get("name", ""),
         provider="google",
         oauth_sub=str(profile.get("sub", "")),
+        role=req.role,
     )
     return _oauth_token_response(user)
 
@@ -2605,6 +2618,7 @@ async def auth_facebook(request: Request, req: FacebookAuthRequest, db: Session 
         name=profile.get("name", ""),
         provider="facebook",
         oauth_sub=str(profile.get("id", "")),
+        role=req.role,
     )
     return _oauth_token_response(user)
 
@@ -2627,6 +2641,7 @@ async def auth_apple(request: Request, req: AppleAuthRequest, db: Session = Depe
         name=req.name or "",
         provider="apple",
         oauth_sub=str(payload.get("sub", "")),
+        role=req.role,
     )
     return _oauth_token_response(user)
 
