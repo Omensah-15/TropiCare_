@@ -1677,65 +1677,6 @@ export default function App() {
   };
 
   // ── Splash ─────────────────────────────────
-  if (splash) {
-    return (
-      <div className={`splash${splashFade ? " fading" : ""}`}>
-        <div className="splash-logo"><MedicalHeartSplash /></div>
-        <div className="splash-title">TropiCare</div>
-        <div className="splash-sub">Guided Clinical Assessment</div>
-        <div className="splash-dots">
-          <div className="splash-dot" /><div className="splash-dot" /><div className="splash-dot" />
-        </div>
-      </div>
-    );
-  }
-
-  // <Notif> normally mounts once, down in the logged-in shell below — but
-  // several screens (auth, the loading screen, the assessment flow) return
-  // early, before that shell renders. Wrap every early return in a
-  // fragment with its own <Notif> so a toast (e.g. "Invalid email or
-  // password") is never fired into a state update with nothing on screen
-  // to show it.
-  if (!user)     return <><Notif msg={notif} /><AuthScreen onLogin={login} toast={toast} /></>;
-  if (analyzing) return <><Notif msg={notif} /><AnalyzingScreen /></>;
-  // Reached from ResultScreen's "Register Next Patient" action (worker
-  // flow only) -- same pattern as the home dashboard's "Start a Check":
-  // register the new patient, then start their assessment immediately.
-  // startAssessment() below takes page/assActive over from here on its
-  // own, so there is no separate "back to home" step to wire up.
-  if (page === "register")
-    return (
-      <>
-        <Notif msg={notif} />
-        <NewPatientForm
-          onCancel={() => setPage("home")}
-          onCreated={(created) => { if (created) startAssessment(created); }}
-        />
-      </>
-    );
-  if (page === "result" && result)
-    return (
-      <>
-        <Notif msg={notif} />
-        <ResultScreen
-          result={result}
-          user={user}
-          assessmentPatient={assessmentPatient}
-          onReset={resetAssessment}
-          onNewCheck={() => startAssessment(assessmentPatient)}
-          onRegisterNext={() => setPage("register")}
-          toast={toast}
-        />
-      </>
-    );
-  if (assActive && currentQ)
-    return (
-      <>
-        <Notif msg={notif} />
-        <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />
-      </>
-    );
-
   const navItems = [
     { id: "home",       label: "Home",    icon: "home"      },
     { id: "assessment", label: "Check",   icon: "activity"  },
@@ -1779,57 +1720,116 @@ export default function App() {
     }
   };
 
-  return (
-    <div className="shell">
-      <Notif msg={notif} />
-
-      {/* Sidebar — desktop */}
-      <aside className="sidebar">
-        <div className="sidebar-brand">
-          <div className="brand-mark"><MedicalHeartMark size={20} color="#fff" /></div>
-          <div>
-            <div className="brand-name">TropiCare</div>
-            <div className="brand-sub">Symptom Checker</div>
+  // <Notif> mounts exactly once, unconditionally, at the top of the render
+  // tree (see the final return below) -- so every branch here just returns
+  // the screen for the current state and never has to remember to render
+  // its own toast. Adding a new early-return screen later needs no change
+  // to Notif at all.
+  const renderScreen = () => {
+    if (splash) {
+      return (
+        <div className={`splash${splashFade ? " fading" : ""}`}>
+          <div className="splash-logo"><MedicalHeartSplash /></div>
+          <div className="splash-title">TropiCare</div>
+          <div className="splash-sub">Guided Clinical Assessment</div>
+          <div className="splash-dots">
+            <div className="splash-dot" /><div className="splash-dot" /><div className="splash-dot" />
           </div>
         </div>
-        <nav className="sidebar-nav">
-          {[...navItems, { id: "settings", label: "Settings", icon: "settings" }].map((n) => (
+      );
+    }
+
+    if (!user)     return <AuthScreen onLogin={login} toast={toast} />;
+    if (analyzing) return <AnalyzingScreen />;
+
+    // Reached from ResultScreen's "Register Next Patient" action (worker
+    // flow only) -- same pattern as the home dashboard's "Start a Check":
+    // register the new patient, then start their assessment immediately.
+    // startAssessment() below takes page/assActive over from here on its
+    // own, so there is no separate "back to home" step to wire up.
+    if (page === "register")
+      return (
+        <NewPatientForm
+          onCancel={() => setPage("home")}
+          onCreated={(created) => { if (created) startAssessment(created); }}
+        />
+      );
+
+    if (page === "result" && result)
+      return (
+        <ResultScreen
+          result={result}
+          user={user}
+          assessmentPatient={assessmentPatient}
+          onReset={resetAssessment}
+          onNewCheck={() => startAssessment(assessmentPatient)}
+          onRegisterNext={() => setPage("register")}
+          toast={toast}
+        />
+      );
+
+    if (assActive && currentQ)
+      return (
+        <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />
+      );
+
+    return (
+      <div className="shell">
+        {/* Sidebar — desktop */}
+        <aside className="sidebar">
+          <div className="sidebar-brand">
+            <div className="brand-mark"><MedicalHeartMark size={20} color="#fff" /></div>
+            <div>
+              <div className="brand-name">TropiCare</div>
+              <div className="brand-sub">Symptom Checker</div>
+            </div>
+          </div>
+          <nav className="sidebar-nav">
+            {[...navItems, { id: "settings", label: "Settings", icon: "settings" }].map((n) => (
+              <button key={n.id}
+                className={`nav-item${page === n.id ? " active" : ""}`}
+                onClick={() => setPage(n.id)}>
+                <Icon name={n.icon} size={17} />
+                {n.label}
+              </button>
+            ))}
+          </nav>
+          <div className="sidebar-foot" style={{ marginTop: "auto" }}>
+            <button className="nav-item" style={{ color: "var(--red)", width: "100%" }} onClick={logout}>
+              <Icon name="logout" size={16} color="var(--red)" />
+              Sign Out
+            </button>
+          </div>
+        </aside>
+
+        {/* Main content */}
+        <main className="main">
+          <div className="page">{renderPage()}</div>
+        </main>
+
+        {/* Bottom nav — mobile */}
+        <nav className="bottom-nav">
+          {navItems.map((n) => (
             <button key={n.id}
-              className={`nav-item${page === n.id ? " active" : ""}`}
-              onClick={() => setPage(n.id)}>
-              <Icon name={n.icon} size={17} />
-              {n.label}
+              className={`bnav-item${page === n.id ? " active" : ""}`}
+              onClick={() => {
+                setPage(n.id);
+                if (n.id !== "assessment") setAssActive(false);
+              }}>
+              <Icon name={n.icon} size={20} />
+              <span>{n.label}</span>
             </button>
           ))}
         </nav>
-        <div className="sidebar-foot" style={{ marginTop: "auto" }}>
-          <button className="nav-item" style={{ color: "var(--red)", width: "100%" }} onClick={logout}>
-            <Icon name="logout" size={16} color="var(--red)" />
-            Sign Out
-          </button>
-        </div>
-      </aside>
+      </div>
+    );
+  };
 
-      {/* Main content */}
-      <main className="main">
-        <div className="page">{renderPage()}</div>
-      </main>
-
-      {/* Bottom nav — mobile */}
-      <nav className="bottom-nav">
-        {navItems.map((n) => (
-          <button key={n.id}
-            className={`bnav-item${page === n.id ? " active" : ""}`}
-            onClick={() => {
-              setPage(n.id);
-              if (n.id !== "assessment") setAssActive(false);
-            }}>
-            <Icon name={n.icon} size={20} />
-            <span>{n.label}</span>
-          </button>
-        ))}
-      </nav>
-    </div>
+  return (
+    <>
+      <Notif msg={notif} />
+      {renderScreen()}
+    </>
   );
 }
 
