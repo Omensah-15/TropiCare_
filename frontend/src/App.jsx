@@ -795,6 +795,12 @@ const injectStyles = () => {
     .field-input:hover{border-color:var(--muted-l);}
     .field-input:focus{border-color:var(--teal);box-shadow:var(--focus-ring);}
     .field-input::placeholder{color:var(--muted-l);}
+    .field-input-error{border-color:var(--red);}
+    .field-input-error:focus{border-color:var(--red);box-shadow:0 0 0 3px rgba(226,61,61,0.14);}
+    .field-error{display:flex;align-items:center;gap:5px;margin-top:6px;font-size:12px;font-weight:600;color:var(--red);}
+    .pw-req{display:flex;align-items:center;gap:6px;margin-top:7px;font-size:11.5px;font-weight:600;color:var(--muted);line-height:1.4;}
+    .pw-req.met{color:var(--green-d);}
+    .pw-req svg{flex-shrink:0;}
     .field-select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2390a0ae' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px;cursor:pointer;}
     .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:700;letter-spacing:0.01em;}
     .badge-High{background:var(--red-l);color:var(--red-d);}
@@ -1684,8 +1690,14 @@ export default function App() {
     );
   }
 
-  if (!user)     return <AuthScreen onLogin={login} toast={toast} />;
-  if (analyzing) return <AnalyzingScreen />;
+  // <Notif> normally mounts once, down in the logged-in shell below — but
+  // several screens (auth, the loading screen, the assessment flow) return
+  // early, before that shell renders. Wrap every early return in a
+  // fragment with its own <Notif> so a toast (e.g. "Invalid email or
+  // password") is never fired into a state update with nothing on screen
+  // to show it.
+  if (!user)     return <><Notif msg={notif} /><AuthScreen onLogin={login} toast={toast} /></>;
+  if (analyzing) return <><Notif msg={notif} /><AnalyzingScreen /></>;
   // Reached from ResultScreen's "Register Next Patient" action (worker
   // flow only) -- same pattern as the home dashboard's "Start a Check":
   // register the new patient, then start their assessment immediately.
@@ -1693,25 +1705,36 @@ export default function App() {
   // own, so there is no separate "back to home" step to wire up.
   if (page === "register")
     return (
-      <NewPatientForm
-        onCancel={() => setPage("home")}
-        onCreated={(created) => { if (created) startAssessment(created); }}
-      />
+      <>
+        <Notif msg={notif} />
+        <NewPatientForm
+          onCancel={() => setPage("home")}
+          onCreated={(created) => { if (created) startAssessment(created); }}
+        />
+      </>
     );
   if (page === "result" && result)
     return (
-      <ResultScreen
-        result={result}
-        user={user}
-        assessmentPatient={assessmentPatient}
-        onReset={resetAssessment}
-        onNewCheck={() => startAssessment(assessmentPatient)}
-        onRegisterNext={() => setPage("register")}
-        toast={toast}
-      />
+      <>
+        <Notif msg={notif} />
+        <ResultScreen
+          result={result}
+          user={user}
+          assessmentPatient={assessmentPatient}
+          onReset={resetAssessment}
+          onNewCheck={() => startAssessment(assessmentPatient)}
+          onRegisterNext={() => setPage("register")}
+          toast={toast}
+        />
+      </>
     );
   if (assActive && currentQ)
-    return <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />;
+    return (
+      <>
+        <Notif msg={notif} />
+        <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />
+      </>
+    );
 
   const navItems = [
     { id: "home",       label: "Home",    icon: "home"      },
@@ -1817,21 +1840,34 @@ function AuthScreen({ onLogin, toast }) {
   const [mode,         setMode]         = useState("login");
   const [name,         setName]         = useState("");
   const [email,        setEmail]        = useState("");
+  const [emailTouched, setEmailTouched] = useState(false);
   const [pw,           setPw]           = useState("");
   const [age,          setAge]          = useState("");
   const [gender,       setGender]       = useState("");
-  const [role,         setRole]         = useState("patient");
+  const [role,         setRole]         = useState("patient"); // used for /auth/register and, on first sign-in only, for Google/Facebook/Apple
   const [showPw,       setShowPw]       = useState(false);
   const [loading,      setLoading]      = useState(false);
   const [socialLoading, setSocialLoading] = useState(null); // "google" | "facebook" | "apple" | null
 
+  // Simple, permissive shape check (local-part@domain.tld) -- not trying
+  // to fully validate per RFC 5322, just to catch the obvious typos
+  // (missing "@", missing domain) before hitting the server.
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const emailInvalid = emailTouched && email.trim().length > 0 && !EMAIL_RE.test(email.trim());
+
   const switchMode = (m) => {
     setMode(m);
     setName(""); setEmail(""); setPw(""); setAge(""); setGender(""); setRole("patient");
+    setEmailTouched(false);
   };
 
   const submit = async () => {
     if (!email.trim() || !pw.trim()) { toast("Please fill in all required fields."); return; }
+    if (!EMAIL_RE.test(email.trim())) {
+      setEmailTouched(true);
+      toast("Please enter a valid email address, e.g. name@example.com.");
+      return;
+    }
     if (mode === "register" && !name.trim()) { toast("Please enter your full name."); return; }
     if (pw.length < 8 && mode === "register") { toast("Password must be at least 8 characters."); return; }
     setLoading(true);
@@ -1899,7 +1935,7 @@ function AuthScreen({ onLogin, toast }) {
         client.requestAccessToken();
       });
 
-      await finishOAuthLogin("/auth/google", { access_token: accessToken });
+      await finishOAuthLogin("/auth/google", { access_token: accessToken, role });
     } catch (e) {
       toast(e.message || "Google sign-in failed. Please try again.");
     } finally {
@@ -1929,7 +1965,7 @@ function AuthScreen({ onLogin, toast }) {
         }, { scope: "email", auth_type: "rerequest" });
       });
 
-      await finishOAuthLogin("/auth/facebook", { access_token: accessToken });
+      await finishOAuthLogin("/auth/facebook", { access_token: accessToken, role });
     } catch (e) {
       toast(e.message || "Facebook sign-in failed. Please try again.");
     } finally {
@@ -1967,7 +2003,7 @@ function AuthScreen({ onLogin, toast }) {
         ? `${result.user.name.firstName || ""} ${result.user.name.lastName || ""}`.trim()
         : "";
 
-      await finishOAuthLogin("/auth/apple", { id_token: idToken, name: fullName });
+      await finishOAuthLogin("/auth/apple", { id_token: idToken, name: fullName, role });
     } catch (e) {
       const msg = e?.error === "popup_closed_by_user" ? "Apple sign-in was cancelled." : (e.message || "Apple sign-in failed. Please try again.");
       toast(msg);
@@ -2026,9 +2062,17 @@ function AuthScreen({ onLogin, toast }) {
             <label className="field-label">Email Address</label>
             <div className="field-icon-wrap">
               <span className="auth-input-icon"><Icon name="mail" size={16} /></span>
-              <input className="field-input has-icon" type="email" placeholder="you@email.com" value={email}
-                onChange={(e) => setEmail(e.target.value)} />
+              <input className={`field-input has-icon${emailInvalid ? " field-input-error" : ""}`}
+                type="email" placeholder="you@email.com" value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onBlur={() => setEmailTouched(true)}
+                aria-invalid={emailInvalid} />
             </div>
+            {emailInvalid && (
+              <div className="field-error">
+                <Icon name="info" size={12} /> Enter a valid email address, e.g. name@example.com
+              </div>
+            )}
           </div>
           {mode === "register" && (
             <div className="grid-2">
@@ -2062,6 +2106,16 @@ function AuthScreen({ onLogin, toast }) {
                 <Icon name={showPw ? "eyeOff" : "eye"} size={17} />
               </button>
             </div>
+            {mode === "register" && (
+              <div className={`pw-req${pw.length >= 8 ? " met" : ""}`}>
+                <Icon name={pw.length >= 8 ? "check" : "info"} size={12} />
+                <span>
+                  {pw.length >= 8
+                    ? "Password length looks good"
+                    : "Use at least 8 characters — mixing in a number or symbol makes it stronger"}
+                </span>
+              </div>
+            )}
           </div>
           {mode === "login" && (
             <div className="auth-row">
