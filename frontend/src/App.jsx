@@ -2481,7 +2481,7 @@ function WorkerCheck({ user, onStart, toast }) {
               Start a check for a new patient
             </div>
             <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
-              Register a new patient here, then run the same guided assessment used for individual screenings. Looking for a patient you've already registered? Find them under Records.
+              Register a new patient here, then run the same guided assessment used for individual screenings.
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
               {["Free", "Under 2 min", "41 diseases"].map((t) => (
