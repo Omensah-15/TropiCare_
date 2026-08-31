@@ -24,12 +24,19 @@ const APPLE_CLIENT_ID    = "APPLE_SERVICES_ID";
 const APPLE_REDIRECT_URI = "https://tropi-care.vercel.app";
 
 // A provider is only considered "live" once its placeholder has been
-// replaced with a real ID. Apple additionally requires a paid Apple
-// Developer account, so it is deliberately shown as "coming soon" in the
-// UI until APPLE_CLIENT_ID is set — see the Apple button below.
+// replaced with a real ID. Note the placeholders below aren't prefixed
+// with "YOUR_" -- they're the literal strings FACEBOOK_APP_ID and
+// APPLE_SERVICES_ID -- so the startsWith("YOUR_") check alone would
+// wrongly treat them as configured. Guard against both forms.
 const GOOGLE_ENABLED   = !GOOGLE_CLIENT_ID.startsWith("YOUR_");
-const FACEBOOK_ENABLED = !FACEBOOK_APP_ID.startsWith("YOUR_");
-const APPLE_ENABLED    = !APPLE_CLIENT_ID.startsWith("YOUR_");
+const FACEBOOK_ENABLED = !FACEBOOK_APP_ID.startsWith("YOUR_")    && FACEBOOK_APP_ID !== "FACEBOOK_APP_ID";
+const APPLE_ENABLED    = !APPLE_CLIENT_ID.startsWith("YOUR_")    && APPLE_CLIENT_ID !== "APPLE_SERVICES_ID";
+
+// Facebook and Apple sign-in are hidden from the login screen entirely
+// until their IDs above are filled in and verified working -- flip these
+// to true once that's done. Google is unaffected and stays live.
+const SHOW_FACEBOOK_LOGIN = false;
+const SHOW_APPLE_LOGIN    = false;
 
 const _loadedScripts = {};
 function loadScript(src) {
@@ -836,7 +843,19 @@ const injectStyles = () => {
     .auth-divider{display:flex;align-items:center;gap:12px;margin:22px 0 16px;}
     .auth-divider::before,.auth-divider::after{content:"";flex:1;height:1px;background:var(--border);}
     .auth-divider span{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted-l);white-space:nowrap;}
-    .social-row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+    .social-col{display:flex;flex-direction:column;gap:10px;}
+    .social-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:10px;}
+    /* Google-branded button, per Google's sign-in button guidelines:
+       white surface, #dadce0 border, #3c4043 text, Google "G" glyph
+       left-aligned with centered label. */
+    .gsi-btn{display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:0 16px;height:44px;border-radius:var(--radius-s);border:1px solid #dadce0;background:#fff;cursor:pointer;font-family:"Sora",Roboto,Arial,sans-serif;font-size:14px;font-weight:600;color:#3c4043;transition:box-shadow var(--t-fast),background var(--t-fast),transform var(--t-fast);}
+    .gsi-btn:hover{background:#f8f9fa;box-shadow:0 1px 2px 0 rgba(60,64,67,0.30),0 1px 3px 1px rgba(60,64,67,0.15);}
+    .gsi-btn:active{transform:scale(0.99);background:#f1f3f4;}
+    .gsi-btn:disabled{opacity:0.6;cursor:not-allowed;transform:none;box-shadow:none;}
+    .gsi-btn-icon{display:flex;align-items:center;}
+    .gsi-btn-label{line-height:1;}
+    :root[data-theme="dark"] .gsi-btn{background:#fff;border-color:#dadce0;color:#3c4043;}
+    :root[data-theme="dark"] .gsi-btn:hover{background:#f8f9fa;}
     .social-btn{display:flex;align-items:center;justify-content:center;padding:11px;border-radius:var(--radius-s);border:1.5px solid var(--border);background:var(--surface);cursor:pointer;min-height:46px;transition:border-color var(--t-fast),background var(--t-fast),transform var(--t-fast);}
     .social-btn:hover{border-color:var(--muted-l);background:var(--border-l);transform:translateY(-1px);}
     .social-btn:active{transform:translateY(0) scale(0.97);}
@@ -2055,27 +2074,42 @@ function AuthScreen({ onLogin, toast }) {
             {loading ? "Please wait..." : mode === "login" ? "Sign In" : "Create Account"}
           </button>
           <div className="auth-divider"><span>Or continue with</span></div>
-          <div className="social-row">
-            <button className="social-btn" type="button" aria-label="Continue with Google"
+          <div className="social-col">
+            <button className="gsi-btn" type="button" aria-label="Sign in with Google"
               onClick={handleGoogleLogin} disabled={socialLoading !== null}>
-              {socialLoading === "google" ? <span className="social-spinner" /> : <GoogleGlyph size={19} />}
-            </button>
-            <button className="social-btn" type="button" aria-label="Continue with Facebook"
-              onClick={handleFacebookLogin} disabled={socialLoading !== null}>
-              {socialLoading === "facebook" ? <span className="social-spinner" /> : <FacebookGlyph size={19} />}
-            </button>
-            <button className="social-btn social-btn-soon" type="button"
-              aria-label="Apple sign-in — coming soon" title="Apple sign-in is coming soon"
-              onClick={handleAppleLogin} disabled={!APPLE_ENABLED || socialLoading !== null}>
-              {socialLoading === "apple" ? <span className="social-spinner" /> : (
-                <span className="social-btn-inner">
-                  <AppleGlyph size={19} />
-                  {!APPLE_ENABLED && <span className="social-soon-badge">Soon</span>}
-                </span>
+              {socialLoading === "google" ? (
+                <span className="social-spinner" />
+              ) : (
+                <>
+                  <span className="gsi-btn-icon"><GoogleGlyph size={18} /></span>
+                  <span className="gsi-btn-label">Sign in with Google</span>
+                </>
               )}
             </button>
+            {(SHOW_FACEBOOK_LOGIN || SHOW_APPLE_LOGIN) && (
+              <div className="social-row">
+                {SHOW_FACEBOOK_LOGIN && (
+                  <button className="social-btn" type="button" aria-label="Continue with Facebook"
+                    onClick={handleFacebookLogin} disabled={socialLoading !== null}>
+                    {socialLoading === "facebook" ? <span className="social-spinner" /> : <FacebookGlyph size={19} />}
+                  </button>
+                )}
+                {SHOW_APPLE_LOGIN && (
+                  <button className="social-btn social-btn-soon" type="button"
+                    aria-label="Apple sign-in — coming soon" title="Apple sign-in is coming soon"
+                    onClick={handleAppleLogin} disabled={!APPLE_ENABLED || socialLoading !== null}>
+                    {socialLoading === "apple" ? <span className="social-spinner" /> : (
+                      <span className="social-btn-inner">
+                        <AppleGlyph size={19} />
+                        {!APPLE_ENABLED && <span className="social-soon-badge">Soon</span>}
+                      </span>
+                    )}
+                  </button>
+                )}
+              </div>
+            )}
           </div>
-          {!APPLE_ENABLED && (
+          {SHOW_APPLE_LOGIN && !APPLE_ENABLED && (
             <div className="auth-apple-note">...</div>
           )}
         </div>
