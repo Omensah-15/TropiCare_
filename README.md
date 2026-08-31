@@ -1,6 +1,6 @@
 # TropiCare
 
-TropiCare helps individuals identify tropical disease risks through adaptive symptom assessment, machine learning prediction, risk classification, and nearby clinic navigation — and lets health workers run that same screening on behalf of the patients in their care.
+TropiCare helps people identify tropical disease risks through adaptive symptom assessment, machine learning prediction, risk classification, and nearby clinic navigation. Individuals can screen themselves, and health workers can register and screen patients in their care.
 
 🌐 **Live App:** [TropiCare](https://tropi-care.vercel.app/)
 
@@ -22,7 +22,7 @@ TropiCare helps individuals identify tropical disease risks through adaptive sym
 alt="app">
 </div>
 
-Built for West Africa, TropiCare bridges the gap between symptom onset and clinical support by providing early risk assessment and actionable health guidance — whether someone is checking their own symptoms or a health worker is screening someone in their community.
+Built for West Africa, TropiCare bridges the gap between symptom onset and clinical support by providing early risk assessment and actionable health guidance, for both individuals checking their own symptoms and health workers screening people in their community.
 
 **Key capabilities:**
 - Adaptive symptom assessment
@@ -31,7 +31,7 @@ Built for West Africa, TropiCare bridges the gap between symptom onset and clini
 - AI-powered recommendations
 - Assessment history tracking
 - Nearby clinic finder and navigation, available at every risk level
-- Two account types — self-screening individuals and health workers
+- Individual and health-worker accounts
 
 **System coverage:**
 - 41 diseases
@@ -46,14 +46,14 @@ Built for West Africa, TropiCare bridges the gap between symptom onset and clini
 
 ## For Health Workers
 
-Anyone can sign up as an individual for self-screening, exactly as before — or as a **health worker**, unlocking a patient-management layer on top of the same assessment engine:
+Health worker accounts add a patient-management layer on top of the same assessment engine:
 
-- **Register patients with consent** — name, age, gender, and community, gated on an explicit consent confirmation before any record is created.
-- **Screen on a patient's behalf** — run the full adaptive assessment for a registered patient rather than yourself, with the result and PDF report correctly attributed to them (not the worker's own account).
-- **Track a patient roster** — every registered patient shows their most recent risk tier, sorted highest-risk first, with full assessment history per patient.
-- **Red-flag reporting** — PDF reports surface a high-visibility warning block when an assessment triggers a red-flag symptom pattern, so it can't be missed by a clinician skimming the report.
+- **Patient registration with consent** — name, age, gender, and community, gated on an explicit consent confirmation.
+- **Screening on a patient's behalf** — the worker runs the full adaptive assessment for a registered patient, with the result and PDF report attributed to that patient.
+- **Patient roster** — every registered patient shows their most recent risk tier, sorted highest-risk first, with full assessment history per patient.
+- **Red-flag reporting** — PDF reports carry a high-visibility warning block whenever an assessment triggers a red-flag symptom pattern, so it can't be missed by a clinician skimming the report.
 
-A worker's own account never mixes with their patients' identities: reports for a worker-entered patient show that patient's own details, falling back to "Not provided" rather than ever substituting the worker's stored information.
+Reports for a worker-entered patient always show that patient's own details — falling back to "Not provided" rather than the worker's own stored information.
 
 ---
 
