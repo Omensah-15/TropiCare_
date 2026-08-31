@@ -18,7 +18,7 @@ TropiCare helps people identify tropical disease risks through adaptive symptom 
 ## Overview
 
 <div align="center">
-<img src="https://github.com/Omensah-15/TropiCare_/blob/80033a3d52f672b459fbfedea78d75276443397d/assets/overview.png"
+<img src="https://github.com/Omensah-15/TropiCare_/raw/80033a3d52f672b459fbfedea78d75276443397d/assets/overview.png"
 alt="app">
 </div>
 
