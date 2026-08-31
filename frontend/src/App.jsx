@@ -1675,14 +1675,14 @@ export default function App() {
   const renderPage = () => {
     switch (page) {
       case "home":
-        return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
+        return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} toast={toast} />;
       case "assessment":
         return role === "worker"
-          ? <WorkerCheck onStart={startAssessment} />
+          ? <WorkerCheck user={user} onStart={startAssessment} toast={toast} />
           : <AssessmentLanding onStart={startAssessment} />;
       case "records":
         return role === "worker"
-          ? <WorkerRecords onStart={startAssessment} />
+          ? <WorkerRecords user={user} onStart={startAssessment} onNav={setPage} toast={toast} />
           : <RecordsScreen toast={toast} onDetail={setDetailRec} detail={detailRec} onClearDetail={() => setDetailRec(null)} />;
       case "profile":
         return <ProfileScreen user={user} onLogout={logout} onNav={setPage} toast={toast} />;
@@ -2086,7 +2086,7 @@ function AppleGlyph({ size = 20 }) {
 // ─────────────────────────────────────────────
 // HOME SCREEN
 // ─────────────────────────────────────────────
-function HomeScreen({ userId, user, onStart, onNav }) {
+function HomeScreen({ userId, user, onStart, onNav, toast }) {
   const [records,  setRecords]  = useState([]);
   const [profile,  setProfile]  = useState(null);
   const [loading,  setLoading]  = useState(true);
@@ -2115,7 +2115,7 @@ function HomeScreen({ userId, user, onStart, onNav }) {
   // role at all, which defaults to "patient" server-side) always falls
   // through to the existing view below, completely untouched.
   if (profile?.role === "worker") {
-    return <WorkerDashboard user={user} onStart={onStart} onNav={onNav} />;
+    return <WorkerDashboard user={user} onStart={onStart} onNav={onNav} toast={toast} />;
   }
 
   // Use profile API counts for accuracy (never limited by fetch page size)
@@ -2287,24 +2287,17 @@ function WorkerPatientRow({ patient, onClick }) {
 // patient or starting a new check. The full patient list lives on the
 // Records tab (WorkerRecords) instead of being duplicated here.
 // ─────────────────────────────────────────────
-function WorkerDashboard({ user, onStart, onNav }) {
+function WorkerDashboard({ user, onStart, onNav, toast }) {
   const { patients, loading, error, reload } = useWorkerPatients();
-  const [view,       setView]       = useState("dashboard"); // "dashboard" | "new" | "detail"
+  const [view,       setView]       = useState("dashboard"); // "dashboard" | "detail"
   const [selectedId, setSelectedId] = useState(null);
-
-  if (view === "new") {
-    return (
-      <NewPatientForm
-        onCancel={() => setView("dashboard")}
-        onCreated={() => { setView("dashboard"); reload(); }}
-      />
-    );
-  }
 
   if (view === "detail" && selectedId) {
     return (
       <WorkerPatientDetail
         patientId={selectedId}
+        user={user}
+        toast={toast}
         onBack={() => { setView("dashboard"); reload(); }}
         onStart={onStart}
       />
@@ -2340,7 +2333,9 @@ function WorkerDashboard({ user, onStart, onNav }) {
         <div className="avatar">{(user?.name || "W")[0].toUpperCase()}</div>
       </div>
 
-      {/* Hero — routes to the Check tab's patient picker */}
+      {/* Hero — the single entry point for starting a check and, from
+          there, registering a new patient. Kept as the one canonical
+          "add a patient" path rather than duplicating that action here. */}
       <div className="hero-card">
         <div className="hero-bg-icon"><Icon name="activity" size={110} color="#fff" /></div>
         <div className="hero-eyebrow">Health Worker Screening</div>
@@ -2366,20 +2361,14 @@ function WorkerDashboard({ user, onStart, onNav }) {
       <div className="section">
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
           <div className="section-ttl" style={{ margin: 0 }}>Recent Patients</div>
-          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-            {patients.length > 0 && (
-              <button onClick={() => onNav("records")} style={{
-                fontSize: 12, color: "var(--teal-d)", background: "none", border: "none",
-                cursor: "pointer", fontWeight: 700, fontFamily: "var(--font)", padding: "4px 0",
-              }}>
-                View All
-              </button>
-            )}
-            <button className="btn btn-primary" onClick={() => setView("new")}>
-              <Icon name="activity" size={15} color="#fff" />
-              New Patient
+          {patients.length > 0 && (
+            <button onClick={() => onNav("records")} style={{
+              fontSize: 12, color: "var(--teal-d)", background: "none", border: "none",
+              cursor: "pointer", fontWeight: 700, fontFamily: "var(--font)", padding: "4px 0",
+            }}>
+              View All
             </button>
-          </div>
+          )}
         </div>
 
         {loading ? (
@@ -2402,9 +2391,9 @@ function WorkerDashboard({ user, onStart, onNav }) {
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 18, lineHeight: 1.55 }}>
               Register your first patient to start running assessments on their behalf.
             </div>
-            <button className="btn btn-primary" onClick={() => setView("new")}>
+            <button className="btn btn-primary" onClick={() => onNav("assessment")}>
               <Icon name="activity" size={15} color="#fff" />
-              New Patient
+              Start a Check
             </button>
           </div>
         ) : (
@@ -2428,7 +2417,7 @@ function WorkerDashboard({ user, onStart, onNav }) {
 // into the assessment for them. Tapping a row starts their assessment
 // directly rather than opening their history.
 // ─────────────────────────────────────────────
-function WorkerCheck({ onStart }) {
+function WorkerCheck({ user, onStart, toast }) {
   const { patients, loading, error, reload } = useWorkerPatients();
   const [view,   setView]   = useState("picker"); // "picker" | "new"
   const [search, setSearch] = useState("");
@@ -2446,17 +2435,64 @@ function WorkerCheck({ onStart }) {
     );
   }
 
+  const features = [
+    { icon: "user",     title: "Select or Register", desc: "Search for an existing patient, or register someone new in a few seconds.", color: "var(--teal)",   bg: "var(--teal-xl)"  },
+    { icon: "shield",   title: "Confirm Consent",     desc: "Every patient's consent is recorded before their first assessment begins.", color: "var(--blue)",   bg: "var(--blue-l)"   },
+    { icon: "activity", title: "Guided Assessment",   desc: "The same adaptive, up-to-15-question assessment used for individual checks.",color: "var(--purple)", bg: "var(--purple-l)" },
+  ];
+
   const filtered = patients.filter((p) =>
     p.name.toLowerCase().includes(search.toLowerCase())
   );
 
   return (
-    <div>
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column" }}>
       <div className="page-head">
-        <div className="t-display">Start a Check</div>
-        <div className="t-subtitle mt-1">Select a patient to begin, or register a new one.</div>
+        <div className="al-hero">
+          <div className="al-hero-text">
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.08em", color: "var(--teal)", marginBottom: 6 }}>
+              Health Worker Screening
+            </div>
+            <div style={{ fontFamily: "var(--display)", fontSize: 24, fontWeight: 700, color: "var(--ink)", lineHeight: 1.3, marginBottom: 8 }}>
+              Start a symptom check for a patient
+            </div>
+            <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
+              Select a patient you've already registered, or register someone new, then run the same guided assessment used for individual screenings.
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+              {["Free", "Under 2 min", "41 diseases"].map((t) => (
+                <span key={t} className="badge badge-teal">
+                  <Icon name="check" size={10} color="var(--teal)" />&nbsp;{t}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div className="al-hero-illus"><HealthProfessionalIllus width={120} height={140} /></div>
+        </div>
       </div>
-      <div className="page-body">
+      <div className="page-body" style={{ flex: 1 }}>
+        <div className="card card-p mb-4">
+          <div className="section-ttl mb-1">How it works</div>
+          <div className="feat-list">
+            {features.map((f) => (
+              <div key={f.title} className="feat-row">
+                <div className="feat-icon" style={{ background: f.bg }}>
+                  <Icon name={f.icon} size={16} color={f.color} />
+                </div>
+                <div>
+                  <div className="feat-title">{f.title}</div>
+                  <div className="feat-desc">{f.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="t-subtitle mt-3 italic" style={{ fontSize: 12 }}>
+            This tool provides informational guidance only and does not replace a clinical diagnosis.
+          </div>
+        </div>
+
+        <div className="section-ttl mb-2">Select a Patient</div>
+
         <button className="btn btn-primary btn-full mb-3" onClick={() => setView("new")}>
           <Icon name="activity" size={15} color="#fff" />
           New Patient
@@ -2507,28 +2543,24 @@ function WorkerCheck({ onStart }) {
 // The full, browsable patient roster -- search plus risk-tier filter
 // chips, mirroring RecordsScreen's pattern for individual users but
 // scoped to patient.latest_risk instead of an assessment's own risk.
-// Tapping a patient opens their full detail/history view.
+// Tapping a patient opens their full detail/history view. Registering a
+// new patient happens only from the Check tab -- this screen is purely
+// for browsing/reviewing existing patients, so it carries no "New
+// Patient" action of its own.
 // ─────────────────────────────────────────────
-function WorkerRecords({ onStart }) {
+function WorkerRecords({ user, onStart, onNav, toast }) {
   const { patients, loading, error, reload } = useWorkerPatients();
-  const [view,       setView]       = useState("list"); // "list" | "new" | "detail"
+  const [view,       setView]       = useState("list"); // "list" | "detail"
   const [selectedId, setSelectedId] = useState(null);
   const [search,     setSearch]     = useState("");
   const [filter,     setFilter]     = useState("All");
-
-  if (view === "new") {
-    return (
-      <NewPatientForm
-        onCancel={() => setView("list")}
-        onCreated={() => { setView("list"); reload(); }}
-      />
-    );
-  }
 
   if (view === "detail" && selectedId) {
     return (
       <WorkerPatientDetail
         patientId={selectedId}
+        user={user}
+        toast={toast}
         onBack={() => { setView("list"); reload(); }}
         onStart={onStart}
       />
@@ -2567,11 +2599,6 @@ function WorkerRecords({ onStart }) {
           ))}
         </div>
 
-        <button className="btn btn-primary btn-full mt-3 mb-1" onClick={() => setView("new")}>
-          <Icon name="activity" size={15} color="#fff" />
-          New Patient
-        </button>
-
         {loading ? (
           <div className="empty-state"><div className="t-subtitle">Loading patients...</div></div>
         ) : error ? (
@@ -2590,6 +2617,12 @@ function WorkerRecords({ onStart }) {
                 ? "Try a different search or filter."
                 : "Register your first patient to start running assessments on their behalf."}
             </div>
+            {!(search || filter !== "All") && (
+              <button className="btn btn-primary mt-3" onClick={() => onNav("assessment")}>
+                <Icon name="activity" size={15} color="#fff" />
+                Start a Check
+              </button>
+            )}
           </div>
         ) : (
           <div className="rec-list">
@@ -2706,14 +2739,16 @@ function NewPatientForm({ onCancel, onCreated }) {
 
 // ─────────────────────────────────────────────
 // WORKER PATIENT DETAIL
-// Mirrors RecordDetail's shape (GET /patients/{id}) but for one of a
-// worker's registered patients: their info plus assessment history, with
-// a button to start a new assessment on their behalf.
+// A patient's info plus their assessment history, with a button to start
+// a new assessment on their behalf. Tapping a past assessment opens
+// WorkerRecordDetail below -- the same rich, professional detail view an
+// individual sees for their own records, scoped to this patient.
 // ─────────────────────────────────────────────
-function WorkerPatientDetail({ patientId, onBack, onStart }) {
-  const [patient, setPatient] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState(false);
+function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
+  const [patient,        setPatient]        = useState(null);
+  const [loading,        setLoading]        = useState(true);
+  const [error,          setError]          = useState(false);
+  const [selectedRecord, setSelectedRecord] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -2725,6 +2760,18 @@ function WorkerPatientDetail({ patientId, onBack, onStart }) {
       .finally(() => { if (!cancelled && !_loggingOut) setLoading(false); });
     return () => { cancelled = true; };
   }, [patientId]);
+
+  if (selectedRecord && patient) {
+    return (
+      <WorkerRecordDetail
+        record={selectedRecord}
+        patientName={patient.name}
+        workerName={user?.name}
+        onBack={() => setSelectedRecord(null)}
+        toast={toast}
+      />
+    );
+  }
 
   if (loading) {
     return (
@@ -2776,7 +2823,7 @@ function WorkerPatientDetail({ patientId, onBack, onStart }) {
       ) : (
         <div className="rec-list">
           {history.map((h) => (
-            <div key={h.id} className="rec-card">
+            <div key={h.id} className="rec-card" onClick={() => setSelectedRecord(h)}>
               <div className="rec-icon-wrap" style={{ background: `${RISK_COLOR[h.risk] || "var(--teal)"}18` }}>
                 <Icon name="heart" size={18} color={RISK_COLOR[h.risk] || "var(--teal)"} />
               </div>
@@ -2785,10 +2832,237 @@ function WorkerPatientDetail({ patientId, onBack, onStart }) {
                 <div className="rec-meta">{fmtDate(h.created_at)} · {Math.round((h.confidence || 0) * 100)}% match</div>
               </div>
               <span className={`badge badge-${h.risk}`}>{h.risk}</span>
+              <Icon name="chevR" size={14} color="var(--muted-l)" />
             </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// WORKER RECORD DETAIL
+// The same rich assessment-detail view an individual gets for their own
+// past records (RecordDetail) -- result ring, red-flag banner, clinic
+// finder, recommendations, reported symptoms, differential diagnosis,
+// PDF download, and delete -- scoped to one of a worker's patients.
+//
+// patientName is passed down explicitly from the already-loaded patient
+// object rather than trusting the backend record's own patient_name
+// field, and workerName is passed through to generateTropiCareReport's
+// `worker` argument -- both required so the PDF's data-leak guard
+// (isSelfReport) is set correctly for a worker-generated report; passing
+// no `worker` here would incorrectly treat this as a self-report.
+// ─────────────────────────────────────────────
+function WorkerRecordDetail({ record, patientName, workerName, onBack, toast }) {
+  const [full,        setFull]        = useState(record);
+  const [downloading, setDownloading] = useState(false);
+  const [delConfirm,  setDelConfirm]  = useState(false);
+  const [deleting,    setDeleting]    = useState(false);
+  const [deleted,     setDeleted]     = useState(false);
+  const [showClinicFinder, setShowClinicFinder] = useState(false);
+
+  // Fetch full record (includes ml_scores + confidence_trajectory). The
+  // worker owns this diagnosis (DiagnosisModel.user_id == the worker's own
+  // id), so the same ownership-checked endpoint individuals use for their
+  // own records works correctly here too.
+  useEffect(() => {
+    let cancelled = false;
+    if (!record?.id) return;
+    api.get(`/patient/history/${record.id}`)
+      .then((d) => { if (!cancelled && !_loggingOut) setFull({ ...record, ...d }); })
+      .catch(() => { /* keep summary record as fallback */ });
+    return () => { cancelled = true; };
+  }, [record?.id]);
+
+  const handleDownload = () => {
+    setDownloading(true);
+    try {
+      generateTropiCareReport({
+        patient:   { name: patientName },
+        diagnosis: full,
+        worker:    { name: workerName },
+      });
+    } catch (e) {
+      if (toast) toast("Could not generate the PDF report.");
+      console.error("PDF error:", e);
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!delConfirm) {
+      setDelConfirm(true);
+      setTimeout(() => setDelConfirm(false), 6000);
+      return;
+    }
+    setDeleting(true);
+    try {
+      await api.delete(`/patient/history/${full.id}`);
+      if (toast) toast("Record deleted.");
+      setDeleted(true);
+      setTimeout(() => onBack(), 600);
+    } catch {
+      if (toast) toast("Could not delete. Please try again.");
+      setDeleting(false);
+      setDelConfirm(false);
+    }
+  };
+
+  if (deleted) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh" }}>
+        <div style={{ color: "var(--muted)", fontSize: 14 }}>Record deleted.</div>
+      </div>
+    );
+  }
+
+  const color = RISK_COLOR[full.risk] || "var(--teal)";
+  const rec   = full.recommendation   || {};
+  const syms  = (full.active_symptoms || []).map((s) => s.replace(/_/g, " "));
+  const mlScores = full.ml_scores
+    ? Object.entries(full.ml_scores).filter(([d]) => d !== full.disease).slice(0, 5)
+    : [];
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
+        <button onClick={onBack} className="icon-btn"
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>
+          Assessment Detail
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
+        {/* Result summary */}
+        <div className="card card-p text-c mb-3">
+          <div className={`result-ring result-ring-${full.risk}`} style={{ width: 90, height: 90 }}>
+            <Icon name={full.risk === "High" ? "alert" : full.risk === "Medium" ? "info" : "check"} size={36} color={color} />
+          </div>
+          <div style={{ fontFamily: "var(--display)", fontSize: 22, fontWeight: 700, margin: "12px 0 6px", color: "var(--ink)" }}>
+            {full.disease || "No diagnosis"}
+          </div>
+          <span className={`badge badge-${full.risk}`}>{full.risk} Risk</span>
+          <div className="t-subtitle mt-2" style={{ fontSize: 12 }}>
+            {patientName} · {new Date(full.created_at).toLocaleString("en-GB")}
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 700, color, marginTop: 6 }}>
+            {Math.round((full.confidence || 0) * 100)}% match
+          </div>
+          {full.explanation && (
+            <div className="t-subtitle mt-3 italic" style={{ borderTop: "1px solid var(--border)", paddingTop: 12 }}>
+              {full.explanation}
+            </div>
+          )}
+        </div>
+
+        {/* Urgent red-flag banner — same treatment as an individual's own
+            record detail: shown whenever a dangerous symptom pattern was
+            detected, even if the predicted condition displays a lower
+            risk color. */}
+        {full.red_flags && full.red_flags.length > 0 && (
+          <div
+            className="card card-p mb-3"
+            style={{ border: `1px solid ${RISK_COLOR.High}`, background: RISK_BG.High }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <Icon name="alert" size={16} color={RISK_COLOR.High} />
+              <span style={{ fontFamily: "var(--display)", fontWeight: 700, fontSize: 14, color: RISK_COLOR.High }}>
+                Urgent — Seek Care Now
+              </span>
+            </div>
+            {full.red_flags.map((msg, i) => (
+              <p
+                key={i}
+                style={{
+                  fontSize: 13,
+                  color: "var(--ink)",
+                  lineHeight: 1.5,
+                  marginBottom: i < full.red_flags.length - 1 ? 6 : 0,
+                }}
+              >
+                {msg}
+              </p>
+            ))}
+          </div>
+        )}
+
+        {/* Clinic finder — available at every risk level */}
+        <button className="btn btn-outline btn-full mb-4" onClick={() => setShowClinicFinder(true)}>
+          <Icon name="map" size={16} />
+          Find Nearby Clinics
+        </button>
+
+        {/* Recommendations */}
+        <div className="section-ttl mb-2">Recommendations</div>
+        <div className="rec-bubbles mb-4">
+          <RecBubble icon="heart"     label="Home Care"        text={rec.home_care} accent="var(--green-d)"  />
+          <RecBubble icon="clipboard" label="Recommended Test" text={rec.test}      accent="var(--blue-d)"   />
+          <RecBubble icon="user"      label="Doctor Visit"     text={rec.doctor}    accent={color}            />
+          {rec.safety && <RecBubble icon="alert" label="Important" text={rec.safety} accent="var(--red-d)" />}
+        </div>
+
+        {/* Reported symptoms */}
+        {syms.length > 0 && (
+          <div className="card card-p mb-4">
+            <div className="section-ttl mb-2">Reported Symptoms ({syms.length})</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {syms.map((s) => (
+                <span key={s} style={{
+                  padding: "5px 12px", background: "var(--teal-xl)",
+                  borderRadius: 99, fontSize: 12, fontWeight: 600, color: "var(--teal-d)",
+                }}>
+                  {s}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ML scores */}
+        {mlScores.length > 0 && (
+          <div className="card card-p mb-4">
+            <div className="section-ttl mb-3">Differential Diagnosis</div>
+            {mlScores.map(([d, conf]) => (
+              <div key={d} className="score-bar-row">
+                <span className="score-bar-name">{d}</span>
+                <div className="score-bar-track">
+                  <div className="score-bar-fill" style={{ width: `${Math.round(conf * 100)}%` }} />
+                </div>
+                <span className="score-bar-pct">{Math.round(conf * 100)}%</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
+            <Icon name="download" size={15} />
+            {downloading ? "Preparing PDF..." : "Download PDF Report"}
+          </button>
+          {delConfirm && (
+            <div className="disclaimer">
+              <Icon name="alert" size={13} color="var(--amber)" />
+              <p>Tap delete again to permanently remove this record. This cannot be undone.</p>
+            </div>
+          )}
+          <button className="btn btn-danger btn-full" onClick={handleDelete} disabled={deleting}>
+            <Icon name="trash" size={14} color="#fff" />
+            {deleting ? "Deleting..." : delConfirm ? "Confirm Delete" : "Delete Record"}
+          </button>
+          {delConfirm && (
+            <button className="btn btn-secondary btn-full" onClick={() => setDelConfirm(false)}>Cancel</button>
+          )}
+        </div>
+      </div>
+
+      {showClinicFinder && <ClinicFinder onClose={() => setShowClinicFinder(false)} />}
     </div>
   );
 }
