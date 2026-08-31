@@ -53,8 +53,6 @@ Health worker accounts add a patient-management layer on top of the same assessm
 - **Patient roster** — every registered patient shows their most recent risk tier, sorted highest-risk first, with full assessment history per patient.
 - **Red-flag reporting** — PDF reports carry a high-visibility warning block whenever an assessment triggers a red-flag symptom pattern, so it can't be missed by a clinician skimming the report.
 
-Reports for a worker-entered patient always show that patient's own details — falling back to "Not provided" rather than the worker's own stored information.
-
 ---
 
 ## Confidence Evolution
