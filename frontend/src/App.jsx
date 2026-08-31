@@ -2289,7 +2289,7 @@ function WorkerPatientRow({ patient, onClick }) {
 // ─────────────────────────────────────────────
 function WorkerDashboard({ user, onStart, onNav, toast }) {
   const { patients, loading, error, reload } = useWorkerPatients();
-  const [view,       setView]       = useState("dashboard"); // "dashboard" | "detail"
+  const [view,       setView]       = useState("dashboard"); // "dashboard" | "detail" | "register"
   const [selectedId, setSelectedId] = useState(null);
 
   if (view === "detail" && selectedId) {
@@ -2300,6 +2300,22 @@ function WorkerDashboard({ user, onStart, onNav, toast }) {
         toast={toast}
         onBack={() => { setView("dashboard"); reload(); }}
         onStart={onStart}
+      />
+    );
+  }
+
+  // "Start a Check" from the dashboard skips the Check tab's explainer
+  // screen entirely -- it goes straight to registering the patient, and
+  // submitting that form starts their assessment immediately (onStart
+  // below), so one tap on the hero leads directly into a live check.
+  if (view === "register") {
+    return (
+      <NewPatientForm
+        onCancel={() => setView("dashboard")}
+        onCreated={(created) => {
+          setView("dashboard");
+          if (created) onStart(created);
+        }}
       />
     );
   }
@@ -2333,14 +2349,16 @@ function WorkerDashboard({ user, onStart, onNav, toast }) {
         <div className="avatar">{(user?.name || "W")[0].toUpperCase()}</div>
       </div>
 
-      {/* Hero — the single entry point for starting a check and, from
-          there, registering a new patient. Kept as the one canonical
-          "add a patient" path rather than duplicating that action here. */}
+      {/* Hero — the single entry point for starting a check. Tapping it
+          goes straight to patient registration (view === "register" above)
+          rather than the Check tab's explainer screen, since a worker
+          landing here already knows what the tool does and wants to move
+          fast. */}
       <div className="hero-card">
         <div className="hero-bg-icon"><Icon name="activity" size={110} color="#fff" /></div>
         <div className="hero-eyebrow">Health Worker Screening</div>
         <div className="hero-headline">Start a new patient check</div>
-        <button className="hero-btn" onClick={() => onNav("assessment")}>
+        <button className="hero-btn" onClick={() => setView("register")}>
           Start a Check <Icon name="chevR" size={14} color="var(--teal-dd)" />
         </button>
       </div>
@@ -2391,7 +2409,7 @@ function WorkerDashboard({ user, onStart, onNav, toast }) {
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 18, lineHeight: 1.55 }}>
               Register your first patient to start running assessments on their behalf.
             </div>
-            <button className="btn btn-primary" onClick={() => onNav("assessment")}>
+            <button className="btn btn-primary" onClick={() => setView("register")}>
               <Icon name="activity" size={15} color="#fff" />
               Start a Check
             </button>
@@ -2786,7 +2804,6 @@ function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
       patientName={patient.name}
       workerName={user?.name}
       onBack={onBack}
-      onStartNew={() => onStart(patient)}
       previousAssessments={history.filter((h) => h.id !== selectedRecord.id)}
       onSelectRecord={(h) => setSelectedId(h.id)}
       toast={toast}
@@ -2808,7 +2825,7 @@ function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
 // (isSelfReport) is set correctly for a worker-generated report; passing
 // no `worker` here would incorrectly treat this as a self-report.
 // ─────────────────────────────────────────────
-function WorkerRecordDetail({ record, patientName, workerName, onBack, onStartNew, previousAssessments = [], onSelectRecord, toast }) {
+function WorkerRecordDetail({ record, patientName, workerName, onBack, previousAssessments = [], onSelectRecord, toast }) {
   const [full,        setFull]        = useState(record);
   const [downloading, setDownloading] = useState(false);
   const [delConfirm,  setDelConfirm]  = useState(false);
@@ -3030,12 +3047,6 @@ function WorkerRecordDetail({ record, patientName, workerName, onBack, onStartNe
 
         {/* Actions */}
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          {onStartNew && (
-            <button className="btn btn-primary btn-full" onClick={onStartNew}>
-              <Icon name="activity" size={15} color="#fff" />
-              New Assessment
-            </button>
-          )}
           <button className="btn btn-secondary btn-full" onClick={handleDownload} disabled={downloading}>
             <Icon name="download" size={15} />
             {downloading ? "Preparing PDF..." : "Download PDF Report"}
