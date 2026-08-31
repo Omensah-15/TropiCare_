@@ -2830,7 +2830,7 @@ function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
   return (
     <WorkerRecordDetail
       record={selectedRecord}
-      patientName={patient.name}
+      patient={patient}
       workerName={user?.name}
       onBack={onBack}
       previousAssessments={history.filter((h) => h.id !== selectedRecord.id)}
@@ -2847,14 +2847,18 @@ function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
 // finder, recommendations, reported symptoms, differential diagnosis,
 // PDF download, and delete -- scoped to one of a worker's patients.
 //
-// patientName is passed down explicitly from the already-loaded patient
-// object rather than trusting the backend record's own patient_name
-// field, and workerName is passed through to generateTropiCareReport's
-// `worker` argument -- both required so the PDF's data-leak guard
-// (isSelfReport) is set correctly for a worker-generated report; passing
-// no `worker` here would incorrectly treat this as a self-report.
+// The full patient object (name, age, gender, community) is passed down
+// explicitly from the already-loaded patient record rather than trusting
+// the backend record's own patient_name field or extracting just the
+// name -- otherwise age/gender/community entered for this patient get
+// silently dropped and the PDF falls back to "Not provided" for fields
+// that were, in fact, provided. workerName is passed through to
+// generateTropiCareReport's `worker` argument -- both required so the
+// PDF's data-leak guard (isSelfReport) is set correctly for a
+// worker-generated report; passing no `worker` here would incorrectly
+// treat this as a self-report.
 // ─────────────────────────────────────────────
-function WorkerRecordDetail({ record, patientName, workerName, onBack, previousAssessments = [], onSelectRecord, toast }) {
+function WorkerRecordDetail({ record, patient, workerName, onBack, previousAssessments = [], onSelectRecord, toast }) {
   const [full,        setFull]        = useState(record);
   const [downloading, setDownloading] = useState(false);
   const [delConfirm,  setDelConfirm]  = useState(false);
@@ -2888,7 +2892,7 @@ function WorkerRecordDetail({ record, patientName, workerName, onBack, previousA
     setDownloading(true);
     try {
       generateTropiCareReport({
-        patient:   { name: patientName },
+        patient:   patient,
         diagnosis: full,
         worker:    { name: workerName },
       });
@@ -2957,7 +2961,7 @@ function WorkerRecordDetail({ record, patientName, workerName, onBack, previousA
           </div>
           <span className={`badge badge-${full.risk}`}>{full.risk} Risk</span>
           <div className="t-subtitle mt-2" style={{ fontSize: 12 }}>
-            {patientName} · {new Date(full.created_at).toLocaleString("en-GB")}
+            {patient?.name} · {new Date(full.created_at).toLocaleString("en-GB")}
           </div>
           <div style={{ fontSize: 13, fontWeight: 700, color, marginTop: 6 }}>
             {Math.round((full.confidence || 0) * 100)}% match
