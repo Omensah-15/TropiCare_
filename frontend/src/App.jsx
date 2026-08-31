@@ -4264,7 +4264,7 @@ function AboutScreen({ onBack }) {
     { icon: "shield",    color: "var(--purple)", bg: "var(--purple-l)", title: "Risk Stratification",          desc: "Every result is classified as High, Medium, or Low risk with clear, actionable next steps." },
     { icon: "heart",     color: "var(--red)",    bg: "var(--red-l)",    title: "AI-Powered Recommendations",   desc: "OpenRouter AI generates personalised home care, test, and doctor-visit guidance tailored to your symptoms." },
     { icon: "clipboard", color: "var(--amber)",  bg: "var(--amber-l)",  title: "Assessment History",           desc: "All past results are stored securely so you and your care provider can track changes over time." },
-    { icon: "map",       color: "var(--teal)",   bg: "var(--teal-xl)",  title: "Nearby Clinic Finder",         desc: "Locate nearby hospitals and clinics with one tap and get directions, for any assessment result." },
+    { icon: "map",       color: "var(--teal)",   bg: "var(--teal-xl)",  title: "Nearby Clinic Finder",         desc: "Locate nearby hospitals and clinics with one tap and get directions." },
     { icon: "user",      color: "var(--green)",  bg: "var(--green-l)",  title: "Built for West Africa",        desc: "Disease coverage and clinical guidance are tailored to the disease burden and healthcare context of West Africa." },
   ];
 
@@ -4279,7 +4279,7 @@ function AboutScreen({ onBack }) {
     { key: "Release",     val: "Jan 2026" },
     { key: "Platform",    val: "Web · Mobile" },
     { key: "Institution", val: "KNUST, Ghana" },
-    { key: "License",     val: "Academic use only" },
+    { key: "License",     val: "MIT" },
   ];
 
   return (
