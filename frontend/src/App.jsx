@@ -764,6 +764,7 @@ const injectStyles = () => {
     .page-body{padding:20px 24px 40px;}
     @media(max-width:767px){.page-head{padding:18px 16px 0;}.page-body{padding:16px 16px 32px;}}
     @media(max-width:380px){.page-head{padding:16px 12px 0;}.page-body{padding:14px 12px 28px;}}
+    .form-narrow{width:100%;max-width:520px;margin:0 auto;}
     .t-display{font-family:var(--display);font-size:26px;font-weight:700;color:var(--ink);line-height:1.2;letter-spacing:-0.3px;}
     @media(max-width:480px){.t-display{font-size:22px;}}
     .t-title{font-size:18px;font-weight:700;color:var(--ink);line-height:1.3;}
@@ -2766,63 +2767,69 @@ function NewPatientForm({ onCancel, onCreated }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 18 }}>
-        <button onClick={onCancel} className="icon-btn"
-          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
-          <Icon name="chevL" size={16} color="var(--ink)" />
-        </button>
-        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>
-          New Patient
+      <div className="page-head">
+        <div className="form-narrow" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={onCancel} className="icon-btn"
+            style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+            <Icon name="chevL" size={16} color="var(--ink)" />
+          </button>
+          <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>
+            New Patient
+          </div>
         </div>
       </div>
 
-      <div className="card card-p">
-        <div className="field">
-          <label className="field-label">Full Name</label>
-          <input className="field-input" placeholder="e.g. Ama Owusu" value={name}
-            onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div className="grid-2">
-          <div className="field">
-            <label className="field-label">Age</label>
-            <input className="field-input" type="number" placeholder="25" value={age}
-              onChange={(e) => setAge(e.target.value)} />
-          </div>
-          <div className="field">
-            <label className="field-label">Gender</label>
-            <select className="field-input field-select" value={gender}
-              onChange={(e) => setGender(e.target.value)}>
-              <option value="">Select</option>
-              <option>Male</option>
-              <option>Female</option>
-              <option>Other</option>
-            </select>
-          </div>
-        </div>
-        <div className="field">
-          <label className="field-label">Community</label>
-          <input className="field-input" placeholder="e.g. Ayigya" value={community}
-            onChange={(e) => setCommunity(e.target.value)} />
-        </div>
+      <div className="page-body">
+        <div className="form-narrow">
+          <div className="card card-p">
+            <div className="field">
+              <label className="field-label">Full Name</label>
+              <input className="field-input" placeholder="e.g. Ama Owusu" value={name}
+                onChange={(e) => setName(e.target.value)} />
+            </div>
+            <div className="grid-2">
+              <div className="field">
+                <label className="field-label">Age</label>
+                <input className="field-input" type="number" placeholder="25" value={age}
+                  onChange={(e) => setAge(e.target.value)} />
+              </div>
+              <div className="field">
+                <label className="field-label">Gender</label>
+                <select className="field-input field-select" value={gender}
+                  onChange={(e) => setGender(e.target.value)}>
+                  <option value="">Select</option>
+                  <option>Male</option>
+                  <option>Female</option>
+                  <option>Other</option>
+                </select>
+              </div>
+            </div>
+            <div className="field">
+              <label className="field-label">Community</label>
+              <input className="field-input" placeholder="e.g. Ayigya" value={community}
+                onChange={(e) => setCommunity(e.target.value)} />
+            </div>
 
-        <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 4, cursor: "pointer" }}>
-          <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)}
-            style={{ marginTop: 3 }} />
-          <span style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
-            The patient has given consent to be registered and screened using TropiCare.
-          </span>
-        </label>
+            <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginTop: 4, cursor: "pointer" }}>
+              <input type="checkbox" checked={consent} onChange={(e) => setConsent(e.target.checked)}
+                style={{ marginTop: 3 }} />
+              <span style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
+                The patient has given consent to be registered and screened using TropiCare.
+              </span>
+            </label>
 
-        {err && (
-          <div className="disclaimer mt-2">
-            <Icon name="alert" size={13} color="var(--amber)" />
-            <p>{err}</p>
+            {err && (
+              <div className="disclaimer mt-2">
+                <Icon name="alert" size={13} color="var(--amber)" />
+                <p>{err}</p>
+              </div>
+            )}
+
+            <button className="btn btn-primary btn-full mt-3" onClick={submit} disabled={submitting || !consent}>
+              {submitting ? "Registering..." : "Register Patient"}
+            </button>
           </div>
-        )}
-
-        <button className="btn btn-primary btn-full mt-3" onClick={submit} disabled={submitting || !consent}>
-          {submitting ? "Registering..." : "Register Patient"}
-        </button>
+        </div>
       </div>
     </div>
   );
