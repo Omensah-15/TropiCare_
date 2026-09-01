@@ -851,7 +851,7 @@ const injectStyles = () => {
     .badge-Medium{background:var(--amber-l);color:var(--amber-d);}
     .badge-Low{background:var(--green-l);color:var(--green-d);}
     .badge-teal{background:var(--teal-xl);color:var(--teal-d);}
-    .prog-track{height:6px;background:var(--border-l);border-radius:99px;overflow:hidden;}
+    .prog-track{position:relative;height:6px;background:var(--border-l);border-radius:99px;overflow:hidden;}
     .prog-fill{height:100%;background:linear-gradient(90deg,var(--teal-l),var(--teal) 60%,var(--teal-d));border-radius:99px;transition:width var(--t-slow);}
     .avatar{width:38px;height:38px;border-radius:99px;background:var(--teal-xl);display:flex;align-items:center;justify-content:center;color:var(--teal-d);font-weight:700;font-size:14px;flex-shrink:0;border:1px solid var(--teal-l);}
     .avatar-lg{width:64px;height:64px;font-size:22px;background:linear-gradient(160deg,var(--teal-l),var(--teal-xl));box-shadow:var(--shadow-s);}
@@ -970,7 +970,13 @@ const injectStyles = () => {
     .q-close{width:36px;height:36px;background:var(--border-l);border-radius:8px;border:none;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;transition:background var(--t-fast),transform var(--t-fast);}
     .q-close:hover{background:var(--border);}
     .q-close:active{transform:scale(0.92);}
-    .q-counter{font-size:12px;font-weight:700;color:var(--muted);width:38px;text-align:right;flex-shrink:0;}
+    .q-counter{font-size:12px;font-weight:700;color:var(--muted);width:42px;text-align:right;flex-shrink:0;transition:color var(--t-fast);}
+    .q-counter-extended{color:var(--purple-d);}
+    .prog-boundary{position:absolute;top:0;bottom:0;width:2px;background:var(--surface);z-index:1;transform:translateX(-1px);}
+    .prog-fill-extended{background:linear-gradient(90deg,var(--teal-d) 0%,var(--purple) 68%,var(--purple-d) 100%);}
+    .q-extend-banner{display:flex;align-items:center;gap:7px;padding:8px 20px;background:var(--purple-l);color:var(--purple-d);font-size:12px;font-weight:700;flex-shrink:0;animation:bubble-in var(--t-slow) var(--ease);}
+    @media(max-width:480px){.q-extend-banner{padding:7px 14px;}}
+    .q-extend-dot{width:6px;height:6px;border-radius:99px;background:var(--purple);flex-shrink:0;animation:breathe 1.6s ease-in-out infinite;}
     .q-body{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px 20px;overflow-y:auto;}
     @media(max-width:480px){.q-body{padding:18px 16px;}}
     .q-cat-pill{display:inline-flex;padding:4px 12px;background:var(--teal-xl);color:var(--teal-d);border-radius:99px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:20px;border:1px solid var(--teal-l);}
@@ -3326,7 +3332,16 @@ function AssessmentLanding({ onStart }) {
 // ─────────────────────────────────────────────
 function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
   const [animKey, setAnimKey] = useState(0);
+  // Once the session has grown past the base question budget, a single
+  // clear-leading disease is being confirmed on its own remaining
+  // symptoms (see BASE_QUESTION_BUDGET / EXTENDED_QUESTION_CEILING).
+  // The bar and counter need to say so explicitly here -- silently
+  // sliding the denominator from 15 to 22 without any other signal reads
+  // as a bug ("didn't this say 15 questions?") rather than the intended
+  // "we're confirming your leading result" behaviour.
+  const extended = total > BASE_QUESTION_BUDGET;
   const progress = (qIdx / total) * 100;
+  const boundaryPct = extended ? (BASE_QUESTION_BUDGET / total) * 100 : null;
   const answer = (val) => { setAnimKey((k) => k + 1); onAnswer(val); };
   return (
     <div className="q-screen">
@@ -3336,11 +3351,23 @@ function QuestionScreen({ question, qIdx, total, onAnswer, onQuit }) {
         </button>
         <div style={{ flex: 1 }}>
           <div className="prog-track">
-            <div className="prog-fill" style={{ width: `${progress}%` }} />
+            {boundaryPct !== null && (
+              <div className="prog-boundary" style={{ left: `${boundaryPct}%` }} />
+            )}
+            <div
+              className={extended ? "prog-fill prog-fill-extended" : "prog-fill"}
+              style={{ width: `${progress}%` }}
+            />
           </div>
         </div>
-        <div className="q-counter">{qIdx + 1}/{total}</div>
+        <div className={extended ? "q-counter q-counter-extended" : "q-counter"}>{qIdx + 1}/{total}</div>
       </div>
+      {extended && (
+        <div className="q-extend-banner">
+          <span className="q-extend-dot" />
+          Confirming your leading result — almost done
+        </div>
+      )}
       <div key={animKey} className="q-body q-anim">
         <div className="q-cat-pill">{question.category}</div>
         <QuestionIllus question={question} />
