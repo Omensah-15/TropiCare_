@@ -4396,7 +4396,7 @@ function AboutScreen({ onBack }) {
   ];
 
   const versionInfo = [
-    { key: "Version",     val: "1.0.0" },
+    { key: "Version",     val: "3.1.0" },
     { key: "Release",     val: "Jan 2026" },
     { key: "Platform",    val: "Web · Mobile" },
     { key: "Institution", val: "KNUST, Ghana" },
