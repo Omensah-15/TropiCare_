@@ -697,6 +697,27 @@ SYMPTOM_WEIGHT: Dict[str, float] = {
 # entire session and starves every other candidate of a real differential.
 QUESTION_MONOPOLY_CAP = 8
 
+# Once the base BASE_QUESTION_BUDGET questions are used, a session may
+# continue asking ONLY a single, clearly-leading disease's own remaining
+# symptoms -- see get_confirmation_extension_question() below -- instead of
+# hard-stopping even when that leader still has unasked symptoms of its
+# own. This exists because longer-symptom-list diseases (e.g. Hepatitis B,
+# Common Cold, Tuberculosis) could finish under-covered within the base
+# budget and get out-ranked by a shorter-list relative that happened to
+# get fully asked, purely because of list length rather than the actual
+# evidence. EXTENDED_QUESTION_CEILING is a hard ceiling this extension can
+# never cross, so ambiguous sessions (no clear leader) still end promptly
+# at BASE_QUESTION_BUDGET exactly as before.
+BASE_QUESTION_BUDGET      = 15
+EXTENDED_QUESTION_CEILING = 22
+
+# Confirmation-extension thresholds: the leader must have had at least
+# this many of its OWN symptoms asked already (so one lucky early "yes"
+# can't trigger the extension), and at least this fraction of those asked
+# symptoms must have been confirmed "yes".
+LEADER_CONFIRM_MIN_ASKED = 3
+LEADER_CONFIRM_RATIO     = 2 / 3  # ~66%
+
 ALL_QUESTIONS: List[Dict[str, str]] = [
     {"id":"back_pain","question":"Do you have back pain?","category":"General"},
     {"id":"chills","question":"Do you have chills or shivering?","category":"General"},
@@ -1053,6 +1074,60 @@ def get_next_question(answers: dict, asked: list) -> Optional[dict]:
         if q["id"] not in asked:
             return q
     return None
+
+
+def get_confirmation_extension_question(answers: dict, asked: list) -> Optional[dict]:
+    """
+    Called only once the base BASE_QUESTION_BUDGET (15) questions have been
+    used. Decides whether a single, non-tied leading disease has earned a
+    short confirmation extension to finish its OWN profile, and if so
+    returns its next unasked symptom directly -- bypassing get_next_question's
+    pool/taper/monopoly-cap logic entirely, since the differential-building
+    phase is over and the only goal left is completing the leader's own
+    symptom coverage. The caller is responsible for enforcing the hard
+    EXTENDED_QUESTION_CEILING; this function only decides WHICH question (if
+    any) comes next.
+
+    Extension fires only when ALL of the following hold:
+      - There's a single top-scoring disease with no other disease tied
+        with it on score (a genuine, unambiguous leader) -- ties mean the
+        differential is still open, so the session should not have moved
+        into single-disease confirmation mode.
+      - At least LEADER_CONFIRM_MIN_ASKED of the leader's OWN symptoms have
+        already been asked, so a single lucky early "yes" can't trigger
+        this on its own.
+      - At least LEADER_CONFIRM_RATIO (~66%) of those asked symptoms were
+        answered "yes".
+      - The leader still has at least one of its own symptoms left unasked
+        (otherwise there's nothing left to confirm).
+
+    Returns None whenever any of the above fails, which ends the session at
+    whatever question count it's currently at -- identical to the pre-
+    extension behaviour for every session where no clear leader emerges.
+    """
+    scores = {d: score_disease(d, answers) for d in DISEASE_SYMPTOM_MAP}
+    ranked = sorted(DISEASE_SYMPTOM_MAP.keys(), key=lambda d: scores[d], reverse=True)
+    if not ranked:
+        return None
+
+    leader = ranked[0]
+    if len(ranked) > 1 and scores[ranked[1]] == scores[leader]:
+        return None  # tied leaders -- no single clear winner to confirm
+
+    leader_symptoms = DISEASE_SYMPTOM_MAP[leader]
+    leader_asked = [s for s in leader_symptoms if s in asked]
+    if len(leader_asked) < LEADER_CONFIRM_MIN_ASKED:
+        return None
+
+    yes_count = sum(1 for s in leader_asked if answers.get(s) is True)
+    if yes_count < len(leader_asked) * LEADER_CONFIRM_RATIO - 1e-9:
+        return None
+
+    for sym in leader_symptoms:
+        if sym not in asked:
+            return Q_INDEX.get(sym)
+
+    return None  # leader's own symptom list is already fully asked
 
 
 def _disease_confidence(disease: str, answers: dict, asked: Optional[list] = None) -> float:
@@ -2879,12 +2954,20 @@ async def next_question(
         ttl=3600,
     )
 
-    if len(asked) >= 15:
+    if len(asked) >= EXTENDED_QUESTION_CEILING:
         s.completed = True
         db.commit()
         return {"completed": True}
 
-    next_q = get_next_question(answers, asked)
+    if len(asked) >= BASE_QUESTION_BUDGET:
+        # Base budget spent -- only a single clear leader's own remaining
+        # symptoms can extend the session further (see
+        # get_confirmation_extension_question's docstring). No pool/taper/
+        # monopoly-cap logic applies here.
+        next_q = get_confirmation_extension_question(answers, asked)
+    else:
+        next_q = get_next_question(answers, asked)
+
     if not next_q:
         s.completed = True
         db.commit()
