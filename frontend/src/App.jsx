@@ -226,6 +226,16 @@ const SYMPTOM_WEIGHT = Object.fromEntries(
 // candidate -- mirrors the backend's QUESTION_MONOPOLY_CAP (main.py).
 const QUESTION_MONOPOLY_CAP = 8;
 
+// Once the base BASE_QUESTION_BUDGET questions are used, a session may
+// continue asking ONLY a single, clearly-leading disease's own remaining
+// symptoms instead of hard-stopping -- mirrors the backend's
+// get_confirmation_extension_question (main.py). EXTENDED_QUESTION_CEILING
+// is a hard ceiling this extension can never cross.
+const BASE_QUESTION_BUDGET = 15;
+const EXTENDED_QUESTION_CEILING = 22;
+const LEADER_CONFIRM_MIN_ASKED = 3;
+const LEADER_CONFIRM_RATIO = 2 / 3; // ~66%
+
 const ALL_QUESTIONS = [
   {id:"back_pain",question:"Do you have back pain?",category:"General"},
   {id:"chills",question:"Do you have chills or shivering?",category:"General"},
@@ -507,6 +517,39 @@ function getNextQuestionOffline(answers, asked) {
   }
 
   return ALL_QUESTIONS.find((q) => !asked.includes(q.id)) || null;
+}
+
+// ─────────────────────────────────────────────
+// CONFIRMATION EXTENSION (offline) -- mirrors the backend's
+// get_confirmation_extension_question (main.py). Called only once
+// BASE_QUESTION_BUDGET questions have been asked; decides whether a
+// single, non-tied leading disease has earned a short extension to
+// finish its OWN remaining symptoms, bypassing getNextQuestionOffline's
+// pool/taper/monopoly-cap logic entirely. See main.py's docstring for the
+// full rationale -- this must stay in lockstep with it.
+// ─────────────────────────────────────────────
+function getConfirmationExtensionQuestion(answers, asked) {
+  const scores = {};
+  Object.keys(DISEASE_SYMPTOM_MAP).forEach((d) => { scores[d] = scoreDisease(d, answers); });
+  const ranked = Object.keys(DISEASE_SYMPTOM_MAP).sort((a, b) => scores[b] - scores[a]);
+  if (ranked.length === 0) return null;
+
+  const leader = ranked[0];
+  if (ranked.length > 1 && scores[ranked[1]] === scores[leader]) return null; // tied leaders
+
+  const leaderSymptoms = DISEASE_SYMPTOM_MAP[leader] || [];
+  const leaderAsked = leaderSymptoms.filter((s) => asked.includes(s));
+  if (leaderAsked.length < LEADER_CONFIRM_MIN_ASKED) return null;
+
+  const yesCount = leaderAsked.filter((s) => answers[s] === true).length;
+  if (yesCount < leaderAsked.length * LEADER_CONFIRM_RATIO - 1e-9) return null;
+
+  for (const sym of leaderSymptoms) {
+    if (!asked.includes(sym)) {
+      return Q_INDEX[sym] || null;
+    }
+  }
+  return null; // leader's own symptom list is already fully asked
 }
 
 // ─────────────────────────────────────────────
@@ -1463,8 +1506,6 @@ export default function App() {
 
   const handleFontSizeChange = useCallback((fs) => setFontSize(fs), []);
 
-  const MAX_Q = 15;
-
   const toast = useCallback((msg) => {
     setNotif(msg);
     clearTimeout(_notifTimer);
@@ -1605,7 +1646,17 @@ export default function App() {
       { step: prev.length + 1, symptom: currentQ.id, answer: val, scores: top6 },
     ]);
 
-    if (newAsked.length >= MAX_Q) { finishAssessment(newAnswers, newAsked); return; }
+    // Hard ceiling -- can never be crossed regardless of confirmation
+    // extension confidence, so ambiguous sessions still end promptly.
+    if (newAsked.length >= EXTENDED_QUESTION_CEILING) { finishAssessment(newAnswers, newAsked); return; }
+
+    // Past the base budget, only a single clear leader's own remaining
+    // symptoms can extend the session further -- no pool/taper/monopoly-cap
+    // logic applies here. Below the base budget, behaviour is unchanged.
+    const pickOfflineNext = (a, k) =>
+      k.length >= BASE_QUESTION_BUDGET
+        ? getConfirmationExtensionQuestion(a, k)
+        : getNextQuestionOffline(a, k);
 
     let next = null;
     if (sessionId) {
@@ -1617,10 +1668,10 @@ export default function App() {
         if (res.completed) { finishAssessment(newAnswers, newAsked); return; }
         next = res.next_question;
       } catch {
-        next = getNextQuestionOffline(newAnswers, newAsked);
+        next = pickOfflineNext(newAnswers, newAsked);
       }
     } else {
-      next = getNextQuestionOffline(newAnswers, newAsked);
+      next = pickOfflineNext(newAnswers, newAsked);
     }
 
     if (_loggingOut) return;
@@ -1771,7 +1822,13 @@ export default function App() {
 
     if (assActive && currentQ)
       return (
-        <QuestionScreen question={currentQ} qIdx={qIdx} total={MAX_Q} onAnswer={handleAnswer} onQuit={resetAssessment} />
+        <QuestionScreen
+          question={currentQ}
+          qIdx={qIdx}
+          total={qIdx + 1 > BASE_QUESTION_BUDGET ? EXTENDED_QUESTION_CEILING : BASE_QUESTION_BUDGET}
+          onAnswer={handleAnswer}
+          onQuit={resetAssessment}
+        />
       );
 
     return (
