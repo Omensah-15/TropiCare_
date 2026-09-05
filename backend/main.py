@@ -153,6 +153,36 @@ class Settings(BaseSettings):
     # logs a geoapify_error and falls back to the curated facility list.
     geoapify_api_key: str = ""
 
+    # -------------------------------------------------------------
+    # PASSWORD RESET EMAIL (SMTP)
+    # -------------------------------------------------------------
+    # Standard SMTP so any provider works -- Gmail/Workspace, Outlook,
+    # SendGrid, Mailgun, Postmark and Amazon SES (via its SMTP interface)
+    # all accept these same five settings. Leave smtp_host blank in
+    # development: /auth/forgot-password then logs the reset link instead
+    # of emailing it, so the flow still works end to end locally with no
+    # mail server configured.
+    smtp_host:      str = ""
+    smtp_port:      int = 587
+    smtp_username:  str = ""
+    smtp_password:  str = ""
+    smtp_use_tls:   bool = True
+    # Shown as the email's "From" name/address. Falls back to smtp_username
+    # when blank, since most providers require the From address to match
+    # (or be verified against) the authenticated account anyway.
+    smtp_from_email: str = ""
+    smtp_from_name:  str = "TropiCare"
+
+    # Public URL of the deployed frontend (e.g. https://tropicare.vercel.app)
+    # -- used to build the link inside the password reset email. Must be
+    # set in production; the localhost default only makes sense when
+    # running the Vite dev server locally.
+    frontend_url: str = "http://localhost:5173"
+
+    # How long a password reset link stays valid before the user has to
+    # request a new one.
+    password_reset_token_expire_minutes: int = 30
+
     @property
     def origins_list(self) -> list[str]:
         raw = self.allowed_origins.strip()
@@ -411,6 +441,30 @@ class SessionModel(Base):
     )
 
 
+class PasswordResetTokenModel(Base):
+    """
+    A single-use, expiring token issued when a user requests a password
+    reset. The raw token is emailed to the user and never stored -- only
+    its SHA-256 hash lives here, so a leaked database (unlike a leaked
+    email) can't be used to reset anyone's password. Looked up by
+    token_hash, scoped by expires_at/used_at so a link only ever works
+    once, within its window, and requesting a new one invalidates the
+    ones before it (see /auth/forgot-password).
+    """
+    __tablename__ = "password_reset_tokens"
+
+    id         = Column(Integer, primary_key=True, index=True)
+    user_id    = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String(64), unique=True, index=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=False)
+    used_at    = Column(DateTime, nullable=True)
+
+    __table_args__ = (
+        Index("ix_pw_reset_user_used", "user_id", "used_at"),
+    )
+
+
 # -----------------------------------------------------------------
 # SCHEMA AUTO-MIGRATION
 #
@@ -439,7 +493,7 @@ def run_schema_migrations() -> None:
         logger.error({"event": "schema_migration_inspect_failed", "error": str(e)})
         return
 
-    for model in (UserModel, SessionModel, DiagnosisModel, PatientModel):
+    for model in (UserModel, SessionModel, DiagnosisModel, PatientModel, PasswordResetTokenModel):
         table = model.__table__
         if table.name not in existing_tables:
             # Brand-new table: Base.metadata.create_all() already created it
@@ -2033,6 +2087,15 @@ class ChangePasswordRequest(BaseModel):
     new_password:     str
 
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token:        str
+    new_password: str
+
+
 # -----------------------------------------------------------------
 # AUTH HELPERS
 # -----------------------------------------------------------------
@@ -2538,6 +2601,266 @@ async def _check_password_rate_limit(email: str) -> None:
         pass
 
 
+async def _check_reset_rate_limit(email: str) -> None:
+    """
+    Caps how often a password reset can be requested for one email address,
+    independent of the per-IP @limiter.limit on the route itself. Without
+    this, one IP hitting the per-IP limit doesn't stop someone from
+    spamming a *specific* victim's inbox with reset emails from many IPs.
+    Fails open (no Redis -> no extra limit) since the per-IP limiter still
+    applies either way.
+    """
+    r = await get_redis()
+    if r is None:
+        return
+    key = f"pw_reset_req:{email}"
+    try:
+        count = await r.incr(key)
+        if count == 1:
+            await r.expire(key, 3600)
+        if count > 3:
+            raise HTTPException(
+                status_code=429,
+                detail="Too many reset requests for this email. Please try again later.",
+                headers={"Retry-After": "3600"},
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+
+# -----------------------------------------------------------------
+# EMAIL DELIVERY
+#
+# Plain smtplib over the standard SMTP protocol -- works unmodified with
+# Gmail/Google Workspace, Outlook/Microsoft 365, SendGrid, Mailgun,
+# Postmark and Amazon SES (all of them expose an SMTP endpoint), so
+# switching providers in production is a matter of changing environment
+# variables, not code. smtplib is blocking, so the actual send runs in a
+# worker thread via run_in_executor and is scheduled through
+# BackgroundTasks from the route -- the API responds immediately and
+# never makes a user wait on a mail server's round-trip.
+# -----------------------------------------------------------------
+
+def _send_email_sync(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    import smtplib
+    import ssl
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    if not settings.smtp_host:
+        # Not configured (e.g. local development). Log the content instead
+        # of silently pretending to send it, so the flow is still visible
+        # and testable end to end with zero mail-server setup.
+        logger.warning({
+            "event":   "email_not_configured",
+            "to":      to_email,
+            "subject": subject,
+        })
+        return False
+
+    from_email = settings.smtp_from_email or settings.smtp_username
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"]    = f"{settings.smtp_from_name} <{from_email}>"
+    msg["To"]      = to_email
+    msg.attach(MIMEText(text_body, "plain"))
+    msg.attach(MIMEText(html_body, "html"))
+
+    try:
+        context = ssl.create_default_context()
+        # Port 465 is implicit TLS -- the connection itself is encrypted
+        # from the first byte, and calling STARTTLS on it fails (it's a
+        # plaintext-upgrade command that doesn't exist inside an already-
+        # encrypted session). Every other port (587 is the near-universal
+        # default across Gmail/Workspace, Outlook, SendGrid, Mailgun,
+        # Postmark and SES) uses STARTTLS: connect in plaintext, then
+        # upgrade. Branching on the port -- rather than trusting
+        # smtp_use_tls alone -- means a 465 misconfiguration can't
+        # silently produce a confusing STARTTLS error.
+        if settings.smtp_port == 465:
+            server_ctx = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=10, context=context)
+        else:
+            server_ctx = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10)
+        with server_ctx as server:
+            if settings.smtp_port != 465 and settings.smtp_use_tls:
+                server.starttls(context=context)
+            if settings.smtp_username:
+                server.login(settings.smtp_username, settings.smtp_password)
+            server.sendmail(from_email, [to_email], msg.as_string())
+        logger.info({"event": "email_sent", "to": to_email, "subject": subject})
+        return True
+    except Exception as e:
+        logger.error({"event": "email_send_failed", "to": to_email, "error": str(e)})
+        return False
+
+
+async def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, _send_email_sync, to_email, subject, html_body, text_body)
+
+
+def _reset_email_bodies(name: str, reset_link: str, expire_minutes: int) -> tuple[str, str]:
+    """Returns (html_body, text_body) for the password-reset email."""
+    first_name = (name or "there").split(" ")[0]
+    html = f"""\
+<!DOCTYPE html>
+<html>
+  <body style="margin:0;padding:0;background:#f4f7f9;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f7f9;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 6px 24px rgba(11,23,38,0.08);">
+            <tr>
+              <td style="background:#0c8a7e;padding:28px 32px;text-align:center;">
+                <span style="color:#ffffff;font-size:20px;font-weight:700;letter-spacing:0.02em;">TropiCare</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px 32px 8px;">
+                <p style="margin:0 0 16px;color:#0b1726;font-size:15px;line-height:1.6;">Hi {first_name},</p>
+                <p style="margin:0 0 24px;color:#0b1726;font-size:15px;line-height:1.6;">
+                  We received a request to reset the password on your TropiCare account.
+                  Click the button below to choose a new one.
+                </p>
+                <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
+                  <tr>
+                    <td style="border-radius:10px;background:#0c8a7e;">
+                      <a href="{reset_link}" style="display:inline-block;padding:13px 28px;color:#ffffff;font-size:14px;font-weight:700;text-decoration:none;border-radius:10px;">
+                        Reset Password
+                      </a>
+                    </td>
+                  </tr>
+                </table>
+                <p style="margin:0 0 8px;color:#5b6b7c;font-size:13px;line-height:1.6;">
+                  This link expires in {expire_minutes} minutes. If the button above doesn't work, copy and paste this URL into your browser:
+                </p>
+                <p style="margin:0 0 24px;color:#0c8a7e;font-size:12.5px;line-height:1.6;word-break:break-all;">{reset_link}</p>
+                <p style="margin:0;color:#90a0ae;font-size:12.5px;line-height:1.6;">
+                  If you didn't request a password reset, you can safely ignore this email -- your password will not be changed.
+                </p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:20px 32px 28px;border-top:1px solid #eef2f5;">
+                <p style="margin:0;color:#90a0ae;font-size:11.5px;line-height:1.5;">
+                  TropiCare · Guided symptom assessment for tropical diseases
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+    text = (
+        f"Hi {first_name},\n\n"
+        "We received a request to reset the password on your TropiCare account.\n\n"
+        f"Reset your password using this link (expires in {expire_minutes} minutes):\n{reset_link}\n\n"
+        "If you didn't request this, you can safely ignore this email -- your password will not be changed.\n\n"
+        "-- TropiCare"
+    )
+    return html, text
+
+
+def _no_password_account_email_bodies(name: str, provider: str) -> tuple[str, str]:
+    """
+    Sent instead of a reset link when the email on file belongs to an
+    account created via Google/Facebook/Apple and has no password to
+    reset. Tells the person how they actually sign in rather than
+    leaving them stuck on a link that could never have worked.
+    """
+    first_name = (name or "there").split(" ")[0]
+    provider_label = {"google": "Google", "facebook": "Facebook", "apple": "Apple"}.get(provider, "a social account")
+    html = f"""\
+<!DOCTYPE html>
+<html>
+  <body style="margin:0;padding:0;background:#f4f7f9;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f7f9;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 6px 24px rgba(11,23,38,0.08);">
+            <tr>
+              <td style="background:#0c8a7e;padding:28px 32px;text-align:center;">
+                <span style="color:#ffffff;font-size:20px;font-weight:700;letter-spacing:0.02em;">TropiCare</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;">
+                <p style="margin:0 0 16px;color:#0b1726;font-size:15px;line-height:1.6;">Hi {first_name},</p>
+                <p style="margin:0 0 16px;color:#0b1726;font-size:15px;line-height:1.6;">
+                  We received a password reset request for this email address, but your TropiCare account was created using
+                  <strong>{provider_label}</strong> sign-in and doesn't have a password.
+                </p>
+                <p style="margin:0;color:#5b6b7c;font-size:13.5px;line-height:1.6;">
+                  Please sign in to TropiCare using the "{provider_label}" option instead. If you didn't request this, you can safely ignore this email.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+    text = (
+        f"Hi {first_name},\n\n"
+        "We received a password reset request for this email address, but your TropiCare account was created using "
+        f"{provider_label} sign-in and doesn't have a password.\n\n"
+        f"Please sign in to TropiCare using the \"{provider_label}\" option instead.\n\n"
+        "If you didn't request this, you can safely ignore this email.\n\n"
+        "-- TropiCare"
+    )
+    return html, text
+
+
+def _password_changed_email_bodies(name: str) -> tuple[str, str]:
+    """Security notification sent after a password reset actually completes."""
+    first_name = (name or "there").split(" ")[0]
+    html = f"""\
+<!DOCTYPE html>
+<html>
+  <body style="margin:0;padding:0;background:#f4f7f9;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f7f9;padding:32px 0;">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 6px 24px rgba(11,23,38,0.08);">
+            <tr>
+              <td style="background:#0c8a7e;padding:28px 32px;text-align:center;">
+                <span style="color:#ffffff;font-size:20px;font-weight:700;letter-spacing:0.02em;">TropiCare</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:32px;">
+                <p style="margin:0 0 16px;color:#0b1726;font-size:15px;line-height:1.6;">Hi {first_name},</p>
+                <p style="margin:0 0 16px;color:#0b1726;font-size:15px;line-height:1.6;">
+                  This confirms your TropiCare password was just changed.
+                </p>
+                <p style="margin:0;color:#5b6b7c;font-size:13.5px;line-height:1.6;">
+                  If you made this change, no action is needed. If you didn't, please contact support right away.
+                </p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+    text = (
+        f"Hi {first_name},\n\n"
+        "This confirms your TropiCare password was just changed.\n\n"
+        "If you made this change, no action is needed. If you didn't, please contact support right away.\n\n"
+        "-- TropiCare"
+    )
+    return html, text
+
+
 # -----------------------------------------------------------------
 # HEALTH ENDPOINTS
 # -----------------------------------------------------------------
@@ -2654,6 +2977,120 @@ async def login(request: Request, req: LoginRequest, db: Session = Depends(get_d
         "token_type":   "bearer",
         "user":         _user_response(user),
     }
+
+
+# The response text is identical whether or not the email is registered --
+# this is deliberate (OWASP-recommended) so the endpoint can't be used to
+# discover which emails have TropiCare accounts. Everything that would
+# reveal that (sending nothing for an unknown email, a different email for
+# a social-only account) happens in the background, invisibly to the caller.
+# expires_in_minutes is safe to include unconditionally -- it's a static
+# server setting, not account-specific -- and lets the frontend show the
+# real configured expiry instead of a hardcoded number that could drift
+# out of sync with PASSWORD_RESET_TOKEN_EXPIRE_MINUTES.
+def _generic_reset_response() -> dict:
+    return {
+        "message": "If an account exists for that email, we've sent a password reset link to it.",
+        "expires_in_minutes": settings.password_reset_token_expire_minutes,
+    }
+
+
+@app.post("/api/v1/auth/forgot-password")
+@limiter.limit("5/hour")
+async def forgot_password(
+    request: Request,
+    req: ForgotPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    # Not .lower()'d: /auth/register and /auth/login both match on the
+    # email exactly as typed (see req.email use there, with no case
+    # normalization), so lower-casing only here would make a reset
+    # silently fail to find an account whose stored email has any
+    # uppercase in it. Matching that same (case-sensitive) convention
+    # keeps this endpoint's lookup 1:1 with how the account was created.
+    email = req.email.strip()
+    await _check_reset_rate_limit(email)
+
+    user = db.query(UserModel).filter(UserModel.email == email).first()
+    if not user:
+        return _generic_reset_response()
+
+    if not user.pw_hash:
+        # Social-only account (Google/Facebook/Apple) -- there's no
+        # password to reset, so point them at how they actually sign in
+        # instead of emailing a link that could never work.
+        html, text = _no_password_account_email_bodies(user.name, user.auth_provider or "")
+        background_tasks.add_task(send_email, user.email, "TropiCare password reset request", html, text)
+        return _generic_reset_response()
+
+    # A fresh request invalidates any still-unused links from earlier
+    # requests, so only the most recent email a person receives can ever
+    # be used.
+    db.query(PasswordResetTokenModel).filter(
+        PasswordResetTokenModel.user_id == user.id,
+        PasswordResetTokenModel.used_at.is_(None),
+    ).delete(synchronize_session=False)
+
+    raw_token  = secrets.token_urlsafe(32)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    expires_at = datetime.utcnow() + timedelta(minutes=settings.password_reset_token_expire_minutes)
+
+    db.add(PasswordResetTokenModel(user_id=user.id, token_hash=token_hash, expires_at=expires_at))
+    db.commit()
+
+    reset_link = f"{settings.frontend_url.rstrip('/')}/?reset_token={raw_token}"
+    html, text = _reset_email_bodies(user.name, reset_link, settings.password_reset_token_expire_minutes)
+    background_tasks.add_task(send_email, user.email, "Reset your TropiCare password", html, text)
+
+    logger.info({"event": "password_reset_requested", "user_id": user.id})
+    return _generic_reset_response()
+
+
+@app.post("/api/v1/auth/reset-password")
+@limiter.limit("10/hour")
+async def reset_password(
+    request: Request,
+    req: ResetPasswordRequest,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    if len(req.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+
+    token_hash = hashlib.sha256(req.token.encode()).hexdigest()
+    token_row = db.query(PasswordResetTokenModel).filter(
+        PasswordResetTokenModel.token_hash == token_hash
+    ).first()
+
+    def _invalid():
+        return HTTPException(status_code=400, detail="This reset link is invalid or has already been used.")
+
+    if not token_row or token_row.used_at is not None:
+        raise _invalid()
+    if token_row.expires_at < datetime.utcnow():
+        raise HTTPException(status_code=400, detail="This reset link has expired. Please request a new one.")
+
+    user = db.query(UserModel).filter(UserModel.id == token_row.user_id).first()
+    if not user:
+        raise _invalid()
+
+    user.pw_hash      = hash_pw(req.new_password)
+    token_row.used_at = datetime.utcnow()
+    # Any other still-unused links this user requested are now stale too --
+    # a password reset should only ever be completable once.
+    db.query(PasswordResetTokenModel).filter(
+        PasswordResetTokenModel.user_id == user.id,
+        PasswordResetTokenModel.id != token_row.id,
+        PasswordResetTokenModel.used_at.is_(None),
+    ).delete(synchronize_session=False)
+    db.commit()
+
+    html, text = _password_changed_email_bodies(user.name)
+    background_tasks.add_task(send_email, user.email, "Your TropiCare password was changed", html, text)
+
+    logger.info({"event": "password_reset_completed", "user_id": user.id})
+    return {"message": "Your password has been reset. You can now sign in with your new password."}
 
 
 @app.post("/api/v1/auth/google")
@@ -3510,7 +3947,7 @@ async def sync_schema(admin_id: int = Depends(verify_admin)):
     run_schema_migrations()
     inspector = inspect(engine)
     report = {}
-    for model in (UserModel, SessionModel, DiagnosisModel, PatientModel):
+    for model in (UserModel, SessionModel, DiagnosisModel, PatientModel, PasswordResetTokenModel):
         table = model.__table__
         try:
             cols = {c["name"] for c in inspector.get_columns(table.name)}
