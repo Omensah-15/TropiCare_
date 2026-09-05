@@ -761,7 +761,6 @@ const injectStyles = () => {
     :root[data-theme="dark"] .icon-btn:hover { background:var(--border) !important; }
     :root[data-theme="dark"] .pw-toggle { color:var(--muted-l); }
     :root[data-theme="dark"] .pw-toggle:hover { color:var(--teal-d); background:var(--teal-xl); }
-    :root[data-theme="dark"] .notif { background:#e8eef3; color:#0f161e; box-shadow:var(--shadow-l); }
     :root[data-theme="dark"] .bnav-item.active { color:var(--teal-d); }
     :root[data-theme="dark"] .hero-card { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
     :root[data-theme="dark"] .about-hero { box-shadow:0 12px 32px rgba(0,0,0,0.4); }
@@ -1060,8 +1059,11 @@ const injectStyles = () => {
     .mt-1{margin-top:4px;}.mt-2{margin-top:8px;}.mt-3{margin-top:12px;}.mt-4{margin-top:16px;}
     .mb-2{margin-bottom:8px;}.mb-3{margin-bottom:12px;}.mb-4{margin-bottom:16px;}
     .w-full{width:100%;}.text-c{text-align:center;}.italic{font-style:italic;}
-    .notif{position:fixed;top:22px;left:50%;transform:translateX(-50%);background:var(--ink-2);color:#fff;padding:11px 22px;border-radius:var(--radius-s);font-size:13px;font-weight:600;z-index:9999;animation:notif-in var(--t-slow) ease;white-space:nowrap;box-shadow:var(--shadow-l);max-width:90vw;overflow:hidden;text-overflow:ellipsis;}
-    @keyframes notif-in{from{opacity:0;transform:translateX(-50%) translateY(-12px);}to{opacity:1;transform:translateX(-50%) translateY(0);}}
+    .notif{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:10px;background:var(--surface);color:var(--ink);border:1px solid var(--border);padding:12px 18px;border-radius:var(--radius-s);font-size:13px;font-weight:600;z-index:9999;white-space:nowrap;box-shadow:var(--shadow-l);max-width:90vw;overflow:hidden;text-overflow:ellipsis;animation:notif-in 0.32s var(--ease-spring);}
+    .notif.notif-leaving{animation:notif-out 0.22s var(--ease) forwards;}
+    @keyframes notif-in{from{opacity:0;transform:translateX(-50%) translateY(10px) scale(0.97);}to{opacity:1;transform:translateX(-50%) translateY(0) scale(1);}}
+    @keyframes notif-out{from{opacity:1;transform:translateX(-50%) translateY(0);}to{opacity:0;transform:translateX(-50%) translateY(6px);}}
+    @media(max-width:767px){.notif{bottom:calc(74px + env(safe-area-inset-bottom));}}
     .profile-stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px;}
     .ps-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:18px 14px;text-align:center;transition:box-shadow var(--t-med),transform var(--t-med);}
     .ps-card:hover{box-shadow:var(--shadow);transform:translateY(-2px);}
@@ -1416,11 +1418,28 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
 
 // ─────────────────────────────────────────────
 // TOAST NOTIFICATION
+// Sits at the bottom of the screen (clear of the bottom-nav on mobile)
+// rather than dropping in over the header, and fades/settles out
+// instead of disappearing mid-frame when the message clears.
 // ─────────────────────────────────────────────
 let _notifTimer;
 function Notif({ msg }) {
-  if (!msg) return null;
-  return <div className="notif">{msg}</div>;
+  const [shown, setShown]     = useState(msg);
+  const [leaving, setLeaving] = useState(false);
+
+  useEffect(() => {
+    if (msg) {
+      setShown(msg);
+      setLeaving(false);
+    } else if (shown) {
+      setLeaving(true);
+      const t = setTimeout(() => setShown(""), 220);
+      return () => clearTimeout(t);
+    }
+  }, [msg]);
+
+  if (!shown) return null;
+  return <div className={`notif${leaving ? " notif-leaving" : ""}`}>{shown}</div>;
 }
 
 // ─────────────────────────────────────────────
