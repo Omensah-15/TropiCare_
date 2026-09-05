@@ -2906,15 +2906,46 @@ function NewPatientForm({ onCancel, onCreated }) {
 // individual sees for their own records, scoped to this patient.
 // ─────────────────────────────────────────────
 function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
-  const [patient,    setPatient]    = useState(null);
-  const [loading,    setLoading]    = useState(true);
-  const [error,      setError]      = useState(false);
-  const [selectedId, setSelectedId] = useState(null);
+  const [patient,        setPatient]        = useState(null);
+  const [loading,        setLoading]        = useState(true);
+  const [error,          setError]          = useState(false);
+  const [selectedId,     setSelectedId]     = useState(null);
+  const [delConfirm,     setDelConfirm]     = useState(false);
+  const [deletingPatient,setDeletingPatient]= useState(false);
+  const [patientDeleted, setPatientDeleted] = useState(false);
+
+  // Permanently removes this patient (and, server-side, every assessment
+  // recorded for them) so they no longer appear on the worker's home /
+  // records lists. Two-tap confirm, same pattern used for deleting a
+  // single assessment below -- the first tap arms it, a second tap
+  // within 6s actually deletes, and it disarms itself if the worker
+  // doesn't follow through.
+  const handleDeletePatient = async () => {
+    if (!delConfirm) {
+      setDelConfirm(true);
+      setTimeout(() => setDelConfirm(false), 6000);
+      return;
+    }
+    setDeletingPatient(true);
+    try {
+      await api.delete(`/patients/${patientId}`);
+      if (toast) toast(`${patient?.name || "Patient"} deleted.`);
+      setPatientDeleted(true);
+      setTimeout(() => onBack(), 600);
+    } catch {
+      if (toast) toast("Could not delete this patient. Please try again.");
+      setDeletingPatient(false);
+      setDelConfirm(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(false);
+    setDelConfirm(false);
+    setDeletingPatient(false);
+    setPatientDeleted(false);
     api.get(`/patients/${patientId}`)
       .then((d) => {
         if (cancelled || _loggingOut) return;
@@ -2948,6 +2979,51 @@ function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
     );
   }
 
+  if (patientDeleted) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "60vh" }}>
+        <div style={{ color: "var(--muted)", fontSize: 14 }}>Patient deleted.</div>
+      </div>
+    );
+  }
+
+  // Persistent patient-level header -- back button, patient name and
+  // details, and the one place a worker can permanently remove this
+  // patient (and every assessment on file for them) from their roster.
+  // Shown above both the "no assessments yet" state and a selected
+  // assessment's detail, so the action is available regardless of
+  // whether this patient has any history yet.
+  const patientHeader = (
+    <div className="page-head">
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <button onClick={onBack} className="icon-btn"
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div className="t-display" style={{ flex: 1 }}>{patient.name}</div>
+        <button onClick={handleDeletePatient} disabled={deletingPatient} className="icon-btn"
+          title="Delete patient" aria-label="Delete patient"
+          style={{ border: "none", background: delConfirm ? "var(--red)" : "var(--red-l)", borderRadius: 8, padding: "8px 10px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6 }}>
+          <Icon name="trash" size={16} color={delConfirm ? "#fff" : "var(--red)"} />
+          {delConfirm && (
+            <span style={{ fontSize: 12, fontWeight: 700, color: "#fff", fontFamily: "var(--font)" }}>
+              {deletingPatient ? "Deleting..." : "Confirm"}
+            </span>
+          )}
+        </button>
+      </div>
+      <div className="t-subtitle" style={{ paddingLeft: 46 }}>
+        {[patient.age ? `${patient.age} years` : null, patient.gender, patient.community].filter(Boolean).join(" · ") || "No details on file"}
+      </div>
+      {delConfirm && (
+        <div className="disclaimer" style={{ marginTop: 10 }}>
+          <Icon name="alert" size={13} color="var(--amber)" />
+          <p>Tap the delete icon again to permanently remove {patient.name} and all of their assessments. This cannot be undone.</p>
+        </div>
+      )}
+    </div>
+  );
+
   const history = patient.history || [];
 
   // No assessments recorded yet -- there's nothing to show details of,
@@ -2956,18 +3032,7 @@ function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
   if (history.length === 0) {
     return (
       <div>
-        <div className="page-head">
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-            <button onClick={onBack} className="icon-btn"
-              style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
-              <Icon name="chevL" size={16} color="var(--ink)" />
-            </button>
-            <div className="t-display">{patient.name}</div>
-          </div>
-          <div className="t-subtitle" style={{ paddingLeft: 46 }}>
-            {[patient.age ? `${patient.age} years` : null, patient.gender, patient.community].filter(Boolean).join(" · ") || "No details on file"}
-          </div>
-        </div>
+        {patientHeader}
         <div className="page-body">
           <div className="empty-state">
             <div style={{ width: 80, height: 80 }}><IllusDoctor /></div>
@@ -2986,15 +3051,19 @@ function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
   const selectedRecord = history.find((h) => h.id === selectedId) || history[0];
 
   return (
-    <WorkerRecordDetail
-      record={selectedRecord}
-      patient={patient}
-      workerName={user?.name}
-      onBack={onBack}
-      previousAssessments={history.filter((h) => h.id !== selectedRecord.id)}
-      onSelectRecord={(h) => setSelectedId(h.id)}
-      toast={toast}
-    />
+    <div>
+      {patientHeader}
+      <WorkerRecordDetail
+        record={selectedRecord}
+        patient={patient}
+        workerName={user?.name}
+        onBack={onBack}
+        previousAssessments={history.filter((h) => h.id !== selectedRecord.id)}
+        onSelectRecord={(h) => setSelectedId(h.id)}
+        toast={toast}
+        hideHeader
+      />
+    </div>
   );
 }
 
@@ -3016,7 +3085,7 @@ function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
 // worker-generated report; passing no `worker` here would incorrectly
 // treat this as a self-report.
 // ─────────────────────────────────────────────
-function WorkerRecordDetail({ record, patient, workerName, onBack, previousAssessments = [], onSelectRecord, toast }) {
+function WorkerRecordDetail({ record, patient, workerName, onBack, previousAssessments = [], onSelectRecord, toast, hideHeader = false }) {
   const [full,        setFull]        = useState(record);
   const [downloading, setDownloading] = useState(false);
   const [delConfirm,  setDelConfirm]  = useState(false);
@@ -3098,15 +3167,17 @@ function WorkerRecordDetail({ record, patient, workerName, onBack, previousAsses
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
-        <button onClick={onBack} className="icon-btn"
-          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
-          <Icon name="chevL" size={16} color="var(--ink)" />
-        </button>
-        <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>
-          Assessment Detail
+      {!hideHeader && (
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
+          <button onClick={onBack} className="icon-btn"
+            style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+            <Icon name="chevL" size={16} color="var(--ink)" />
+          </button>
+          <div style={{ fontFamily: "var(--display)", fontSize: 18, fontWeight: 700, color: "var(--ink)" }}>
+            Assessment Detail
+          </div>
         </div>
-      </div>
+      )}
 
       <div style={{ maxWidth: 600, margin: "0 auto", padding: "20px 16px 64px" }}>
         {/* Result summary */}
