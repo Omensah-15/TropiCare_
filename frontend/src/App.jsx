@@ -1494,6 +1494,21 @@ export default function App() {
   // the fetch resolves, and on any fetch failure.
   const [role, setRole] = useState(null);
 
+  // Password-reset deep link -- the email sent by /auth/forgot-password
+  // points at "<frontend_url>/?reset_token=...". Read once on load (this
+  // app has no router), then strip it from the address bar immediately so
+  // refreshing the page never resubmits an already-consumed token and the
+  // raw token doesn't linger in browser history.
+  const [resetToken, setResetToken] = useState(() => {
+    const token = new URLSearchParams(window.location.search).get("reset_token");
+    if (token) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("reset_token");
+      window.history.replaceState({}, "", url.toString());
+    }
+    return token;
+  });
+
   // ── Theme ──────────────────────────────────
   const [theme, setTheme] = useState(() => {
     const saved = Store.get("tc_settings");
@@ -1816,6 +1831,20 @@ export default function App() {
       );
     }
 
+    // A password-reset link takes priority over an existing session --
+    // otherwise someone who followed the emailed link while still signed
+    // in on this device would be dropped straight into the app with no
+    // way to actually complete the reset they clicked through for.
+    if (resetToken)
+      return (
+        <AuthScreen
+          onLogin={login}
+          toast={toast}
+          initialResetToken={resetToken}
+          onResetTokenConsumed={() => setResetToken(null)}
+        />
+      );
+
     if (!user)     return <AuthScreen onLogin={login} toast={toast} />;
     if (analyzing) return <AnalyzingScreen />;
 
@@ -1919,8 +1948,8 @@ export default function App() {
 // ─────────────────────────────────────────────
 // AUTH SCREEN
 // ─────────────────────────────────────────────
-function AuthScreen({ onLogin, toast }) {
-  const [mode,         setMode]         = useState("login");
+function AuthScreen({ onLogin, toast, initialResetToken, onResetTokenConsumed }) {
+  const [mode,         setMode]         = useState(initialResetToken ? "reset" : "login");
   const [name,         setName]         = useState("");
   const [email,        setEmail]        = useState("");
   const [emailTouched, setEmailTouched] = useState(false);
@@ -1932,6 +1961,22 @@ function AuthScreen({ onLogin, toast }) {
   const [loading,      setLoading]      = useState(false);
   const [socialLoading, setSocialLoading] = useState(null); // "google" | "facebook" | "apple" | null
 
+  // ── Forgot / reset password ──────────────────
+  const [resetToken,    setResetToken]    = useState(initialResetToken || null);
+  const [resetSent,     setResetSent]     = useState(false);   // "forgot" mode: request submitted
+  const [resetCooldown, setResetCooldown] = useState(0);       // seconds left before "resend" is re-enabled
+  const [resetExpiryMin, setResetExpiryMin] = useState(30);    // filled from the server's actual response
+  const [newPw,         setNewPw]         = useState("");
+  const [newPw2,        setNewPw2]        = useState("");
+  const [showNewPw,     setShowNewPw]     = useState(false);
+  const [resetDone,     setResetDone]     = useState(false);   // "reset" mode: password successfully changed
+
+  useEffect(() => {
+    if (resetCooldown <= 0) return;
+    const t = setTimeout(() => setResetCooldown((s) => s - 1), 1000);
+    return () => clearTimeout(t);
+  }, [resetCooldown]);
+
   // Simple, permissive shape check (local-part@domain.tld) -- not trying
   // to fully validate per RFC 5322, just to catch the obvious typos
   // (missing "@", missing domain) before hitting the server.
@@ -1942,6 +1987,12 @@ function AuthScreen({ onLogin, toast }) {
     setMode(m);
     setName(""); setEmail(""); setPw(""); setAge(""); setGender(""); setRole("patient");
     setEmailTouched(false);
+    setResetSent(false); setResetDone(false); setNewPw(""); setNewPw2("");
+    // Leaving the reset flow (whether finished, abandoned via the back
+    // button, or "Back to Sign In") releases the token held at the App
+    // level -- otherwise a reset link would keep reopening this screen on
+    // every render even after the person is done with it.
+    if (m !== "reset" && resetToken) onResetTokenConsumed?.();
   };
 
   const submit = async () => {
@@ -1971,8 +2022,46 @@ function AuthScreen({ onLogin, toast }) {
     }
   };
 
-  const handleForgotPassword = () => {
-    toast("Password reset isn't available yet. Please contact support.");
+  // Requests a reset link for `email`. The backend always replies with the
+  // same generic message whether or not that address has an account --
+  // deliberate, so this screen can never be used to test which emails are
+  // registered. A network/rate-limit failure is the only thing that shows
+  // a different message.
+  const handleForgotPassword = async () => {
+    if (!email.trim()) { toast("Please enter your email address."); return; }
+    if (!EMAIL_RE.test(email.trim())) {
+      setEmailTouched(true);
+      toast("Please enter a valid email address, e.g. name@example.com.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const data = await api.post("/auth/forgot-password", { email: email.trim() });
+      if (data?.expires_in_minutes) setResetExpiryMin(data.expires_in_minutes);
+      setResetSent(true);
+      setResetCooldown(30);
+    } catch (e) {
+      toast(e.message || "Something went wrong. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Completes a reset using the token pulled from the emailed link (see
+  // the top-level App component, which parses ?reset_token= on load).
+  const handleResetPassword = async () => {
+    if (!newPw.trim() || !newPw2.trim()) { toast("Please fill in both password fields."); return; }
+    if (newPw.length < 8) { toast("Password must be at least 8 characters."); return; }
+    if (newPw !== newPw2) { toast("Passwords don't match."); return; }
+    setLoading(true);
+    try {
+      await api.post("/auth/reset-password", { token: resetToken, new_password: newPw });
+      setResetDone(true);
+    } catch (e) {
+      toast(e.message || "This reset link is invalid or has expired. Please request a new one.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Facebook's SDK needs a <div id="fb-root"> in the DOM before FB.init()
@@ -2106,6 +2195,8 @@ function AuthScreen({ onLogin, toast }) {
           <div className="auth-hint">Guided symptom assessment for tropical diseases</div>
         </div>
         <div className="card auth-card" style={{ boxShadow: "0 20px 60px rgba(11,23,38,0.14)" }}>
+          {(mode === "login" || mode === "register") && (
+          <>
           <div className="tabs">
             {["login", "register"].map((m) => (
               <button key={m} className={`tab${mode === m ? " active" : ""}`} onClick={() => switchMode(m)}>
@@ -2202,7 +2293,7 @@ function AuthScreen({ onLogin, toast }) {
           </div>
           {mode === "login" && (
             <div className="auth-row">
-              <button className="auth-forgot" type="button" onClick={handleForgotPassword}>
+              <button className="auth-forgot" type="button" onClick={() => switchMode("forgot")}>
                 Forgot password?
               </button>
             </div>
@@ -2248,6 +2339,142 @@ function AuthScreen({ onLogin, toast }) {
           </div>
           {SHOW_APPLE_LOGIN && !APPLE_ENABLED && (
             <div className="auth-apple-note">...</div>
+          )}
+          </>
+          )}
+
+          {mode === "forgot" && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                <button type="button" className="icon-btn" onClick={() => switchMode("login")}
+                  style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+                  <Icon name="chevL" size={16} color="var(--ink)" />
+                </button>
+                <div className="t-display" style={{ fontSize: 19 }}>Reset your password</div>
+              </div>
+
+              {!resetSent ? (
+                <>
+                  <p className="t-subtitle" style={{ margin: "4px 0 18px" }}>
+                    Enter the email address on your account and we'll send you a link to reset your password.
+                  </p>
+                  <div className="field">
+                    <label className="field-label">Email Address</label>
+                    <div className="field-icon-wrap">
+                      <span className="auth-input-icon"><Icon name="mail" size={16} /></span>
+                      <input className={`field-input has-icon${emailInvalid ? " field-input-error" : ""}`}
+                        type="email" placeholder="you@email.com" value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        onBlur={() => setEmailTouched(true)}
+                        onKeyDown={(e) => e.key === "Enter" && handleForgotPassword()}
+                        aria-invalid={emailInvalid} />
+                    </div>
+                    {emailInvalid && (
+                      <div className="field-error">
+                        <Icon name="info" size={12} /> Enter a valid email address, e.g. name@example.com
+                      </div>
+                    )}
+                  </div>
+                  <button className="btn btn-primary btn-full btn-lg mt-2" onClick={handleForgotPassword} disabled={loading}>
+                    {loading ? "Sending..." : "Send Reset Link"}
+                  </button>
+                </>
+              ) : (
+                <div className="text-c" style={{ padding: "8px 0 4px" }}>
+                  <div style={{ width: 56, height: 56, borderRadius: "50%", background: "var(--teal-xl)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+                    <Icon name="mail" size={24} color="var(--teal-d)" />
+                  </div>
+                  <div className="t-title" style={{ marginBottom: 8 }}>Check your email</div>
+                  <p className="t-subtitle" style={{ marginBottom: 20 }}>
+                    If an account exists for <strong>{email.trim()}</strong>, we've sent a link to reset your password. It expires in {resetExpiryMin} minutes.
+                  </p>
+                  <button className="btn btn-secondary btn-full" onClick={handleForgotPassword} disabled={loading || resetCooldown > 0}>
+                    {resetCooldown > 0 ? `Resend in ${resetCooldown}s` : loading ? "Sending..." : "Resend Email"}
+                  </button>
+                  <button className="auth-forgot mt-3" type="button" onClick={() => switchMode("login")}
+                    style={{ display: "block", margin: "16px auto 0" }}>
+                    Back to Sign In
+                  </button>
+                </div>
+              )}
+            </>
+          )}
+
+          {mode === "reset" && (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+                {!resetDone && (
+                  <button type="button" className="icon-btn" onClick={() => switchMode("login")}
+                    style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+                    <Icon name="chevL" size={16} color="var(--ink)" />
+                  </button>
+                )}
+                <div className="t-display" style={{ fontSize: 19 }}>
+                  {resetDone ? "Password reset" : "Set a new password"}
+                </div>
+              </div>
+
+              {!resetDone ? (
+                <>
+                  <p className="t-subtitle" style={{ margin: "4px 0 18px" }}>
+                    Choose a new password for your account.
+                  </p>
+                  <div className="field">
+                    <label className="field-label">New Password</label>
+                    <div className="pw-wrap field-icon-wrap">
+                      <span className="auth-input-icon"><Icon name="lock" size={16} /></span>
+                      <input className="field-input has-icon" type={showNewPw ? "text" : "password"}
+                        placeholder="Min. 8 characters" value={newPw}
+                        onChange={(e) => setNewPw(e.target.value)}
+                        style={{ paddingRight: 46 }} />
+                      <button className="pw-toggle" type="button" onClick={() => setShowNewPw(!showNewPw)}>
+                        <Icon name={showNewPw ? "eyeOff" : "eye"} size={17} />
+                      </button>
+                    </div>
+                    <div className={`pw-req${newPw.length >= 8 ? " met" : ""}`}>
+                      <Icon name={newPw.length >= 8 ? "check" : "info"} size={12} />
+                      <span>
+                        {newPw.length >= 8
+                          ? "Password length looks good"
+                          : "Use at least 8 characters — mixing in a number or symbol makes it stronger"}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="field">
+                    <label className="field-label">Confirm New Password</label>
+                    <div className="pw-wrap field-icon-wrap">
+                      <span className="auth-input-icon"><Icon name="lock" size={16} /></span>
+                      <input className="field-input has-icon" type={showNewPw ? "text" : "password"}
+                        placeholder="Re-enter password" value={newPw2}
+                        onChange={(e) => setNewPw2(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleResetPassword()}
+                        style={{ paddingRight: 46 }} />
+                    </div>
+                    {newPw2.length > 0 && newPw !== newPw2 && (
+                      <div className="field-error">
+                        <Icon name="info" size={12} /> Passwords don't match
+                      </div>
+                    )}
+                  </div>
+                  <button className="btn btn-primary btn-full btn-lg mt-2" onClick={handleResetPassword} disabled={loading}>
+                    {loading ? "Resetting..." : "Reset Password"}
+                  </button>
+                </>
+              ) : (
+                <div className="text-c" style={{ padding: "8px 0 4px" }}>
+                  <div style={{ width: 56, height: 56, borderRadius: "50%", background: "var(--green-l)", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+                    <Icon name="check" size={24} color="var(--green-d)" />
+                  </div>
+                  <div className="t-title" style={{ marginBottom: 8 }}>Password reset</div>
+                  <p className="t-subtitle" style={{ marginBottom: 20 }}>
+                    Your password has been changed. You can now sign in with your new password.
+                  </p>
+                  <button className="btn btn-primary btn-full btn-lg" onClick={() => switchMode("login")}>
+                    Back to Sign In
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
         <div className="auth-foot">TropiCare · Symptom Checker for Tropical Diseases</div>
