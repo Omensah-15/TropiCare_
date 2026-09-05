@@ -2861,6 +2861,43 @@ async def get_patient(
     }
 
 
+@app.delete("/api/v1/patients/{patient_id}")
+async def delete_patient(
+    patient_id: int,
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    """
+    Permanently remove a patient a health worker registered, along with
+    every assessment (DiagnosisModel) and in-progress session
+    (SessionModel) recorded for them. Scoped to worker_id == the
+    authenticated worker, same as every other /patients endpoint, so a
+    worker can never delete another worker's patient.
+
+    Child rows are deleted explicitly first -- patients.id is referenced
+    by diagnoses.patient_id and assessment_sessions.patient_id with no
+    ON DELETE CASCADE at the DB level, so deleting the parent row first
+    would leave orphaned rows (or raise an FK error, depending on the
+    backing DB) rather than actually clearing the patient's data.
+    """
+    _require_worker(user_id, db)
+
+    patient = db.query(PatientModel).filter(
+        PatientModel.id == patient_id,
+        PatientModel.worker_id == user_id,
+    ).first()
+    if not patient:
+        raise HTTPException(status_code=404, detail="Patient not found")
+
+    db.query(DiagnosisModel).filter(DiagnosisModel.patient_id == patient.id).delete(synchronize_session=False)
+    db.query(SessionModel).filter(SessionModel.patient_id == patient.id).delete(synchronize_session=False)
+    db.delete(patient)
+    db.commit()
+
+    await cache_delete(f"profile:{user_id}")
+    return {"message": "Patient deleted"}
+
+
 # -----------------------------------------------------------------
 # ROUTES - Assessment
 # -----------------------------------------------------------------
