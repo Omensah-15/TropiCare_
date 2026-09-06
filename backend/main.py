@@ -154,14 +154,25 @@ class Settings(BaseSettings):
     geoapify_api_key: str = ""
 
     # -------------------------------------------------------------
-    # PASSWORD RESET EMAIL (SMTP)
+    # PASSWORD RESET EMAIL
     # -------------------------------------------------------------
-    # Standard SMTP so any provider works -- Gmail/Workspace, Outlook,
-    # SendGrid, Mailgun, Postmark and Amazon SES (via its SMTP interface)
-    # all accept these same five settings. Leave smtp_host blank in
-    # development: /auth/forgot-password then logs the reset link instead
-    # of emailing it, so the flow still works end to end locally with no
-    # mail server configured.
+    # Brevo's HTTPS API is the primary path -- see send_email() below for
+    # why: Render's free tier (this app's host) blocks outbound SMTP ports
+    # (25/465/587) entirely, so smtplib can never connect there no matter
+    # which SMTP provider it points at. An HTTPS API call on port 443
+    # isn't affected by that block at all. Get a free key (300 emails/day)
+    # at https://app.brevo.com -> Settings -> SMTP & API -> API Keys.
+    brevo_api_key: str = ""
+    # Must be a verified sender in Brevo (Settings -> Senders) or Brevo
+    # will reject the send.
+    brevo_from_email: str = ""
+    brevo_from_name:  str = "TropiCare"
+
+    # Plain SMTP as a fallback path -- used automatically when
+    # brevo_api_key is blank. Works fine on any host that doesn't block
+    # SMTP ports (a paid Render instance, most other hosts, or local
+    # development), with any provider that speaks SMTP: Gmail/Workspace,
+    # Outlook, SendGrid, Mailgun, Postmark, Amazon SES.
     smtp_host:      str = ""
     smtp_port:      int = 587
     smtp_username:  str = ""
@@ -2633,32 +2644,71 @@ async def _check_reset_rate_limit(email: str) -> None:
 # -----------------------------------------------------------------
 # EMAIL DELIVERY
 #
-# Plain smtplib over the standard SMTP protocol -- works unmodified with
-# Gmail/Google Workspace, Outlook/Microsoft 365, SendGrid, Mailgun,
-# Postmark and Amazon SES (all of them expose an SMTP endpoint), so
-# switching providers in production is a matter of changing environment
-# variables, not code. smtplib is blocking, so the actual send runs in a
-# worker thread via run_in_executor and is scheduled through
-# BackgroundTasks from the route -- the API responds immediately and
-# never makes a user wait on a mail server's round-trip.
+# Two transports, tried in order:
+#
+#   1. Brevo's HTTPS API (used whenever brevo_api_key is set). This is
+#      the primary path because this app is hosted on Render's free
+#      tier, and Render blocks outbound traffic to every SMTP port
+#      (25, 465, 587) on free instances -- a restriction that applies
+#      no matter which SMTP provider the app points at, Gmail included.
+#      A plain HTTPS POST on port 443 isn't an SMTP connection, so it
+#      is completely unaffected by that block.
+#
+#   2. Plain smtplib (used when brevo_api_key is blank). Kept as a
+#      fallback for hosts that don't block SMTP -- a paid Render
+#      instance, most other hosts, or local development -- and works
+#      with any provider that speaks SMTP: Gmail/Workspace, Outlook,
+#      SendGrid, Mailgun, Postmark, Amazon SES.
+#
+# Both run through BackgroundTasks from the route, so the API responds
+# immediately and a slow mail provider never makes a user wait.
 # -----------------------------------------------------------------
 
-def _send_email_sync(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+async def _send_via_brevo(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    from_email = settings.brevo_from_email or settings.smtp_from_email or settings.smtp_username
+    if not from_email:
+        logger.error({"event": "email_send_failed", "to": to_email, "error": "brevo_api_key is set but no from address is configured (BREVO_FROM_EMAIL)"})
+        return False
+
+    payload = {
+        "sender":      {"name": settings.brevo_from_name, "email": from_email},
+        "to":          [{"email": to_email}],
+        "subject":     subject,
+        "htmlContent": html_body,
+        "textContent": text_body,
+    }
+    headers = {
+        "api-key":       settings.brevo_api_key,
+        "Content-Type":  "application/json",
+        "Accept":        "application/json",
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.brevo.com/v3/smtp/email",
+                headers=headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status in (200, 201):
+                    logger.info({"event": "email_sent", "to": to_email, "subject": subject, "transport": "brevo"})
+                    return True
+                body = await resp.text()
+                logger.error({
+                    "event": "email_send_failed", "to": to_email,
+                    "transport": "brevo", "status": resp.status, "body": body[:300],
+                })
+                return False
+    except Exception as e:
+        logger.error({"event": "email_send_failed", "to": to_email, "transport": "brevo", "error": str(e)})
+        return False
+
+
+def _send_via_smtp(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
     import smtplib
     import ssl
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
-
-    if not settings.smtp_host:
-        # Not configured (e.g. local development). Log the content instead
-        # of silently pretending to send it, so the flow is still visible
-        # and testable end to end with zero mail-server setup.
-        logger.warning({
-            "event":   "email_not_configured",
-            "to":      to_email,
-            "subject": subject,
-        })
-        return False
 
     from_email = settings.smtp_from_email or settings.smtp_username
     msg = MIMEMultipart("alternative")
@@ -2689,16 +2739,26 @@ def _send_email_sync(to_email: str, subject: str, html_body: str, text_body: str
             if settings.smtp_username:
                 server.login(settings.smtp_username, settings.smtp_password)
             server.sendmail(from_email, [to_email], msg.as_string())
-        logger.info({"event": "email_sent", "to": to_email, "subject": subject})
+        logger.info({"event": "email_sent", "to": to_email, "subject": subject, "transport": "smtp"})
         return True
     except Exception as e:
-        logger.error({"event": "email_send_failed", "to": to_email, "error": str(e)})
+        logger.error({"event": "email_send_failed", "to": to_email, "transport": "smtp", "error": str(e)})
         return False
 
 
 async def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    if settings.brevo_api_key:
+        return await _send_via_brevo(to_email, subject, html_body, text_body)
+
+    if not settings.smtp_host:
+        # Neither transport configured (e.g. local development). Log the
+        # content instead of silently pretending to send it, so the flow
+        # is still visible and testable end to end with zero mail setup.
+        logger.warning({"event": "email_not_configured", "to": to_email, "subject": subject})
+        return False
+
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _send_email_sync, to_email, subject, html_body, text_body)
+    return await loop.run_in_executor(None, _send_via_smtp, to_email, subject, html_body, text_body)
 
 
 def _reset_email_bodies(name: str, reset_link: str, expire_minutes: int) -> tuple[str, str]:
