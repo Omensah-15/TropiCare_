@@ -156,28 +156,20 @@ class Settings(BaseSettings):
     # -------------------------------------------------------------
     # PASSWORD RESET EMAIL
     # -------------------------------------------------------------
-    # Brevo's HTTPS API is the primary path -- see send_email() below for
-    # why: Render's free tier (this app's host) blocks outbound SMTP ports
-    # (25/465/587) entirely, so smtplib can never connect there no matter
-    # which SMTP provider it points at. An HTTPS API call on port 443
-    # isn't affected by that block at all. Get a free key (300 emails/day)
-    # at https://app.brevo.com -> Settings -> SMTP & API -> API Keys.
-    brevo_api_key: str = ""
-    # Must be a verified sender in Brevo (Settings -> Senders) or Brevo
-    # will reject the send.
-    brevo_from_email: str = ""
-    brevo_from_name:  str = "TropiCare"
-
-    # EmailJS as a second HTTPS-API fallback -- tried when brevo_api_key
-    # is blank (or Brevo hasn't finished its account activation yet, in
-    # which case this app treats a Brevo failure as "try the next
-    # transport", not a hard failure -- see send_email() below). Unlike
-    # Brevo, EmailJS has no new-account review step: it sends through a
-    # personal Gmail/Outlook account you connect via OAuth in its
-    # dashboard, so there's nothing to wait on. Free tier is 200
-    # emails/month. Setup, all one-time, in the EmailJS dashboard:
+    # EmailJS's HTTPS API is the only transport in use right now -- see
+    # send_email() below. This app is hosted on Render's free tier, which
+    # blocks outbound traffic to every SMTP port (25/465/587), so an SMTP
+    # library can never connect there no matter which provider it points
+    # at. EmailJS sends over a plain HTTPS POST (port 443), so it isn't
+    # affected by that block, and it sends through a personal Gmail/
+    # Outlook account you connect via OAuth in its dashboard -- no
+    # domain to own, no account-review wait. Free tier is 200 emails/
+    # month. Setup, all one-time, in the EmailJS dashboard:
     #   1. https://emailjs.com -> sign up -> Email Services -> Add New
     #      Service -> Gmail -> connect the account you want to send from.
+    #      If Gmail sending ever fails with "insufficient authentication
+    #      scopes", reconnect the service and make sure to click Allow
+    #      on the "send email on your behalf" permission.
     #   2. Email Templates -> Create New Template. In the template body
     #      (Code Editor view) put just {{html_body}} as the entire
     #      content -- this app sends one complete, pre-built HTML email
@@ -193,23 +185,6 @@ class Settings(BaseSettings):
     emailjs_template_id: str = ""
     emailjs_public_key:  str = ""
     emailjs_private_key: str = ""
-
-    # Plain SMTP as a last-resort fallback -- used automatically when
-    # neither brevo_api_key nor emailjs_service_id is set. Works fine on
-    # any host that doesn't block SMTP ports (a paid Render instance,
-    # most other hosts, or local development), with any provider that
-    # speaks SMTP: Gmail/Workspace, Outlook, SendGrid, Mailgun, Postmark,
-    # Amazon SES.
-    smtp_host:      str = ""
-    smtp_port:      int = 587
-    smtp_username:  str = ""
-    smtp_password:  str = ""
-    smtp_use_tls:   bool = True
-    # Shown as the email's "From" name/address. Falls back to smtp_username
-    # when blank, since most providers require the From address to match
-    # (or be verified against) the authenticated account anyway.
-    smtp_from_email: str = ""
-    smtp_from_name:  str = "TropiCare"
 
     # Public URL of the deployed frontend (e.g. https://tropicare.vercel.app)
     # -- used to build the link inside the password reset email. Must be
@@ -2671,73 +2646,25 @@ async def _check_reset_rate_limit(email: str) -> None:
 # -----------------------------------------------------------------
 # EMAIL DELIVERY
 #
-# Three transports, tried in order, each one only if the one before it
-# is unconfigured or fails:
+# EmailJS's HTTPS API only, for now. This app is hosted on Render's free
+# tier, which blocks outbound traffic to every SMTP port (25, 465, 587),
+# so any SMTP-based sender is a dead end here regardless of provider.
+# EmailJS sends over a plain HTTPS POST (port 443), which isn't affected
+# by that block, and needs no domain purchase or account-activation
+# review -- see the setup notes on the settings above.
 #
-#   1. Brevo's HTTPS API (used whenever brevo_api_key is set). Primary
-#      path because this app is hosted on Render's free tier, which
-#      blocks outbound traffic to every SMTP port (25, 465, 587) --
-#      a restriction that applies no matter which SMTP provider the app
-#      points at, Gmail included. A plain HTTPS POST on port 443 isn't
-#      an SMTP connection, so it's completely unaffected by that block.
-#
-#   2. EmailJS's HTTPS API (used whenever emailjs_service_id is set).
-#      Same "it's HTTPS, not SMTP" reasoning as Brevo, kept as a second
-#      option because EmailJS has no new-account activation review --
-#      useful while a fresh Brevo account is still waiting on that.
-#
-#   3. Plain smtplib (used when neither of the above is configured).
-#      Kept for hosts that don't block SMTP -- a paid Render instance,
-#      most other hosts, or local development.
-#
-# All three run through BackgroundTasks from the route, so the API
-# responds immediately and a slow mail provider never makes a user wait.
-# A configured-but-failing transport falls through to the next one
-# rather than giving up -- e.g. a Brevo account still pending activation
-# doesn't block EmailJS or SMTP from being tried if they're also set.
+# Runs through BackgroundTasks from the route, so the API responds
+# immediately and a slow mail provider never makes a user wait.
 # -----------------------------------------------------------------
 
-async def _send_via_brevo(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
-    from_email = settings.brevo_from_email or settings.smtp_from_email or settings.smtp_username
-    if not from_email:
-        logger.error({"event": "email_send_failed", "to": to_email, "transport": "brevo", "error": "brevo_api_key is set but no from address is configured (BREVO_FROM_EMAIL)"})
+async def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    if not settings.emailjs_service_id:
+        # Not configured (e.g. local development). Log the content
+        # instead of silently pretending to send it, so the flow is
+        # still visible and testable end to end with zero mail setup.
+        logger.warning({"event": "email_not_configured", "to": to_email, "subject": subject})
         return False
 
-    payload = {
-        "sender":      {"name": settings.brevo_from_name, "email": from_email},
-        "to":          [{"email": to_email}],
-        "subject":     subject,
-        "htmlContent": html_body,
-        "textContent": text_body,
-    }
-    headers = {
-        "api-key":       settings.brevo_api_key,
-        "Content-Type":  "application/json",
-        "Accept":        "application/json",
-    }
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                "https://api.brevo.com/v3/smtp/email",
-                headers=headers,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=10),
-            ) as resp:
-                if resp.status in (200, 201):
-                    logger.info({"event": "email_sent", "to": to_email, "subject": subject, "transport": "brevo"})
-                    return True
-                body = await resp.text()
-                logger.error({
-                    "event": "email_send_failed", "to": to_email,
-                    "transport": "brevo", "status": resp.status, "body": body[:300],
-                })
-                return False
-    except Exception as e:
-        logger.error({"event": "email_send_failed", "to": to_email, "transport": "brevo", "error": str(e)})
-        return False
-
-
-async def _send_via_emailjs(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
     payload = {
         "service_id":  settings.emailjs_service_id,
         "template_id": settings.emailjs_template_id,
@@ -2774,77 +2701,6 @@ async def _send_via_emailjs(to_email: str, subject: str, html_body: str, text_bo
     except Exception as e:
         logger.error({"event": "email_send_failed", "to": to_email, "transport": "emailjs", "error": str(e)})
         return False
-
-
-def _send_via_smtp(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
-    import smtplib
-    import ssl
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-
-    from_email = settings.smtp_from_email or settings.smtp_username
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"]    = f"{settings.smtp_from_name} <{from_email}>"
-    msg["To"]      = to_email
-    msg.attach(MIMEText(text_body, "plain"))
-    msg.attach(MIMEText(html_body, "html"))
-
-    try:
-        context = ssl.create_default_context()
-        # Port 465 is implicit TLS -- the connection itself is encrypted
-        # from the first byte, and calling STARTTLS on it fails (it's a
-        # plaintext-upgrade command that doesn't exist inside an already-
-        # encrypted session). Every other port (587 is the near-universal
-        # default across Gmail/Workspace, Outlook, SendGrid, Mailgun,
-        # Postmark and SES) uses STARTTLS: connect in plaintext, then
-        # upgrade. Branching on the port -- rather than trusting
-        # smtp_use_tls alone -- means a 465 misconfiguration can't
-        # silently produce a confusing STARTTLS error.
-        if settings.smtp_port == 465:
-            server_ctx = smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=10, context=context)
-        else:
-            server_ctx = smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10)
-        with server_ctx as server:
-            if settings.smtp_port != 465 and settings.smtp_use_tls:
-                server.starttls(context=context)
-            if settings.smtp_username:
-                server.login(settings.smtp_username, settings.smtp_password)
-            server.sendmail(from_email, [to_email], msg.as_string())
-        logger.info({"event": "email_sent", "to": to_email, "subject": subject, "transport": "smtp"})
-        return True
-    except Exception as e:
-        logger.error({"event": "email_send_failed", "to": to_email, "transport": "smtp", "error": str(e)})
-        return False
-
-
-async def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
-    # Each configured transport gets one attempt, in priority order; a
-    # transport that's configured but fails (e.g. a Brevo account still
-    # waiting on activation) falls through to the next one instead of
-    # giving up, so having more than one set up at once is safe and
-    # actually useful during a provider's onboarding delay.
-    if settings.brevo_api_key:
-        if await _send_via_brevo(to_email, subject, html_body, text_body):
-            return True
-
-    if settings.emailjs_service_id:
-        if await _send_via_emailjs(to_email, subject, html_body, text_body):
-            return True
-
-    if settings.smtp_host:
-        loop = asyncio.get_event_loop()
-        if await loop.run_in_executor(None, _send_via_smtp, to_email, subject, html_body, text_body):
-            return True
-
-    if not (settings.brevo_api_key or settings.emailjs_service_id or settings.smtp_host):
-        # No transport configured at all (e.g. local development). Log
-        # the content instead of silently pretending to send it, so the
-        # flow is still visible and testable end to end with zero mail
-        # setup.
-        logger.warning({"event": "email_not_configured", "to": to_email, "subject": subject})
-
-    return False
 
 
 def _reset_email_bodies(name: str, reset_link: str, expire_minutes: int) -> tuple[str, str]:
