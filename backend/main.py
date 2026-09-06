@@ -168,11 +168,38 @@ class Settings(BaseSettings):
     brevo_from_email: str = ""
     brevo_from_name:  str = "TropiCare"
 
-    # Plain SMTP as a fallback path -- used automatically when
-    # brevo_api_key is blank. Works fine on any host that doesn't block
-    # SMTP ports (a paid Render instance, most other hosts, or local
-    # development), with any provider that speaks SMTP: Gmail/Workspace,
-    # Outlook, SendGrid, Mailgun, Postmark, Amazon SES.
+    # EmailJS as a second HTTPS-API fallback -- tried when brevo_api_key
+    # is blank (or Brevo hasn't finished its account activation yet, in
+    # which case this app treats a Brevo failure as "try the next
+    # transport", not a hard failure -- see send_email() below). Unlike
+    # Brevo, EmailJS has no new-account review step: it sends through a
+    # personal Gmail/Outlook account you connect via OAuth in its
+    # dashboard, so there's nothing to wait on. Free tier is 200
+    # emails/month. Setup, all one-time, in the EmailJS dashboard:
+    #   1. https://emailjs.com -> sign up -> Email Services -> Add New
+    #      Service -> Gmail -> connect the account you want to send from.
+    #   2. Email Templates -> Create New Template. In the template body
+    #      (Code Editor view) put just {{html_body}} as the entire
+    #      content -- this app sends one complete, pre-built HTML email
+    #      per message, so the template's only job is to hold it. Under
+    #      the template's Settings tab, set "To Email" to {{to_email}}
+    #      and "Subject" to {{subject}}.
+    #   3. Account -> Security -> enable "Allow EmailJS API for
+    #      non-browser applications". Required -- server-side calls are
+    #      rejected without it.
+    #   4. Account -> General for the Public Key; Account -> Security for
+    #      the Private Key (click "Generate" if none exists yet).
+    emailjs_service_id:  str = ""
+    emailjs_template_id: str = ""
+    emailjs_public_key:  str = ""
+    emailjs_private_key: str = ""
+
+    # Plain SMTP as a last-resort fallback -- used automatically when
+    # neither brevo_api_key nor emailjs_service_id is set. Works fine on
+    # any host that doesn't block SMTP ports (a paid Render instance,
+    # most other hosts, or local development), with any provider that
+    # speaks SMTP: Gmail/Workspace, Outlook, SendGrid, Mailgun, Postmark,
+    # Amazon SES.
     smtp_host:      str = ""
     smtp_port:      int = 587
     smtp_username:  str = ""
@@ -2644,30 +2671,36 @@ async def _check_reset_rate_limit(email: str) -> None:
 # -----------------------------------------------------------------
 # EMAIL DELIVERY
 #
-# Two transports, tried in order:
+# Three transports, tried in order, each one only if the one before it
+# is unconfigured or fails:
 #
-#   1. Brevo's HTTPS API (used whenever brevo_api_key is set). This is
-#      the primary path because this app is hosted on Render's free
-#      tier, and Render blocks outbound traffic to every SMTP port
-#      (25, 465, 587) on free instances -- a restriction that applies
-#      no matter which SMTP provider the app points at, Gmail included.
-#      A plain HTTPS POST on port 443 isn't an SMTP connection, so it
-#      is completely unaffected by that block.
+#   1. Brevo's HTTPS API (used whenever brevo_api_key is set). Primary
+#      path because this app is hosted on Render's free tier, which
+#      blocks outbound traffic to every SMTP port (25, 465, 587) --
+#      a restriction that applies no matter which SMTP provider the app
+#      points at, Gmail included. A plain HTTPS POST on port 443 isn't
+#      an SMTP connection, so it's completely unaffected by that block.
 #
-#   2. Plain smtplib (used when brevo_api_key is blank). Kept as a
-#      fallback for hosts that don't block SMTP -- a paid Render
-#      instance, most other hosts, or local development -- and works
-#      with any provider that speaks SMTP: Gmail/Workspace, Outlook,
-#      SendGrid, Mailgun, Postmark, Amazon SES.
+#   2. EmailJS's HTTPS API (used whenever emailjs_service_id is set).
+#      Same "it's HTTPS, not SMTP" reasoning as Brevo, kept as a second
+#      option because EmailJS has no new-account activation review --
+#      useful while a fresh Brevo account is still waiting on that.
 #
-# Both run through BackgroundTasks from the route, so the API responds
-# immediately and a slow mail provider never makes a user wait.
+#   3. Plain smtplib (used when neither of the above is configured).
+#      Kept for hosts that don't block SMTP -- a paid Render instance,
+#      most other hosts, or local development.
+#
+# All three run through BackgroundTasks from the route, so the API
+# responds immediately and a slow mail provider never makes a user wait.
+# A configured-but-failing transport falls through to the next one
+# rather than giving up -- e.g. a Brevo account still pending activation
+# doesn't block EmailJS or SMTP from being tried if they're also set.
 # -----------------------------------------------------------------
 
 async def _send_via_brevo(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
     from_email = settings.brevo_from_email or settings.smtp_from_email or settings.smtp_username
     if not from_email:
-        logger.error({"event": "email_send_failed", "to": to_email, "error": "brevo_api_key is set but no from address is configured (BREVO_FROM_EMAIL)"})
+        logger.error({"event": "email_send_failed", "to": to_email, "transport": "brevo", "error": "brevo_api_key is set but no from address is configured (BREVO_FROM_EMAIL)"})
         return False
 
     payload = {
@@ -2701,6 +2734,45 @@ async def _send_via_brevo(to_email: str, subject: str, html_body: str, text_body
                 return False
     except Exception as e:
         logger.error({"event": "email_send_failed", "to": to_email, "transport": "brevo", "error": str(e)})
+        return False
+
+
+async def _send_via_emailjs(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    payload = {
+        "service_id":  settings.emailjs_service_id,
+        "template_id": settings.emailjs_template_id,
+        "user_id":     settings.emailjs_public_key,
+        # Required for server-to-server calls -- without it EmailJS
+        # rejects the request as coming from a "non-browser application"
+        # (see the setup notes on the settings above: this also has to be
+        # explicitly allowed once in the EmailJS dashboard).
+        "accessToken": settings.emailjs_private_key,
+        "template_params": {
+            "to_email":   to_email,
+            "subject":    subject,
+            "html_body":  html_body,
+            "text_body":  text_body,
+        },
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                "https://api.emailjs.com/api/v1.0/email/send",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                if resp.status == 200:
+                    logger.info({"event": "email_sent", "to": to_email, "subject": subject, "transport": "emailjs"})
+                    return True
+                body = await resp.text()
+                logger.error({
+                    "event": "email_send_failed", "to": to_email,
+                    "transport": "emailjs", "status": resp.status, "body": body[:300],
+                })
+                return False
+    except Exception as e:
+        logger.error({"event": "email_send_failed", "to": to_email, "transport": "emailjs", "error": str(e)})
         return False
 
 
@@ -2747,18 +2819,32 @@ def _send_via_smtp(to_email: str, subject: str, html_body: str, text_body: str) 
 
 
 async def send_email(to_email: str, subject: str, html_body: str, text_body: str) -> bool:
+    # Each configured transport gets one attempt, in priority order; a
+    # transport that's configured but fails (e.g. a Brevo account still
+    # waiting on activation) falls through to the next one instead of
+    # giving up, so having more than one set up at once is safe and
+    # actually useful during a provider's onboarding delay.
     if settings.brevo_api_key:
-        return await _send_via_brevo(to_email, subject, html_body, text_body)
+        if await _send_via_brevo(to_email, subject, html_body, text_body):
+            return True
 
-    if not settings.smtp_host:
-        # Neither transport configured (e.g. local development). Log the
-        # content instead of silently pretending to send it, so the flow
-        # is still visible and testable end to end with zero mail setup.
+    if settings.emailjs_service_id:
+        if await _send_via_emailjs(to_email, subject, html_body, text_body):
+            return True
+
+    if settings.smtp_host:
+        loop = asyncio.get_event_loop()
+        if await loop.run_in_executor(None, _send_via_smtp, to_email, subject, html_body, text_body):
+            return True
+
+    if not (settings.brevo_api_key or settings.emailjs_service_id or settings.smtp_host):
+        # No transport configured at all (e.g. local development). Log
+        # the content instead of silently pretending to send it, so the
+        # flow is still visible and testable end to end with zero mail
+        # setup.
         logger.warning({"event": "email_not_configured", "to": to_email, "subject": subject})
-        return False
 
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, _send_via_smtp, to_email, subject, html_body, text_body)
+    return False
 
 
 def _reset_email_bodies(name: str, reset_link: str, expire_minutes: int) -> tuple[str, str]:
