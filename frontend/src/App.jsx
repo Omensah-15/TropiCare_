@@ -3,7 +3,7 @@
  * Backend: FastAPI (tropicare.onrender.com)
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { SYMPTOM_IMAGES, getCategoryImage } from "./symptomImages.js";
 import { generateTropiCareReport } from "./pdfReport.js";
 import ClinicFinder from "./ClinicFinder.jsx";
@@ -1398,8 +1398,11 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "chevL":     return <svg {...p}><polyline points="15 18 9 12 15 6"/></svg>;
     case "edit":      return <svg {...p}><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
     case "trash":     return <svg {...p}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/></svg>;
+    case "camera":    return <svg {...p}><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>;
     case "search":    return <svg {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
     case "shield":    return <svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>;
+    case "bell":      return <svg {...p}><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>;
+    case "globe":     return <svg {...p}><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>;
     case "database":  return <svg {...p}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>;
     case "eye":       return <svg {...p}><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>;
     case "eyeOff":    return <svg {...p}><path d="M17.94 17.94A10.07 10.07 0 0112 20c-7 0-11-8-11-8a18.45 18.45 0 015.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0112 4c7 0 11 8 11 8a18.5 18.5 0 01-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>;
@@ -1414,6 +1417,22 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "map":       return <svg {...p}><path d="M9 20l-6-3V4l6 3 6-3 6 3v13l-6-3-6 3z"/><line x1="9" y1="7" x2="9" y2="20"/><line x1="15" y1="4" x2="15" y2="17"/></svg>;
     default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
+}
+
+// Renders a user's profile photo when set, falling back to their initial
+// on a tinted background otherwise -- used everywhere an avatar appears
+// (both home headers, the profile page) so a photo shows up consistently
+// the moment it's set, with no per-caller fallback logic duplicated.
+function Avatar({ src, name, large, style }) {
+  const cls = `avatar${large ? " avatar-lg" : ""}`;
+  if (src) {
+    return (
+      <div className={cls} style={{ padding: 0, overflow: "hidden", background: "none", ...style }}>
+        <img src={src} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+      </div>
+    );
+  }
+  return <div className={cls} style={style}>{(name || "?").trim()[0]?.toUpperCase() || "?"}</div>;
 }
 
 // ─────────────────────────────────────────────
@@ -2566,7 +2585,7 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
             {(user?.name || "Patient").split(" ")[0]}
           </div>
         </div>
-        <div className="avatar">{(user?.name || "P")[0].toUpperCase()}</div>
+        <Avatar src={user?.avatar} name={user?.name || "P"} />
       </div>
 
       {/* Hero */}
@@ -2773,7 +2792,7 @@ function WorkerDashboard({ user, onStart, onNav, toast }) {
             {(user?.name || "Health Worker").split(" ")[0]}
           </div>
         </div>
-        <div className="avatar">{(user?.name || "W")[0].toUpperCase()}</div>
+        <Avatar src={user?.avatar} name={user?.name || "W"} />
       </div>
 
       {/* Hero — the single entry point for starting a check. Tapping it
@@ -4268,13 +4287,42 @@ function RecordDetail({ record, onBack, toast }) {
 // ─────────────────────────────────────────────
 // PROFILE SCREEN
 // ─────────────────────────────────────────────
+// Reads a picked file, center-crops it to a square, and scales it down
+// to a small fixed size before it ever leaves the browser -- keeps the
+// upload small and consistent regardless of the original photo's
+// resolution or aspect ratio. Resolves to a JPEG data URI.
+function resizeImageToDataUrl(file, maxDim = 480, quality = 0.85) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read that file."));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("That doesn't look like a valid image."));
+      img.onload = () => {
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width  - side) / 2;
+        const sy = (img.height - side) / 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = maxDim;
+        canvas.height = maxDim;
+        canvas.getContext("2d").drawImage(img, sx, sy, side, side, 0, 0, maxDim, maxDim);
+        resolve(canvas.toDataURL("image/jpeg", quality));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
-  const [editing, setEditing] = useState(false);
-  const [name,    setName]    = useState(user?.name   || "");
-  const [age,     setAge]     = useState(user?.age    || "");
-  const [gender,  setGender]  = useState(user?.gender || "");
-  const [profile, setProfile] = useState({});
-  const [saving,  setSaving]  = useState(false);
+  const [editing,      setEditing]      = useState(false);
+  const [name,         setName]         = useState(user?.name   || "");
+  const [age,          setAge]          = useState(user?.age    || "");
+  const [gender,       setGender]       = useState(user?.gender || "");
+  const [profile,      setProfile]      = useState({});
+  const [saving,       setSaving]       = useState(false);
+  const [avatarBusy,   setAvatarBusy]   = useState(false);
+  const fileInputRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -4284,21 +4332,24 @@ function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
     return () => { cancelled = true; };
   }, []);
 
+  // Pushes a partial user update (avatar change, profile edit) onto both
+  // this screen's local state and the persisted session, so every other
+  // screen that reads the stored user object sees it immediately -- not
+  // just after the next login or reload.
+  const applyUserUpdate = (partial) => {
+    setProfile((prev) => ({ ...prev, ...partial }));
+    const merged = { ...(Store.get(USER_KEY) || {}), ...partial };
+    Store.set(USER_KEY, merged);
+    if (onUserUpdate) onUserUpdate(merged);
+  };
+
   const saveProfile = async () => {
     if (!name.trim()) { toast("Name cannot be empty."); return; }
     setSaving(true);
     try {
       const data = await api.put("/user/profile", { name: name.trim(), age, gender });
       if (_loggingOut) return;
-      setProfile((prev) => ({ ...prev, ...data }));
-      // Merge the backend's canonical response (not raw form state) onto
-      // whatever's already stored, then push it into the live session too
-      // -- so the PDF report and every other screen see the update
-      // immediately, not just after the next login or reload.
-      const existing = Store.get(USER_KEY) || {};
-      const merged = { ...existing, ...data };
-      Store.set(USER_KEY, merged);
-      if (onUserUpdate) onUserUpdate(merged);
+      applyUserUpdate(data);
       toast("Profile updated.");
       setEditing(false);
     } catch (e) {
@@ -4315,34 +4366,113 @@ function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
     setEditing(false);
   };
 
+  const pickAvatarFile = () => fileInputRef.current?.click();
+
+  const handleAvatarFile = async (e) => {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // lets the same file be picked again later
+    if (!file) return;
+    if (!file.type.startsWith("image/")) { toast("Please choose an image file."); return; }
+    if (file.size > 8 * 1024 * 1024) { toast("That image is too large -- please choose one under 8MB."); return; }
+    setAvatarBusy(true);
+    try {
+      const dataUrl = await resizeImageToDataUrl(file);
+      const data = await api.put("/user/avatar", { avatar: dataUrl });
+      if (_loggingOut) return;
+      applyUserUpdate({ avatar: data.avatar });
+      toast("Profile picture updated.");
+    } catch (err) {
+      toast(err.message || "Could not update your photo. Please try again.");
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
+  const removeAvatar = async () => {
+    setAvatarBusy(true);
+    try {
+      await api.delete("/user/avatar");
+      if (_loggingOut) return;
+      applyUserUpdate({ avatar: null });
+      toast("Profile picture removed.");
+    } catch (err) {
+      toast(err.message || "Could not remove your photo. Please try again.");
+    } finally {
+      setAvatarBusy(false);
+    }
+  };
+
   const p = { ...user, ...profile };
 
-  const menuItems = [
-    { label: "Settings",           icon: "settings", action: () => onNav("settings") },
-    { label: "Privacy & Security", icon: "shield",   action: () => onNav("privacy")  },
-    { label: "About TropiCare",    icon: "info",     action: () => onNav("about")    },
-    { label: "My Data",            icon: "database", action: () => onNav("mydata")   },
+  // Notifications/Language/Theme values shown here are read straight from
+  // what SettingsScreen already persisted -- this screen doesn't own or
+  // duplicate that state, just surfaces the current value with a link
+  // through to where it's actually changed.
+  const savedSettings = Store.get("tc_settings") || {};
+  const LANG_LABELS  = { en: "English", tw: "Twi", fr: "French", ha: "Hausa" };
+  const THEME_LABELS = { light: "Light", dark: "Dark", system: "System" };
+  const notifValue = savedSettings.notifications === false ? "Off" : "On";
+  const langValue  = LANG_LABELS[savedSettings.language]  || "English";
+  const themeValue = THEME_LABELS[savedSettings.theme]    || "Light";
+
+  const accountItems = [
+    { label: "Manage Profile",      icon: "user",     action: () => setEditing(true) },
+    { label: "Password & Security", icon: "shield",   action: () => onNav("privacy") },
+    { label: "Notifications",       icon: "bell",     value: notifValue, action: () => onNav("settings") },
+    { label: "Language",            icon: "globe",    value: langValue,  action: () => onNav("settings") },
+  ];
+  const preferenceItems = [
+    { label: "Theme",               icon: "settings", value: themeValue, action: () => onNav("settings") },
+    { label: "My Data",             icon: "database", action: () => onNav("mydata") },
+    { label: "About TropiCare",     icon: "info",      action: () => onNav("about")  },
   ];
 
   return (
     <div>
-      <div className="page-head" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div className="page-head text-c">
         <div className="t-display">Profile</div>
-        {!editing && (
-          <button className="btn btn-secondary btn-sm" onClick={() => setEditing(true)}>
-            <Icon name="edit" size={13} /> Edit
-          </button>
-        )}
       </div>
       <div className="page-body">
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          style={{ display: "none" }}
+          onChange={handleAvatarFile}
+        />
+
         {/* Profile card */}
         {!editing && (
           <div className="card card-p text-c mb-3">
-            <div className="avatar avatar-lg mx-auto mb-3">{(p.name || "P")[0].toUpperCase()}</div>
+            <div style={{ position: "relative", width: 84, height: 84, margin: "0 auto 14px" }}>
+              <Avatar src={p.avatar} name={p.name} style={{ width: 84, height: 84, fontSize: 28 }} />
+              <button
+                onClick={pickAvatarFile}
+                disabled={avatarBusy}
+                title={p.avatar ? "Change photo" : "Add photo"}
+                style={{
+                  position: "absolute", bottom: -2, right: -2, width: 30, height: 30,
+                  borderRadius: "50%", background: "var(--teal)", border: "3px solid var(--surface)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  cursor: avatarBusy ? "default" : "pointer", opacity: avatarBusy ? 0.6 : 1, padding: 0,
+                }}
+              >
+                <Icon name="camera" size={13} color="#fff" />
+              </button>
+            </div>
             <div className="t-title">{p.name}</div>
             <div className="t-subtitle mt-1">{p.email}</div>
             {(p.age || p.gender) && (
               <div className="t-subtitle">{[p.age && `${p.age} yrs`, p.gender].filter(Boolean).join(" · ")}</div>
+            )}
+            {p.avatar && (
+              <button
+                onClick={removeAvatar}
+                disabled={avatarBusy}
+                style={{ border: "none", background: "none", padding: 0, marginTop: 10, cursor: avatarBusy ? "default" : "pointer", fontSize: 12.5, fontWeight: 700, color: "var(--red)", fontFamily: "var(--font)" }}
+              >
+                {avatarBusy ? "Removing..." : "Remove photo"}
+              </button>
             )}
             <div className="mt-2">
               <span className="badge badge-teal">
@@ -4394,13 +4524,30 @@ function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
           </div>
         </div>
 
-        {/* Menu */}
+        {/* Account */}
+        <div className="section-ttl">Account</div>
         <div className="card card-p mb-3">
           <div className="menu-list">
-            {menuItems.map((item) => (
+            {accountItems.map((item) => (
               <div key={item.label} className="menu-item" onClick={item.action}>
                 <div className="menu-ico"><Icon name={item.icon} size={16} color="var(--muted)" /></div>
                 <span style={{ flex: 1, fontSize: 14, fontWeight: 500, color: "var(--ink)" }}>{item.label}</span>
+                {item.value && <span style={{ fontSize: 13, color: "var(--muted)", marginRight: 6 }}>{item.value}</span>}
+                <Icon name="chevR" size={14} color="var(--muted-l)" />
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Preferences */}
+        <div className="section-ttl">Preferences</div>
+        <div className="card card-p mb-3">
+          <div className="menu-list">
+            {preferenceItems.map((item) => (
+              <div key={item.label} className="menu-item" onClick={item.action}>
+                <div className="menu-ico"><Icon name={item.icon} size={16} color="var(--muted)" /></div>
+                <span style={{ flex: 1, fontSize: 14, fontWeight: 500, color: "var(--ink)" }}>{item.label}</span>
+                {item.value && <span style={{ fontSize: 13, color: "var(--muted)", marginRight: 6 }}>{item.value}</span>}
                 <Icon name="chevR" size={14} color="var(--muted-l)" />
               </div>
             ))}
