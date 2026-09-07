@@ -2948,12 +2948,6 @@ function WorkerCheck({ user, onStart, toast }) {
             <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
               Register a new patient here, then run the same guided assessment used for individual screenings.
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-              {["Free", "Under 2 min", "41 diseases"].map((t) => (
-                <span key={t} className="badge badge-teal">
-                  <Icon name="check" size={10} color="var(--teal)" />&nbsp;{t}
-                </span>
-              ))}
             </div>
           </div>
           <div className="al-hero-illus"><HealthProfessionalIllus width={120} height={140} /></div>
