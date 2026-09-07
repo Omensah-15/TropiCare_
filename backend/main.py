@@ -8,6 +8,7 @@ from __future__ import annotations
 # STDLIB
 # -----------------------------------------------------------------
 import asyncio
+import base64
 import hashlib
 import json
 import logging
@@ -383,6 +384,16 @@ class UserModel(Base):
     # no backfill required.
     role          = Column(String(20), nullable=False, default="patient")
     created_at    = Column(DateTime, default=datetime.utcnow)
+    # A data URI ("data:image/jpeg;base64,...") for the user's profile
+    # photo, or NULL. Stored directly in the row rather than as a file on
+    # disk because this app's host (Render free tier) has an ephemeral
+    # filesystem -- anything written to disk is wiped on every restart
+    # and every deploy, so a file path saved here would go stale almost
+    # immediately. A database row survives both. Text (not a length-
+    # capped String) since a resized, compressed photo's base64 form can
+    # run to a few hundred KB; see MAX_AVATAR_BYTES below for the actual
+    # size ceiling enforced on upload.
+    avatar        = Column(Text, nullable=True)
 
 
 class PatientModel(Base):
@@ -2100,6 +2111,17 @@ class ProfileUpdate(BaseModel):
     gender: Optional[str] = None
 
 
+class AvatarUpdateRequest(BaseModel):
+    # A data URI, e.g. "data:image/jpeg;base64,/9j/4AAQ...". The frontend
+    # resizes/compresses the image client-side before sending it (see
+    # ProfileScreen's avatar upload handler), so this is expected to
+    # already be a reasonably small square image, not an arbitrary raw
+    # camera photo -- but the endpoint re-validates the size and type
+    # itself regardless, since client-side limits are a UX nicety, not a
+    # security boundary.
+    avatar: str
+
+
 class ChangePasswordRequest(BaseModel):
     current_password: str
     new_password:     str
@@ -2319,6 +2341,7 @@ def _user_response(user: "UserModel") -> dict:
         "age":    user.age,
         "gender": user.gender,
         "role":   user.role or "patient",
+        "avatar": user.avatar,
     }
 
 
@@ -3789,6 +3812,7 @@ async def get_profile(
         "age":              u.age,
         "gender":           u.gender,
         "role":             u.role or "patient",
+        "avatar":           u.avatar,
         "joined_at":        u.created_at.isoformat(),
         "assessment_count": count,
         "high_risk_count":  high,
@@ -3812,6 +3836,69 @@ async def update_profile(
     db.commit()
     await cache_delete(f"profile:{user_id}")
     return {"id": u.id, "name": u.name, "age": u.age, "gender": u.gender}
+
+
+# 2MB cap on the DECODED image, after the frontend has already resized and
+# compressed it to a small square JPEG (see ProfileScreen's upload handler
+# in App.jsx) -- a real photo at that point should be well under this, so
+# the cap exists to stop a crafted request from bloating the database or
+# tying up the request handling a multi-megabyte payload, not to police
+# ordinary use.
+MAX_AVATAR_BYTES = 2 * 1024 * 1024
+_ALLOWED_AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+@app.put("/api/v1/user/avatar")
+async def update_avatar(
+    req: AvatarUpdateRequest,
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    u = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # A data URI looks like "data:image/jpeg;base64,/9j/4AAQ..." -- split
+    # on the first comma to separate the header from the payload, and
+    # parse the header rather than trusting the caller's own claim of
+    # what it is, since re-validating server-side is what makes this a
+    # real security boundary instead of just a client-side nicety.
+    if not req.avatar.startswith("data:image/") or "," not in req.avatar:
+        raise HTTPException(status_code=400, detail="Invalid image data")
+
+    header, _, encoded = req.avatar.partition(",")
+    mime_type = header[len("data:"):].split(";")[0]
+    if mime_type not in _ALLOWED_AVATAR_TYPES:
+        raise HTTPException(status_code=400, detail="Image must be JPEG, PNG, or WEBP")
+
+    try:
+        decoded = base64.b64decode(encoded, validate=True)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid image data")
+
+    if len(decoded) > MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=400, detail="Image is too large. Please use a smaller photo.")
+    if len(decoded) == 0:
+        raise HTTPException(status_code=400, detail="Invalid image data")
+
+    u.avatar = req.avatar
+    db.commit()
+    await cache_delete(f"profile:{user_id}")
+    return {"avatar": u.avatar}
+
+
+@app.delete("/api/v1/user/avatar")
+async def delete_avatar(
+    user_id: int = Depends(verify_token),
+    db: Session = Depends(get_db),
+):
+    u = db.query(UserModel).filter(UserModel.id == user_id).first()
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found")
+    u.avatar = None
+    db.commit()
+    await cache_delete(f"profile:{user_id}")
+    return {"message": "Profile picture removed"}
 
 
 @app.put("/api/v1/user/change-password")
