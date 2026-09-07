@@ -5250,21 +5250,6 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
           </div>
         </div>
 
-        {/* Privacy summary */}
-        <div style={{ marginBottom: 16 }}>
-          <div className="section-ttl mb-2">Privacy</div>
-          <div className="card card-p">
-            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingBottom: 10, borderBottom: "1px solid var(--border)" }}>
-              <Icon name="shield" size={16} color="var(--green)" />
-              <span style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>Encrypted storage</span>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, paddingTop: 10 }}>
-              <Icon name="check" size={16} color="var(--green)" />
-              <span style={{ fontWeight: 600, fontSize: 13, color: "var(--ink)" }}>No third-party sharing</span>
-            </div>
-          </div>
-        </div>
-
         <button className="btn btn-primary btn-full" onClick={save}>
           <Icon name="check" size={15} color="#fff" />
           Save Settings
