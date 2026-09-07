@@ -816,6 +816,11 @@ const injectStyles = () => {
     .card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-s);border:1px solid var(--border);transition:box-shadow var(--t-med),transform var(--t-med);}
     .card-p{padding:20px;}
     @media(max-width:480px){.card-p{padding:16px;}}
+    /* Brief highlight for a settings section deep-linked to from another
+       screen (e.g. Profile's Theme/Language/Notifications rows), so it's
+       obvious which section the user was sent to land on. */
+    @keyframes settings-focus-pulse{0%,100%{box-shadow:var(--shadow-s);}50%{box-shadow:0 0 0 3px var(--teal-t,rgba(20,166,166,0.28)),var(--shadow-s);}}
+    .settings-section-focus{animation:settings-focus-pulse 1.1s ease-in-out 2;border-color:var(--teal);}
     .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:13px 22px;border-radius:var(--radius-s);font-family:var(--font);font-size:14px;font-weight:600;cursor:pointer;border:none;transition:background var(--t-fast),box-shadow var(--t-fast),transform var(--t-fast),opacity var(--t-fast);line-height:1;min-height:44px;}
     .btn:active:not(:disabled){transform:scale(0.97);}
     .btn:disabled{opacity:0.5;cursor:not-allowed;}
@@ -1795,8 +1800,16 @@ export default function App() {
     { id: "profile",    label: "Profile", icon: "user"      },
   ];
 
+  // Settings can be opened focused on one specific row -- e.g. tapping
+  // "Language" on the Profile screen should land directly on the Language
+  // section inside Settings, not just the top of the screen. The target is
+  // encoded as "settings#language" so routing/active-state logic (which all
+  // compares against a plain page id) keeps working unchanged; pageAnchor is
+  // only consumed by SettingsScreen to decide what to scroll to and highlight.
+  const [pageId, pageAnchor] = page.split("#");
+
   const renderPage = () => {
-    switch (page) {
+    switch (pageId) {
       case "home":
         return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} toast={toast} />;
       case "assessment":
@@ -1818,6 +1831,7 @@ export default function App() {
             currentTheme={theme}
             onFontSizeChange={handleFontSizeChange}
             currentFontSize={fontSize}
+            focusSection={pageAnchor}
           />
         );
       case "privacy":
@@ -1872,7 +1886,7 @@ export default function App() {
     // register the new patient, then start their assessment immediately.
     // startAssessment() below takes page/assActive over from here on its
     // own, so there is no separate "back to home" step to wire up.
-    if (page === "register")
+    if (pageId === "register")
       return (
         <NewPatientForm
           onCancel={() => setPage("home")}
@@ -1880,7 +1894,7 @@ export default function App() {
         />
       );
 
-    if (page === "result" && result)
+    if (pageId === "result" && result)
       return (
         <ResultScreen
           result={result}
@@ -1918,7 +1932,7 @@ export default function App() {
           <nav className="sidebar-nav">
             {[...navItems, { id: "settings", label: "Settings", icon: "settings" }].map((n) => (
               <button key={n.id}
-                className={`nav-item${page === n.id ? " active" : ""}`}
+                className={`nav-item${pageId === n.id ? " active" : ""}`}
                 onClick={() => setPage(n.id)}>
                 <Icon name={n.icon} size={17} />
                 {n.label}
@@ -1942,7 +1956,7 @@ export default function App() {
         <nav className="bottom-nav">
           {navItems.map((n) => (
             <button key={n.id}
-              className={`bnav-item${page === n.id ? " active" : ""}`}
+              className={`bnav-item${pageId === n.id ? " active" : ""}`}
               onClick={() => {
                 setPage(n.id);
                 if (n.id !== "assessment") setAssActive(false);
@@ -4415,14 +4429,19 @@ function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
   const langValue  = LANG_LABELS[savedSettings.language]  || "English";
   const themeValue = THEME_LABELS[savedSettings.theme]    || "Light";
 
+  // Each row below links straight to its own section on the Settings
+  // screen (via a "settings#section" anchor) rather than dropping the user
+  // at the top of Settings every time -- Notifications opens on
+  // Notifications, Language on Language, Theme on Theme, the way a
+  // well-built app's summary rows deep-link to the exact setting shown.
   const accountItems = [
     { label: "Manage Profile",      icon: "user",     action: () => setEditing(true) },
     { label: "Password & Security", icon: "shield",   action: () => onNav("privacy") },
-    { label: "Notifications",       icon: "bell",     value: notifValue, action: () => onNav("settings") },
-    { label: "Language",            icon: "globe",    value: langValue,  action: () => onNav("settings") },
+    { label: "Notifications",       icon: "bell",     value: notifValue, action: () => onNav("settings#notifications") },
+    { label: "Language",            icon: "globe",    value: langValue,  action: () => onNav("settings#language") },
   ];
   const preferenceItems = [
-    { label: "Theme",               icon: "settings", value: themeValue, action: () => onNav("settings") },
+    { label: "Theme",               icon: "settings", value: themeValue, action: () => onNav("settings#theme") },
     { label: "My Data",             icon: "database", action: () => onNav("mydata") },
     { label: "About TropiCare",     icon: "info",      action: () => onNav("about")  },
   ];
@@ -5052,12 +5071,37 @@ function AboutScreen({ onBack }) {
 // ─────────────────────────────────────────────
 // SETTINGS SCREEN
 // ─────────────────────────────────────────────
-function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSizeChange, currentFontSize }) {
+function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSizeChange, currentFontSize, focusSection }) {
   const [theme,    setTheme]    = useState(currentTheme    || "light");
   const [fontSize, setFontSize] = useState(currentFontSize || "medium");
   const [notifs,   setNotifs]   = useState(true);
   const [lang,     setLang]     = useState("en");
   const [saved,    setSaved]    = useState(false);
+
+  // When opened from a Profile row (Notifications / Language / Theme), scroll
+  // straight to that section and pulse it briefly, instead of always landing
+  // at the top of the screen -- the row someone tapped should be the row
+  // they see next.
+  const [highlighted, setHighlighted] = useState(null);
+  const sectionRefs = {
+    theme:         useRef(null),
+    notifications: useRef(null),
+    language:      useRef(null),
+  };
+
+  useEffect(() => {
+    if (!focusSection || !sectionRefs[focusSection]) return;
+    const el = sectionRefs[focusSection].current;
+    if (!el) return;
+    // Let the screen mount/paint first so scrollIntoView has real layout to work with.
+    const raf = requestAnimationFrame(() => {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlighted(focusSection);
+    });
+    const clear = setTimeout(() => setHighlighted(null), 2400);
+    return () => { cancelAnimationFrame(raf); clearTimeout(clear); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusSection]);
 
   // Sync if parent-supplied values change
   useEffect(() => {
@@ -5143,7 +5187,9 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
         {/* Appearance */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Appearance</div>
-          <div className="card card-p">
+          <div
+            ref={sectionRefs.theme}
+            className={`card card-p${highlighted === "theme" ? " settings-section-focus" : ""}`}>
 
             {/* Theme */}
             <div className="t-label mb-2">Theme</div>
@@ -5199,7 +5245,9 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
         {/* Notifications */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Notifications</div>
-          <div className="card card-p">
+          <div
+            ref={sectionRefs.notifications}
+            className={`card card-p${highlighted === "notifications" ? " settings-section-focus" : ""}`}>
             <div className="toggle-row">
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14, color: "var(--ink)" }}>Push Notifications</div>
@@ -5213,7 +5261,9 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
         {/* Language */}
         <div style={{ marginBottom: 16 }}>
           <div className="section-ttl mb-2">Language</div>
-          <div className="card card-p">
+          <div
+            ref={sectionRefs.language}
+            className={`card card-p${highlighted === "language" ? " settings-section-focus" : ""}`}>
             <div className="chip-row" style={{ marginBottom: 0 }}>
               {LANG_OPTIONS.map((o) => (
                 <button
