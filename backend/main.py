@@ -171,11 +171,16 @@ class Settings(BaseSettings):
     #      scopes", reconnect the service and make sure to click Allow
     #      on the "send email on your behalf" permission.
     #   2. Email Templates -> Create New Template. In the template body
-    #      (Code Editor view) put just {{html_body}} as the entire
-    #      content -- this app sends one complete, pre-built HTML email
-    #      per message, so the template's only job is to hold it. Under
-    #      the template's Settings tab, set "To Email" to {{to_email}}
-    #      and "Subject" to {{subject}}.
+    #      (Code Editor view) put just {{{html_body}}} -- three curly
+    #      braces on each side, not two -- as the entire content. This
+    #      app sends one complete, pre-built HTML email per message, so
+    #      the template's only job is to hold it, and the triple braces
+    #      matter: EmailJS HTML-escapes double-brace {{html_body}} by
+    #      default, which is what makes an email arrive as visible raw
+    #      "<html><body>..." markup instead of a rendered email -- triple
+    #      braces inject the HTML unescaped, which is what actually
+    #      renders. Under the template's Settings tab, set "To Email" to
+    #      {{to_email}} and "Subject" to {{subject}}.
     #   3. Account -> Security -> enable "Allow EmailJS API for
     #      non-browser applications". Required -- server-side calls are
     #      rejected without it.
