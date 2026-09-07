@@ -1124,15 +1124,18 @@ const injectStyles = () => {
     .theme-preview-swatch.system-sw{background:linear-gradient(135deg,#f4f7f9 50%,#0f161e 50%);color:var(--ink);}
     @media(max-width:480px){.theme-preview-strip{gap:5px;}.theme-preview-swatch{height:38px;font-size:10px;padding:0 6px;gap:4px;}}
     @media(max-width:360px){.theme-preview-swatch{height:36px;font-size:0;gap:0;}.theme-preview-swatch svg{margin:0;}}
-    .fs-strip{display:flex;gap:6px;margin-top:10px;}
-    .fs-btn{flex:1;height:40px;border-radius:999px;border:1.5px solid var(--border);cursor:pointer;transition:border-color var(--t-fast),transform var(--t-fast),box-shadow var(--t-fast);display:flex;align-items:center;justify-content:center;font-weight:700;letter-spacing:0.03em;background:var(--surface);color:var(--muted);padding:0 10px;}
-    .fs-btn:hover{transform:translateY(-1px);box-shadow:var(--shadow-s);border-color:var(--muted-l);}
-    .fs-btn.selected{border-color:var(--teal);color:var(--teal-d);box-shadow:0 0 0 2px rgba(var(--teal-rgb),0.15);}
-    .fs-btn.fs-small{font-size:11px;}
-    .fs-btn.fs-medium{font-size:13px;}
-    .fs-btn.fs-large{font-size:16px;}
+    .fs-slider-row{display:flex;align-items:center;gap:10px;}
+    .fs-slider-a{color:var(--muted);font-weight:700;flex-shrink:0;user-select:none;line-height:1;}
+    .fs-slider{-webkit-appearance:none;appearance:none;flex:1;height:6px;border-radius:999px;outline:none;cursor:pointer;background:linear-gradient(to right,var(--teal) 0%,var(--teal) var(--fs-pct,50%),var(--border) var(--fs-pct,50%),var(--border) 100%);}
+    .fs-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:var(--surface);border:3px solid var(--teal);box-shadow:var(--shadow-s);cursor:pointer;transition:transform var(--t-fast);}
+    .fs-slider::-webkit-slider-thumb:active{transform:scale(1.15);}
+    .fs-slider::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--surface);border:3px solid var(--teal);box-shadow:var(--shadow-s);cursor:pointer;}
+    .fs-slider::-moz-range-track{height:6px;border-radius:999px;background:var(--border);}
+    .fs-slider::-moz-range-progress{height:6px;border-radius:999px;background:var(--teal);}
+    .fs-slider-marks{display:flex;justify-content:space-between;margin-top:7px;font-size:11px;color:var(--muted-l);padding:0 1px;}
     @media(max-width:359px){.stats-row{grid-template-columns:1fr 1fr 1fr;}.q-answers{max-width:100%;}.hero-card{padding:20px 16px;}}
     @media(min-width:1280px){.page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}}
+
 
     /* ── Font size scaling ────────────────── */
     html[data-fontsize="small"] body { font-size: 13px; }
@@ -1569,6 +1572,21 @@ export default function App() {
   }, [fontSize]);
 
   const handleFontSizeChange = useCallback((fs) => setFontSize(fs), []);
+
+  // ── Language ───────────────────────────────
+  // Sets the real <html lang> attribute (used by screen readers and the
+  // browser, independent of whether in-app text is translated yet) as soon
+  // as the app boots, not only after someone happens to open Settings.
+  // "system" resolves to the device's language, falling back to English
+  // for anything we don't yet ship copy for.
+  useEffect(() => {
+    const saved = Store.get("tc_settings")?.language;
+    const detectSystemLanguage = () => {
+      const raw = (navigator.language || navigator.languages?.[0] || "en").toLowerCase();
+      return raw.startsWith("fr") ? "fr" : "en";
+    };
+    document.documentElement.setAttribute("lang", (!saved || saved === "system") ? detectSystemLanguage() : saved);
+  }, []);
 
   const toast = useCallback((msg) => {
     setNotif(msg);
@@ -4423,7 +4441,7 @@ function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
   // duplicate that state, just surfaces the current value with a link
   // through to where it's actually changed.
   const savedSettings = Store.get("tc_settings") || {};
-  const LANG_LABELS  = { en: "English", tw: "Twi", fr: "French", ha: "Hausa" };
+  const LANG_LABELS  = { en: "English", fr: "French", system: "System" };
   const THEME_LABELS = { light: "Light", dark: "Dark", system: "System" };
   const notifValue = savedSettings.notifications === false ? "Off" : "On";
   const langValue  = LANG_LABELS[savedSettings.language]  || "English";
@@ -4462,41 +4480,42 @@ function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
 
         {/* Profile card */}
         {!editing && (
-          <div className="card card-p text-c mb-3">
-            <div style={{ position: "relative", width: 84, height: 84, margin: "0 auto 14px" }}>
-              <Avatar src={p.avatar} name={p.name} style={{ width: 84, height: 84, fontSize: 28 }} />
-              <button
-                onClick={pickAvatarFile}
-                disabled={avatarBusy}
-                title={p.avatar ? "Change photo" : "Add photo"}
-                style={{
-                  position: "absolute", bottom: -2, right: -2, width: 30, height: 30,
-                  borderRadius: "50%", background: "var(--teal)", border: "3px solid var(--surface)",
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  cursor: avatarBusy ? "default" : "pointer", opacity: avatarBusy ? 0.6 : 1, padding: 0,
-                }}
-              >
-                <Icon name="camera" size={13} color="#fff" />
-              </button>
+          <div className="card card-p mb-3">
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+              <div style={{ position: "relative", width: 64, height: 64, flexShrink: 0 }}>
+                <Avatar src={p.avatar} name={p.name} style={{ width: 64, height: 64, fontSize: 22 }} />
+                <button
+                  onClick={pickAvatarFile}
+                  disabled={avatarBusy}
+                  title={p.avatar ? "Change photo" : "Add photo"}
+                  style={{
+                    position: "absolute", bottom: -2, right: -2, width: 24, height: 24,
+                    borderRadius: "50%", background: "var(--teal)", border: "2.5px solid var(--surface)",
+                    display: "flex", alignItems: "center", justifyContent: "center",
+                    cursor: avatarBusy ? "default" : "pointer", opacity: avatarBusy ? 0.6 : 1, padding: 0,
+                  }}
+                >
+                  <Icon name="camera" size={11} color="#fff" />
+                </button>
+              </div>
+              <div style={{ minWidth: 0, flex: 1 }}>
+                <div className="t-title" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.name}</div>
+                <div className="t-subtitle mt-1" style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.email}</div>
+              </div>
             </div>
-            <div className="t-title">{p.name}</div>
-            <div className="t-subtitle mt-1">{p.email}</div>
-            {(p.age || p.gender) && (
-              <div className="t-subtitle">{[p.age && `${p.age} yrs`, p.gender].filter(Boolean).join(" · ")}</div>
-            )}
-            {p.avatar && (
-              <button
-                onClick={removeAvatar}
-                disabled={avatarBusy}
-                style={{ border: "none", background: "none", padding: 0, marginTop: 10, cursor: avatarBusy ? "default" : "pointer", fontSize: 12.5, fontWeight: 700, color: "var(--red)", fontFamily: "var(--font)" }}
-              >
-                {avatarBusy ? "Removing..." : "Remove photo"}
-              </button>
-            )}
-            <div className="mt-2">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 14, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
               <span className="badge badge-teal">
                 Member since {new Date(p.joined_at || Date.now()).toLocaleDateString("en-GB", { month: "short", year: "numeric" })}
               </span>
+              {p.avatar && (
+                <button
+                  onClick={removeAvatar}
+                  disabled={avatarBusy}
+                  style={{ border: "none", background: "none", padding: 0, cursor: avatarBusy ? "default" : "pointer", fontSize: 12.5, fontWeight: 700, color: "var(--red)", fontFamily: "var(--font)" }}
+                >
+                  {avatarBusy ? "Removing..." : "Remove photo"}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -5139,10 +5158,27 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
     if (onFontSizeChange) onFontSizeChange(val);
   };
 
+  // "System" resolves to whatever the device/browser is set to -- we only
+  // ship English and French copy, so anything else falls back to English,
+  // same as most apps do when a device language isn't one they support yet.
+  const detectSystemLanguage = () => {
+    const raw = (navigator.language || navigator.languages?.[0] || "en").toLowerCase();
+    return raw.startsWith("fr") ? "fr" : "en";
+  };
+
+  const applyLanguage = (val) => {
+    setLang(val);
+    setSaved(false);
+    // Real, immediate effect even without full in-app translations yet --
+    // this is what screen readers and browser UI use to pronounce/label content.
+    document.documentElement.setAttribute("lang", val === "system" ? detectSystemLanguage() : val);
+  };
+
   const save = () => {
     Store.set("tc_settings", { theme, fontSize, notifications: notifs, language: lang });
     if (onThemeChange)    onThemeChange(theme);
     if (onFontSizeChange) onFontSizeChange(fontSize);
+    document.documentElement.setAttribute("lang", lang === "system" ? detectSystemLanguage() : lang);
     setSaved(true);
     toast("Settings saved.");
   };
@@ -5153,17 +5189,18 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
     { val: "system", label: "System", icon: "monitor" },
   ];
 
-  const FONT_OPTIONS = [
-    { val: "small",  label: "Small"  },
-    { val: "medium", label: "Medium" },
-    { val: "large",  label: "Large"  },
-  ];
+  // Text size is a drag slider rather than discrete buttons, but it still
+  // snaps to these three tuned presets -- a fully continuous range would
+  // need every font-size rule in the stylesheet to scale with it, and at
+  // odd in-between sizes some layouts would start to crowd or wrap badly.
+  const FONT_LEVELS = ["small", "medium", "large"];
+  const FONT_LABELS = { small: "Small", medium: "Medium", large: "Large" };
+  const fontIndex = Math.max(0, FONT_LEVELS.indexOf(fontSize));
 
   const LANG_OPTIONS = [
-    { val: "en", label: "English" },
-    { val: "tw", label: "Twi"     },
-    { val: "fr", label: "French"  },
-    { val: "ha", label: "Hausa"   },
+    { val: "system", label: "System"  },
+    { val: "en",     label: "English" },
+    { val: "fr",     label: "French"  },
   ];
 
   const Toggle = ({ checked, onChange }) => (
@@ -5223,20 +5260,31 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
 
             {/* Font size */}
             <div style={{ borderTop: "1px solid var(--border)", marginTop: 16, paddingTop: 16 }}>
-              <div className="t-label mb-2">Text Size</div>
-              <div className="fs-strip">
-                {FONT_OPTIONS.map((o) => (
-                  <button
-                    key={o.val}
-                    className={`fs-btn fs-${o.val}${fontSize === o.val ? " selected" : ""}`}
-                    onClick={() => applyFontSize(o.val)}
-                    aria-pressed={fontSize === o.val}>
-                    {o.label}
-                  </button>
-                ))}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <div className="t-label" style={{ marginBottom: 0 }}>Text Size</div>
+                <span style={{ fontSize: 12, fontWeight: 700, color: "var(--teal)" }}>{FONT_LABELS[fontSize]}</span>
+              </div>
+              <div className="fs-slider-row">
+                <span className="fs-slider-a" style={{ fontSize: 12 }}>A</span>
+                <input
+                  type="range"
+                  className="fs-slider"
+                  min={0}
+                  max={FONT_LEVELS.length - 1}
+                  step={1}
+                  value={fontIndex}
+                  onChange={(e) => applyFontSize(FONT_LEVELS[Number(e.target.value)])}
+                  style={{ "--fs-pct": `${(fontIndex / (FONT_LEVELS.length - 1)) * 100}%` }}
+                  aria-label="Text size"
+                  aria-valuetext={FONT_LABELS[fontSize]}
+                />
+                <span className="fs-slider-a" style={{ fontSize: 21 }}>A</span>
+              </div>
+              <div className="fs-slider-marks">
+                {FONT_LEVELS.map((lvl) => <span key={lvl}>{FONT_LABELS[lvl]}</span>)}
               </div>
               <div style={{ marginTop: 8, fontSize: 12, color: "var(--muted)" }}>
-                Medium is the default. Changes apply immediately across the app.
+                Drag to adjust. Changes apply immediately across the app.
               </div>
             </div>
           </div>
@@ -5269,11 +5317,17 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
                 <button
                   key={o.val}
                   className={`chip${lang === o.val ? " on" : ""}`}
-                  onClick={() => { setLang(o.val); setSaved(false); }}>
+                  onClick={() => applyLanguage(o.val)}>
                   {o.label}
                 </button>
               ))}
             </div>
+            {lang === "system" && (
+              <div style={{ marginTop: 10, fontSize: 12, color: "var(--muted)", display: "flex", alignItems: "center", gap: 6 }}>
+                <Icon name="monitor" size={13} color="var(--muted)" />
+                Matches your device's language setting.
+              </div>
+            )}
           </div>
         </div>
 
