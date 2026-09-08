@@ -2160,10 +2160,14 @@ def _strip_html(raw: str) -> str:
 
 def _parse_who_don_item(raw: dict) -> Optional[dict]:
     """
-    Normalizes one raw WHO API record into {id, title, summary, date, link}.
-    Returns None for anything missing the fields needed to render or link
-    to it -- better to silently skip a malformed record than show a broken
-    card.
+    Normalizes one raw WHO API record into {id, title, summary, date, link,
+    image}. Returns None for anything missing the fields needed to render
+    or link to it -- better to silently skip a malformed record than show
+    a broken card. `image` starts as None here and is filled in afterward
+    by _attach_article_images() -- the diseaseoutbreaknews API itself has
+    no image field at all (confirmed against WHO's own schema), so the
+    only way to get a real per-article photo is to fetch the article page
+    and read its og:image tag.
     """
     title = (raw.get("Title") or "").strip()
     pub_date = raw.get("PublicationDate") or raw.get("PublicationDateAndTime") or ""
@@ -2183,6 +2187,7 @@ def _parse_who_don_item(raw: dict) -> Optional[dict]:
         "summary": summary,
         "date":    pub_date,
         "link":    f"{WHO_DON_ARTICLE_BASE}/{url_name}",
+        "image":   None,
     }
 
 
@@ -2240,12 +2245,98 @@ async def _fetch_who_don_raw() -> List[dict]:
         return []
 
 
+# -----------------------------------------------------------------
+# ARTICLE THUMBNAILS (og:image scrape)
+# -----------------------------------------------------------------
+# The diseaseoutbreaknews API (per WHO's own published schema at
+# who.int/api/news/diseaseoutbreaknews/sfhelp) has NO image field of any
+# kind -- no ImageUrl, Thumbnail, or FeaturedImage. The only source for a
+# real, article-specific photo is the public article page itself, which
+# WHO -- like virtually every publisher -- tags with a standard
+# Open Graph/Twitter <meta> image for link previews. This is the exact
+# same tag Twitter, Slack, and WhatsApp read to build their own link
+# preview cards, so pulling it here gives the news feed real "public
+# images" per article instead of a generic icon, with no invented data.
+_OG_IMAGE_RE     = re.compile(
+    r'<meta[^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\'][^>]+content=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+_OG_IMAGE_RE_ALT = re.compile(
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\'](?:og:image|twitter:image)["\']',
+    re.IGNORECASE,
+)
+
+WHO_DON_IMAGE_FETCH_TIMEOUT_S  = 8
+WHO_DON_IMAGE_READ_LIMIT_BYTES = 150_000  # og/twitter tags always sit in <head>, near the top
+
+
+def _extract_og_image(html: str) -> Optional[str]:
+    match = _OG_IMAGE_RE.search(html) or _OG_IMAGE_RE_ALT.search(html)
+    if not match:
+        return None
+    url = match.group(1).strip()
+    if not url:
+        return None
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("/"):
+        return "https://www.who.int" + url
+    return url
+
+
+async def _fetch_article_image(session: aiohttp.ClientSession, article_url: str) -> Optional[str]:
+    """
+    Best-effort fetch of one article's og:image/twitter:image tag. Reads
+    only the first WHO_DON_IMAGE_READ_LIMIT_BYTES of the page rather than
+    the full HTML (og/twitter tags live in <head>), and never raises --
+    any failure here just means that one card falls back to the icon-only
+    layout, never a broken feed or a missing item.
+    """
+    try:
+        async with session.get(
+            article_url,
+            timeout=aiohttp.ClientTimeout(total=WHO_DON_IMAGE_FETCH_TIMEOUT_S),
+        ) as resp:
+            if resp.status != 200:
+                return None
+            chunk = await resp.content.read(WHO_DON_IMAGE_READ_LIMIT_BYTES)
+            return _extract_og_image(chunk.decode("utf-8", errors="ignore"))
+    except Exception:
+        return None
+
+
+async def _attach_article_images(items: List[dict]) -> None:
+    """
+    Fetches a thumbnail for each already-trimmed item (WHO_DON_RESULTS_LIMIT
+    of them, not the full batch) concurrently and sets item["image"] in
+    place. Best-effort end to end: any failure (network, timeout, parse)
+    leaves image=None on that item rather than dropping it or failing the
+    whole refresh -- the feed is always at least as good as text-only.
+    """
+    try:
+        async with _who_don_http_session() as session:
+            images = await asyncio.gather(
+                *[_fetch_article_image(session, item["link"]) for item in items],
+                return_exceptions=True,
+            )
+        for item, image in zip(items, images):
+            item["image"] = image if isinstance(image, str) else None
+    except Exception as e:
+        logger.warning({"event": "who_don_image_fetch_failed", "error": str(e)})
+        for item in items:
+            item.setdefault("image", None)
+
+
 async def _fetch_and_parse_who_don() -> List[dict]:
     """
     Fetches, parses, sorts newest-first (regardless of whether WHO honored
-    our sort request), and trims to WHO_DON_RESULTS_LIMIT. Returns [] on
-    any failure -- callers are responsible for falling back to whatever
-    was cached before.
+    our sort request), trims to WHO_DON_RESULTS_LIMIT, then attaches a
+    real per-article thumbnail to each of those (see _attach_article_images).
+    Returns [] on any failure fetching the list itself -- callers are
+    responsible for falling back to whatever was cached before. A failure
+    fetching images never triggers that fallback -- it only means some or
+    all items end up with image=None, which the frontend renders as a
+    text-only card rather than a broken one.
     """
     raw_items = await _fetch_who_don_raw()
     if not raw_items:
@@ -2262,7 +2353,11 @@ async def _fetch_and_parse_who_don() -> List[dict]:
             return datetime.min
 
     parsed.sort(key=_sort_key, reverse=True)
-    return parsed[:WHO_DON_RESULTS_LIMIT]
+    top_items = parsed[:WHO_DON_RESULTS_LIMIT]
+
+    await _attach_article_images(top_items)
+
+    return top_items
 
 
 async def _get_who_don_items() -> List[dict]:
