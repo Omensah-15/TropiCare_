@@ -139,6 +139,118 @@ const Store = {
   remove: (k)    => localStorage.removeItem(k),
 };
 
+// ─────────────────────────────────────────────
+// WEB PUSH (real device notifications)
+// ─────────────────────────────────────────────
+// Talks to the browser's Push API and the service worker (sw.js) to turn
+// real OS-level push notifications on/off. Everything here is invoked
+// exclusively from Settings' "Push Notifications" toggle -- nothing in
+// this object runs on app load, so a service worker is registered and
+// permission is requested only when the person explicitly opts in.
+const Push = {
+  isSupported() {
+    return typeof window !== "undefined"
+      && "serviceWorker" in navigator
+      && "PushManager" in window
+      && typeof Notification !== "undefined";
+  },
+
+  // Converts the VAPID public key (base64url, from the backend) into the
+  // Uint8Array shape PushManager.subscribe expects. Mirrors sw.js's own
+  // copy of this helper exactly -- both sides must agree on the key.
+  _urlBase64ToUint8Array(base64String) {
+    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    const rawData = atob(base64);
+    const outputArray = new Uint8Array(rawData.length);
+    for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  },
+
+  // Whether push is ACTUALLY active right now, reconciled from two real
+  // sources of truth rather than trusting a locally-cached preference:
+  // the browser's own permission state, and the backend's record of a
+  // live subscription for this account. Used on Settings mount so a
+  // denied browser prompt or a subscription that quietly expired never
+  // gets shown to the user as "on" when it isn't.
+  async status() {
+    if (!Push.isSupported()) {
+      return { supported: false, permission: "unsupported", subscribed: false };
+    }
+    const permission = Notification.permission;
+    if (permission !== "granted") {
+      return { supported: true, permission, subscribed: false };
+    }
+    try {
+      const { subscribed } = await api.get("/push/status");
+      return { supported: true, permission, subscribed: !!subscribed };
+    } catch {
+      return { supported: true, permission, subscribed: false };
+    }
+  },
+
+  async subscribe() {
+    if (!Push.isSupported()) {
+      throw new Error("Push notifications aren't supported on this browser or device.");
+    }
+
+    // Request permission first, before any other async work, so the
+    // prompt stays as close as possible to the click that triggered it --
+    // some browsers (Safari in particular) can drop the "user gesture"
+    // context if an unrelated await runs first.
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") {
+      throw new Error(
+        permission === "denied"
+          ? "Notifications are blocked for TropiCare in your browser settings."
+          : "Notification permission wasn't granted."
+      );
+    }
+
+    const registration = await (async () => {
+      const existing = await navigator.serviceWorker.getRegistration();
+      return existing || navigator.serviceWorker.register("/sw.js");
+    })();
+    await navigator.serviceWorker.ready;
+
+    const { publicKey } = await api.get("/push/public-key");
+    if (!publicKey) {
+      throw new Error("Push notifications aren't available on this server right now.");
+    }
+
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: Push._urlBase64ToUint8Array(publicKey),
+      });
+    }
+
+    const subJson = subscription.toJSON();
+    await api.post("/push/subscribe", { endpoint: subJson.endpoint, keys: subJson.keys });
+    return subscription;
+  },
+
+  async unsubscribe() {
+    if (!("serviceWorker" in navigator)) return;
+    const registration = await navigator.serviceWorker.getRegistration().catch(() => null);
+    if (!registration) return;
+    const subscription = await registration.pushManager.getSubscription();
+    if (!subscription) return;
+
+    const endpoint = subscription.endpoint;
+    await subscription.unsubscribe().catch(() => {});
+    try {
+      await api.delete(`/push/subscribe?endpoint=${encodeURIComponent(endpoint)}`);
+    } catch {
+      // Best-effort: the browser-side unsubscribe above already stops
+      // delivery to this device. A failed cleanup call just leaves a dead
+      // row server-side that the next push attempt prunes automatically
+      // (see _send_web_push's "gone" handling in main.py).
+    }
+  },
+};
+
 // Text size is a continuous scale (not fixed steps) applied everywhere via
 // the --fs-scale CSS variable, bounded so dense screens (nav, chips, cards)
 // never wrap or overflow. Older saved prefs stored "small"/"medium"/"large"
@@ -968,6 +1080,25 @@ const injectStyles = () => {
     .rec-info{flex:1;min-width:0;}
     .rec-name{font-size:calc(14px * var(--fs-scale,1));font-weight:700;color:var(--ink);}
     .rec-meta{font-size:calc(12px * var(--fs-scale,1));color:var(--muted);margin-top:2px;}
+
+    /* ── Health News feed (Twitter-style timeline card) ─────── */
+    .news-item{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;text-decoration:none;color:inherit;transition:background var(--t-fast);}
+    a.news-item:hover{background:var(--teal-xl);}
+    a.news-item:active{background:var(--border-l);}
+    .news-avatar{width:36px;height:36px;border-radius:50%;background:var(--teal-xl);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+    .news-body{flex:1;min-width:0;}
+    .news-head{display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap;}
+    .news-source{font-size:calc(12px * var(--fs-scale,1));font-weight:700;color:var(--ink);}
+    .news-dot{color:var(--muted-l);font-size:12px;}
+    .news-time{font-size:calc(12px * var(--fs-scale,1));color:var(--muted);}
+    .news-title{font-size:calc(14px * var(--fs-scale,1));font-weight:700;color:var(--ink);line-height:1.4;margin-bottom:4px;}
+    .news-summary{font-size:calc(13px * var(--fs-scale,1));color:var(--muted);line-height:1.5;margin-bottom:8px;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+    .news-link{display:inline-flex;align-items:center;gap:5px;font-size:calc(12px * var(--fs-scale,1));font-weight:700;color:var(--teal-d);}
+    .news-skel{pointer-events:none;}
+    .skel-block{background:linear-gradient(90deg,var(--border-l) 25%,var(--border) 37%,var(--border-l) 63%);background-size:400% 100%;border-radius:6px;animation:skel-shimmer 1.4s ease infinite;}
+    .news-avatar.skel-block{border-radius:50%;}
+    @keyframes skel-shimmer{0%{background-position:100% 50%;}100%{background-position:0 50%;}}
     .disease-grid{display:flex;flex-wrap:wrap;gap:6px;}
     .al-hero{background:linear-gradient(150deg,var(--teal-xl) 0%,#e3f1fb 100%);border-radius:var(--radius-l);padding:28px 24px 24px;margin-bottom:16px;display:flex;gap:20px;align-items:center;border:1px solid var(--teal-l);}
     @media(max-width:480px){.al-hero{flex-direction:column;text-align:center;padding:22px 18px;}}
@@ -1068,6 +1199,8 @@ const injectStyles = () => {
     .toggle input:focus-visible+.toggle-slider{box-shadow:var(--focus-ring);}
     .toggle-slider::before{content:'';position:absolute;height:19px;width:19px;left:3px;bottom:3px;background:#fff;border-radius:50%;transition:transform var(--t-fast);box-shadow:var(--shadow-s);}
     .toggle input:checked+.toggle-slider::before{transform:translateX(19px);}
+    .toggle-disabled{opacity:0.5;cursor:not-allowed;}
+    .toggle-disabled .toggle-slider{cursor:not-allowed;}
     .icon-btn{transition:background var(--t-fast),transform var(--t-fast);min-width:36px;min-height:36px;align-items:center;justify-content:center;}
     .icon-btn:hover{background:var(--border)!important;}
     .icon-btn:active{transform:scale(0.92);}
@@ -1376,6 +1509,7 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "refresh":   return <svg {...p}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>;
     case "download":  return <svg {...p}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
     case "map":       return <svg {...p}><path d="M9 20l-6-3V4l6 3 6-3 6 3v13l-6-3-6 3z"/><line x1="9" y1="7" x2="9" y2="20"/><line x1="15" y1="4" x2="15" y2="17"/></svg>;
+    case "external":  return <svg {...p}><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>;
     default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
@@ -1445,6 +1579,26 @@ function RecBubble({ icon, label, text, accent }) {
 // ─────────────────────────────────────────────
 export default function App() {
   useEffect(() => { injectStyles(); }, []);
+
+  // sw.js's pushsubscriptionchange handler has no access to localStorage,
+  // so when the browser silently rotates a subscription it asks an open
+  // app window for the current auth token over a MessageChannel instead.
+  // This is that listener's other end -- without it, a rotated
+  // subscription would go un-re-registered and the person's alerts would
+  // just stop with no visible cause. Registered unconditionally (not
+  // gated on the Notifications toggle) since it's a no-op reply, not a
+  // subscription request, and does nothing unless the service worker
+  // itself asks.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const onMessage = (event) => {
+      if (event.data?.type !== "TC_GET_TOKEN") return;
+      const port = event.ports && event.ports[0];
+      if (port) port.postMessage(api.getToken());
+    };
+    navigator.serviceWorker.addEventListener("message", onMessage);
+    return () => navigator.serviceWorker.removeEventListener("message", onMessage);
+  }, []);
 
   const [splash,     setSplash]     = useState(true);
   const [splashFade, setSplashFade] = useState(false);
@@ -2518,6 +2672,98 @@ function AppleGlyph({ size = 20 }) {
 }
 
 // ─────────────────────────────────────────────
+// HEALTH NEWS FEED (WHO Disease Outbreak News)
+// ─────────────────────────────────────────────
+// Reads the server-side-cached, pre-parsed feed from GET /news/outbreaks
+// (see main.py) and renders it as a compact, timeline-style feed -- one
+// card per item, avatar + source line + relative time up top, headline
+// and summary below, and a link out to the full WHO report. Fetches
+// independently of the rest of Home so a slow or unreachable WHO source
+// never delays the greeting, recent-assessment list, or anything else on
+// the screen -- this card just shows its own loading/empty/error state
+// in place while the rest of Home renders normally.
+function NewsFeedCard() {
+  const [items,   setItems]   = useState(null); // null = loading
+  const [failed,  setFailed]  = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get("/news/outbreaks")
+      .then((data) => {
+        if (cancelled || _loggingOut) return;
+        setItems(Array.isArray(data?.items) ? data.items : []);
+      })
+      .catch(() => {
+        if (cancelled || _loggingOut) return;
+        setFailed(true);
+        setItems([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  return (
+    <div className="section" style={{ paddingTop: 0 }}>
+      <div className="section-ttl">Health News</div>
+
+      {items === null ? (
+        <div className="card" style={{ overflow: "hidden" }}>
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="news-item news-skel" style={i > 0 ? { borderTop: "1px solid var(--border-l)" } : undefined}>
+              <div className="news-avatar skel-block" />
+              <div className="news-body">
+                <div className="skel-block" style={{ width: "40%", height: 11, marginBottom: 10 }} />
+                <div className="skel-block" style={{ width: "90%", height: 13, marginBottom: 8 }} />
+                <div className="skel-block" style={{ width: "70%", height: 12 }} />
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : items.length === 0 ? (
+        <div className="card card-p" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <div className="news-avatar" style={{ flexShrink: 0 }}>
+            <Icon name="globe" size={16} color="var(--teal-d)" />
+          </div>
+          <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
+            {failed
+              ? "Health news is unavailable right now. Pull to refresh later."
+              : "No outbreak news to show right now."}
+          </div>
+        </div>
+      ) : (
+        <div className="card" style={{ overflow: "hidden" }}>
+          {items.map((item, i) => (
+            <a
+              key={item.id || i}
+              href={item.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="news-item"
+              style={i > 0 ? { borderTop: "1px solid var(--border-l)" } : undefined}>
+              <div className="news-avatar">
+                <Icon name="globe" size={16} color="var(--teal-d)" />
+              </div>
+              <div className="news-body">
+                <div className="news-head">
+                  <span className="news-source">WHO Disease Outbreak News</span>
+                  <span className="news-dot">·</span>
+                  <span className="news-time">{timeAgo(item.date)}</span>
+                </div>
+                <div className="news-title">{item.title}</div>
+                {item.summary && <div className="news-summary">{item.summary}</div>}
+                <div className="news-link">
+                  Read full report
+                  <Icon name="external" size={12} color="var(--teal-d)" />
+                </div>
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 // HOME SCREEN
 // ─────────────────────────────────────────────
 function HomeScreen({ userId, user, onStart, onNav, toast }) {
@@ -2654,6 +2900,8 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
           </div>
         )}
       </div>
+
+      <NewsFeedCard />
 
       <div style={{ height: 24 }} />
     </div>
@@ -5035,9 +5283,20 @@ function AboutScreen({ onBack }) {
 function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSizeChange, currentFontSize, focusSection }) {
   const [theme,    setTheme]    = useState(currentTheme || "light");
   const [fontSize, setFontSize] = useState(normalizeFontScale(currentFontSize));
-  const [notifs,   setNotifs]   = useState(true);
+  const [notifs,   setNotifs]   = useState(false);
   const [lang,     setLang]     = useState("en");
   const [saved,    setSaved]    = useState(false);
+
+  // Real push-notification state -- kept separate from `notifs` above's
+  // optimistic localStorage-based initial value. `notifSupported` starts
+  // as null ("unknown, still checking") so the toggle isn't disabled
+  // prematurely; `notifBusy` disables the toggle while a subscribe/
+  // unsubscribe round-trip is in flight; `notifError` surfaces exactly
+  // why a toggle-on attempt failed (denied permission, unsupported
+  // browser, network error).
+  const [notifSupported, setNotifSupported] = useState(null);
+  const [notifBusy,      setNotifBusy]      = useState(false);
+  const [notifError,     setNotifError]     = useState("");
 
   // When opened from a Profile row (Notifications / Language / Theme), scroll
   // straight to that section and pulse it briefly, instead of always landing
@@ -5073,7 +5332,11 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
     }
   }, [currentTheme, currentFontSize]);
 
-  // Load persisted settings on mount
+  // Load persisted settings on mount. The `notifications` flag here is
+  // shown immediately as an optimistic best-guess (avoids a blank/off
+  // flash while the real check below is in flight) and is then
+  // corrected -- possibly overridden -- by the actual browser/backend
+  // status check that follows.
   useEffect(() => {
     const s = Store.get("tc_settings");
     if (s) {
@@ -5083,6 +5346,54 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
       if (s.language)      setLang(s.language);
     }
   }, []);
+
+  // Reconcile the toggle with reality: whether push is supported on this
+  // browser, and whether this account actually has a live subscription
+  // recorded server-side. This is what stops the toggle from ever
+  // silently showing "on" after a denied permission prompt or an
+  // expired subscription -- the localStorage guess above never has the
+  // final word.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const result = await Push.status();
+      if (cancelled) return;
+      setNotifSupported(result.supported);
+      setNotifs(result.subscribed);
+      const current = Store.get("tc_settings") || {};
+      if (current.notifications !== result.subscribed) {
+        Store.set("tc_settings", { ...current, notifications: result.subscribed });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleNotifToggle = async (turningOn) => {
+    setNotifBusy(true);
+    setNotifError("");
+    try {
+      if (turningOn) {
+        await Push.subscribe();
+        setNotifs(true);
+        toast("Push notifications turned on.");
+      } else {
+        await Push.unsubscribe();
+        setNotifs(false);
+        toast("Push notifications turned off.");
+      }
+      const current = Store.get("tc_settings") || {};
+      Store.set("tc_settings", { ...current, notifications: turningOn });
+    } catch (err) {
+      setNotifs(false);
+      const current = Store.get("tc_settings") || {};
+      Store.set("tc_settings", { ...current, notifications: false });
+      const message = err?.message || "Couldn't update push notifications.";
+      setNotifError(message);
+      toast(message);
+    } finally {
+      setNotifBusy(false);
+    }
+  };
 
   const applyTheme = (val) => {
     setTheme(val);
@@ -5136,9 +5447,14 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
     { val: "fr",     label: "French"  },
   ];
 
-  const Toggle = ({ checked, onChange }) => (
-    <label className="toggle">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+  const Toggle = ({ checked, onChange, disabled }) => (
+    <label className={`toggle${disabled ? " toggle-disabled" : ""}`}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
       <span className="toggle-slider" />
     </label>
   );
@@ -5226,10 +5542,24 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
             <div className="toggle-row">
               <div>
                 <div style={{ fontWeight: 600, fontSize: 14, color: "var(--ink)" }}>Push Notifications</div>
-                <div className="t-subtitle" style={{ fontSize: 12 }}>Health reminders and updates</div>
+                <div className="t-subtitle" style={{ fontSize: 12 }}>
+                  {notifSupported === false
+                    ? "Not supported on this browser or device."
+                    : "Outbreak alerts and health reminders"}
+                </div>
               </div>
-              <Toggle checked={notifs} onChange={(v) => { setNotifs(v); setSaved(false); }} />
+              <Toggle
+                checked={notifs}
+                disabled={notifBusy || notifSupported === false}
+                onChange={handleNotifToggle}
+              />
             </div>
+            {notifError && (
+              <div style={{ marginTop: 10, display: "flex", gap: 6, alignItems: "flex-start" }}>
+                <Icon name="alert" size={13} color="var(--red-d)" />
+                <span style={{ fontSize: 12, color: "var(--red-d)", lineHeight: 1.5 }}>{notifError}</span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -5289,4 +5619,28 @@ function fmtDate(iso) {
   return new Date(iso).toLocaleDateString("en-GB", {
     day: "2-digit", month: "short", year: "numeric",
   });
+}
+
+// Twitter-style relative timestamp ("3h", "2d", "5w") for the news feed.
+// Falls back to a short absolute date once an item is old enough that a
+// relative count stops being useful. Never throws on a malformed date --
+// worst case it renders nothing rather than "NaNh" or a blank card.
+function timeAgo(iso) {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const diffMs = Date.now() - then;
+  if (diffMs < 0) return "now";
+
+  const mins  = Math.floor(diffMs / 60000);
+  const hours = Math.floor(mins / 60);
+  const days  = Math.floor(hours / 24);
+  const weeks = Math.floor(days / 7);
+
+  if (mins  < 1)  return "now";
+  if (mins  < 60) return `${mins}m`;
+  if (hours < 24) return `${hours}h`;
+  if (days  < 7)  return `${days}d`;
+  if (weeks < 5)  return `${weeks}w`;
+  return fmtDate(iso);
 }
