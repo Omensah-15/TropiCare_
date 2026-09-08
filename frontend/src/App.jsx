@@ -1095,6 +1095,8 @@ const injectStyles = () => {
     .news-summary{font-size:calc(13px * var(--fs-scale,1));color:var(--muted);line-height:1.5;margin-bottom:8px;
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
     .news-link{display:inline-flex;align-items:center;gap:5px;font-size:calc(12px * var(--fs-scale,1));font-weight:700;color:var(--teal-d);}
+    .news-thumb{width:100%;border-radius:12px;overflow:hidden;background:var(--border-l);margin-bottom:10px;aspect-ratio:16/9;}
+    .news-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
     .news-skel{pointer-events:none;}
     .skel-block{background:linear-gradient(90deg,var(--border-l) 25%,var(--border) 37%,var(--border-l) 63%);background-size:400% 100%;border-radius:6px;animation:skel-shimmer 1.4s ease infinite;}
     .news-avatar.skel-block{border-radius:50%;}
@@ -2682,6 +2684,20 @@ function AppleGlyph({ size = 20 }) {
 // never delays the greeting, recent-assessment list, or anything else on
 // the screen -- this card just shows its own loading/empty/error state
 // in place while the rest of Home renders normally.
+// A single news item's thumbnail. Local error state so one broken image
+// (a 404'd og:image, a CORS-blocked host, etc.) just quietly disappears
+// instead of showing a broken-image icon or taking the rest of the card
+// down with it -- every other item in the list is unaffected.
+function NewsThumb({ src }) {
+  const [broken, setBroken] = useState(false);
+  if (!src || broken) return null;
+  return (
+    <div className="news-thumb">
+      <img src={src} alt="" loading="lazy" onError={() => setBroken(true)} />
+    </div>
+  );
+}
+
 function NewsFeedCard() {
   const [items,   setItems]   = useState(null); // null = loading
   const [failed,  setFailed]  = useState(false);
@@ -2713,7 +2729,8 @@ function NewsFeedCard() {
               <div className="news-body">
                 <div className="skel-block" style={{ width: "40%", height: 11, marginBottom: 10 }} />
                 <div className="skel-block" style={{ width: "90%", height: 13, marginBottom: 8 }} />
-                <div className="skel-block" style={{ width: "70%", height: 12 }} />
+                <div className="skel-block" style={{ width: "70%", height: 12, marginBottom: 10 }} />
+                <div className="skel-block" style={{ width: "100%", height: 110, borderRadius: 12 }} />
               </div>
             </div>
           ))}
@@ -2750,6 +2767,7 @@ function NewsFeedCard() {
                 </div>
                 <div className="news-title">{item.title}</div>
                 {item.summary && <div className="news-summary">{item.summary}</div>}
+                <NewsThumb src={item.image} />
                 <div className="news-link">
                   Read full report
                   <Icon name="external" size={12} color="var(--teal-d)" />
