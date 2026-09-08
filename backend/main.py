@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import html as html_lib
 import json
 import logging
 import math
@@ -92,12 +91,6 @@ try:
 except ImportError:
     AIOREDIS_AVAILABLE = False
 
-try:
-    from pywebpush import webpush, WebPushException
-    PYWEBPUSH_AVAILABLE = True
-except ImportError:
-    PYWEBPUSH_AVAILABLE = False
-
 load_dotenv()
 
 # -----------------------------------------------------------------
@@ -160,23 +153,6 @@ class Settings(BaseSettings):
     # free-tier key at https://www.geoapify.com/. If left blank, the route
     # logs a geoapify_error and falls back to the curated facility list.
     geoapify_api_key: str = ""
-
-    # -------------------------------------------------------------
-    # WEB PUSH (VAPID)
-    # -------------------------------------------------------------
-    # Free, no third-party push service -- this uses the browser's native
-    # Push API directly, authenticated with a VAPID keypair this app
-    # controls. Generate one with `vapid --gen` (installed alongside the
-    # pywebpush package) or `npx web-push generate-vapid-keys`. Put the
-    # private key here; the matching public key goes in VAPID_PUBLIC_KEY.
-    # The frontend fetches the public key from GET /api/v1/push/public-key
-    # at subscribe time, so nothing about the keypair needs to be
-    # hardcoded into App.jsx. Leave both blank to run without push
-    # notifications -- the WHO news feed itself still works either way,
-    # and /push/public-key simply reports 503 until they're set.
-    vapid_private_key: str = ""
-    vapid_public_key:  str = ""
-    vapid_claim_email: str = "admin@tropicare.app"
 
     # -------------------------------------------------------------
     # PASSWORD RESET EMAIL
@@ -518,44 +494,6 @@ class PasswordResetTokenModel(Base):
     )
 
 
-class PushSubscriptionModel(Base):
-    """
-    A browser Push API subscription for one device. `endpoint` is globally
-    unique (it identifies the browser's push service URL for that device),
-    so a device re-subscribing -- even under a different account, e.g. a
-    shared/kiosk browser -- overwrites its own row rather than erroring.
-    A user with no rows here has push notifications off; this table IS the
-    "notifications" preference (see the PUSH NOTIFICATIONS section below
-    for why there's deliberately no separate boolean flag that could drift
-    out of sync with it).
-    """
-    __tablename__ = "push_subscriptions"
-
-    id         = Column(Integer, primary_key=True, index=True)
-    user_id    = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
-    endpoint   = Column(String(1024), unique=True, nullable=False, index=True)
-    p256dh     = Column(String(255), nullable=False)
-    auth       = Column(String(255), nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        Index("ix_push_subscriptions_user", "user_id"),
-    )
-
-
-class PushedNewsItemModel(Base):
-    """
-    One row per WHO Disease Outbreak News item that has already triggered
-    a push notification, so the scheduler job never notifies subscribers
-    twice for the same item (see _refresh_who_don_feed_and_notify).
-    """
-    __tablename__ = "pushed_news_items"
-
-    id        = Column(Integer, primary_key=True, index=True)
-    item_id   = Column(String(255), unique=True, index=True, nullable=False)
-    pushed_at = Column(DateTime, default=datetime.utcnow)
-
-
 # -----------------------------------------------------------------
 # SCHEMA AUTO-MIGRATION
 #
@@ -584,10 +522,7 @@ def run_schema_migrations() -> None:
         logger.error({"event": "schema_migration_inspect_failed", "error": str(e)})
         return
 
-    for model in (
-        UserModel, SessionModel, DiagnosisModel, PatientModel, PasswordResetTokenModel,
-        PushSubscriptionModel, PushedNewsItemModel,
-    ):
+    for model in (UserModel, SessionModel, DiagnosisModel, PatientModel, PasswordResetTokenModel):
         table = model.__table__
         if table.name not in existing_tables:
             # Brand-new table: Base.metadata.create_all() already created it
@@ -2111,165 +2046,6 @@ def _rank_places_by_distance(
 
 
 # -----------------------------------------------------------------
-# WHO DISEASE OUTBREAK NEWS (server-side proxy + cache)
-# -----------------------------------------------------------------
-# Same proxy-and-cache shape as CLINIC FINDER above: fetch server-side so
-# the browser never talks to who.int directly (no CORS issues, no way for
-# a client to hammer WHO's servers), parse into a clean shape, and cache
-# so a page full of users never re-triggers a live fetch. The cache is
-# refreshed on a fixed interval by the scheduler job further down
-# (_refresh_who_don_feed_and_notify), NOT on each incoming request.
-#
-# The historically-documented DON RSS feed
-# (who.int/feeds/entity/csr/don/en/rss.xml) now 404s -- WHO migrated
-# Disease Outbreak News onto a Sitefinity-backed JSON API. It's still
-# free and keyless, just JSON (OData shape) instead of XML:
-#   https://www.who.int/api/news/diseaseoutbreaknews?sf_culture=en
-# That endpoint doesn't reliably honor $orderby/$top in practice, so we
-# fetch a generous batch and always sort by publication date ourselves
-# rather than trusting the source's order.
-
-WHO_DON_API_URL      = "https://www.who.int/api/news/diseaseoutbreaknews"
-WHO_DON_ARTICLE_BASE = "https://www.who.int/emergencies/disease-outbreak-news/item"
-WHO_DON_FETCH_LIMIT  = 40    # batch size fetched before we sort/trim ourselves
-WHO_DON_RESULTS_LIMIT = 5    # items actually served to the frontend
-WHO_DON_SUMMARY_MAX_CHARS = 220
-WHO_DON_SOURCE_TIMEOUT_S  = 10
-WHO_DON_CACHE_TTL_S       = 30 * 60   # refresh cadence -- matches the scheduler interval
-
-# In-process cache. Deliberately NOT solely dependent on Redis (which may
-# not be configured on this deployment's free tier) -- this module-level
-# dict is the one thing that guarantees "stale cache fallback, no crash,
-# no blank card" even when Redis is entirely absent. When Redis IS
-# available it's used too (via cache_get/cache_set) as a second layer, but
-# this dict alone is enough to satisfy every requirement on its own.
-_WHO_DON_CACHE: Dict[str, Any] = {"items": None, "fetched_at": 0.0}
-
-_HTML_TAG_RE   = re.compile(r"<[^>]+>")
-_WHITESPACE_RE = re.compile(r"\s+")
-
-
-def _strip_html(raw: str) -> str:
-    """Strips markup and decodes entities so summaries render as plain text."""
-    if not raw:
-        return ""
-    text = _HTML_TAG_RE.sub(" ", raw)
-    text = html_lib.unescape(text)
-    return _WHITESPACE_RE.sub(" ", text).strip()
-
-
-def _parse_who_don_item(raw: dict) -> Optional[dict]:
-    """
-    Normalizes one raw WHO API record into {id, title, summary, date, link}.
-    Returns None for anything missing the fields needed to render or link
-    to it -- better to silently skip a malformed record than show a broken
-    card.
-    """
-    title = (raw.get("Title") or "").strip()
-    pub_date = raw.get("PublicationDate") or raw.get("PublicationDateAndTime") or ""
-    url_name = (raw.get("UrlName") or "").strip().lstrip("/")
-    if not title or not pub_date or not url_name:
-        return None
-
-    summary = _strip_html(raw.get("Summary") or raw.get("Overview") or "")
-    if len(summary) > WHO_DON_SUMMARY_MAX_CHARS:
-        summary = summary[: WHO_DON_SUMMARY_MAX_CHARS - 3].rstrip() + "..."
-
-    item_id = str(raw.get("DonId") or url_name)
-
-    return {
-        "id":      item_id,
-        "title":   title,
-        "summary": summary,
-        "date":    pub_date,
-        "link":    f"{WHO_DON_ARTICLE_BASE}/{url_name}",
-    }
-
-
-async def _fetch_who_don_raw() -> List[dict]:
-    """Live HTTP call to WHO. Never raises -- any failure returns []."""
-    params = {
-        "sf_culture": "en",
-        "$orderby":   "PublicationDate desc",
-        "$top":       str(WHO_DON_FETCH_LIMIT),
-    }
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                WHO_DON_API_URL,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=WHO_DON_SOURCE_TIMEOUT_S),
-            ) as resp:
-                if resp.status != 200:
-                    logger.warning({"event": "who_don_fetch_failed", "status": resp.status})
-                    return []
-                # WHO serves "application/json; odata.metadata=minimal" --
-                # aiohttp's strict content-type check would otherwise raise.
-                data = await resp.json(content_type=None)
-                return data.get("value") or []
-    except asyncio.TimeoutError:
-        logger.warning({"event": "who_don_fetch_failed", "reason": "timeout"})
-        return []
-    except Exception as e:
-        logger.warning({"event": "who_don_fetch_failed", "reason": "error", "error": str(e)})
-        return []
-
-
-async def _fetch_and_parse_who_don() -> List[dict]:
-    """
-    Fetches, parses, sorts newest-first (regardless of whether WHO honored
-    our sort request), and trims to WHO_DON_RESULTS_LIMIT. Returns [] on
-    any failure -- callers are responsible for falling back to whatever
-    was cached before.
-    """
-    raw_items = await _fetch_who_don_raw()
-    if not raw_items:
-        return []
-
-    parsed = [item for item in (_parse_who_don_item(r) for r in raw_items) if item]
-    if not parsed:
-        return []
-
-    def _sort_key(item: dict) -> datetime:
-        try:
-            return datetime.fromisoformat(item["date"].replace("Z", "+00:00"))
-        except Exception:
-            return datetime.min
-
-    parsed.sort(key=_sort_key, reverse=True)
-    return parsed[:WHO_DON_RESULTS_LIMIT]
-
-
-async def _get_who_don_items() -> List[dict]:
-    """
-    Read path used by the /news/outbreaks route. Serves the in-process
-    cache whenever it's fresh; only the scheduler job (or app startup)
-    performs a live fetch. If the cache is empty (e.g. very first request
-    right after a cold start, before priming finished) this does one
-    on-demand live fetch as a last resort, then caches whatever it gets.
-    """
-    now = time.time()
-    if _WHO_DON_CACHE["items"] is not None and (now - _WHO_DON_CACHE["fetched_at"]) < WHO_DON_CACHE_TTL_S:
-        return _WHO_DON_CACHE["items"]
-
-    if _WHO_DON_CACHE["items"] is None:
-        fetched = await _fetch_and_parse_who_don()
-        if fetched:
-            _WHO_DON_CACHE["items"] = fetched
-            _WHO_DON_CACHE["fetched_at"] = now
-            return fetched
-        # Still nothing -- WHO is unreachable on a cold start. Return an
-        # empty list; the frontend renders its own empty/error state
-        # without crashing or showing a blank/broken card.
-        return []
-
-    # Cache exists but is past its TTL -- the scheduler will refresh it
-    # shortly. Serve the stale copy rather than blocking this request on
-    # a live fetch (this is the "stale cache fallback" requirement).
-    return _WHO_DON_CACHE["items"]
-
-
-# -----------------------------------------------------------------
 # PYDANTIC SCHEMAS
 # -----------------------------------------------------------------
 
@@ -2358,18 +2134,6 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token:        str
     new_password: str
-
-
-class PushSubscriptionKeys(BaseModel):
-    p256dh: str
-    auth:   str
-
-
-class PushSubscriptionIn(BaseModel):
-    # Mirrors the shape of PushSubscription.toJSON() from the browser's
-    # Push API exactly, so the frontend can send it through unmodified.
-    endpoint: str
-    keys:     PushSubscriptionKeys
 
 
 # -----------------------------------------------------------------
@@ -2659,128 +2423,6 @@ async def _cleanup_stale_sessions() -> None:
         db.close()
 
 
-def _send_web_push(subscription: "PushSubscriptionModel", payload: dict) -> str:
-    """
-    Sends one Web Push message via VAPID. Returns "sent", "gone" (the push
-    service reports this subscription is expired/invalid -- 404/410 --
-    and the caller should delete the row), or "failed" (any other
-    problem). Never raises: one device failing to receive a push must
-    never take down the whole notification job.
-    """
-    if not PYWEBPUSH_AVAILABLE or not settings.vapid_private_key:
-        return "failed"
-    try:
-        webpush(
-            subscription_info={
-                "endpoint": subscription.endpoint,
-                "keys": {"p256dh": subscription.p256dh, "auth": subscription.auth},
-            },
-            data=json.dumps(payload),
-            vapid_private_key=settings.vapid_private_key,
-            vapid_claims={"sub": f"mailto:{settings.vapid_claim_email}"},
-            timeout=10,
-        )
-        return "sent"
-    except WebPushException as e:
-        status = getattr(e.response, "status_code", None)
-        logger.warning({"event": "web_push_failed", "status": status, "error": str(e)})
-        return "gone" if status in (404, 410) else "failed"
-    except Exception as e:
-        logger.warning({"event": "web_push_error", "error": str(e)})
-        return "failed"
-
-
-async def _refresh_who_don_feed_and_notify() -> None:
-    """
-    Scheduled every WHO_DON_CACHE_TTL_S (see BACKGROUND SCHEDULER below).
-    Does two things:
-      1. Refreshes the in-process WHO news cache so /news/outbreaks always
-         serves a fast, already-parsed response.
-      2. Checks the refreshed items against PushedNewsItemModel and sends
-         a Web Push notification -- to every currently-subscribed user,
-         i.e. every user with a PushSubscriptionModel row -- for any item
-         not seen before, then records it as pushed so it's never sent
-         twice.
-    A WHO fetch failure here simply leaves the existing cache in place
-    (already-stale-safe) and skips the notification check for this cycle
-    -- it does not raise, so a bad WHO response can never crash the
-    scheduler or the app.
-    """
-    items = await _fetch_and_parse_who_don()
-    if items:
-        _WHO_DON_CACHE["items"] = items
-        _WHO_DON_CACHE["fetched_at"] = time.time()
-    else:
-        logger.warning({"event": "who_don_refresh_failed", "detail": "serving stale cache"})
-        return
-
-    if not PYWEBPUSH_AVAILABLE or not settings.vapid_private_key:
-        return  # push not configured on this deployment -- feed cache is still refreshed above
-
-    db = SessionLocal()
-    try:
-        has_any_recorded = db.query(PushedNewsItemModel.id).first() is not None
-        if not has_any_recorded:
-            # First run ever: record today's items as already-seen WITHOUT
-            # pushing. Otherwise the very first time push is configured,
-            # every subscriber gets blasted with the entire current
-            # backlog instead of only genuinely new outbreaks from here on.
-            for item in items:
-                db.add(PushedNewsItemModel(item_id=item["id"]))
-            db.commit()
-            return
-
-        new_items = [
-            item for item in items
-            if db.query(PushedNewsItemModel.id).filter(PushedNewsItemModel.item_id == item["id"]).first() is None
-        ]
-        if not new_items:
-            return
-
-        subscriptions = db.query(PushSubscriptionModel).all()
-        if not subscriptions:
-            for item in new_items:
-                db.add(PushedNewsItemModel(item_id=item["id"]))
-            db.commit()
-            return
-
-        gone_ids: set = set()
-        sent_count = 0
-        for item in new_items:
-            payload = {
-                "title": "TropiCare Health Alert",
-                "body":  item["title"],
-                "url":   item["link"],
-            }
-            for sub in subscriptions:
-                if sub.id in gone_ids:
-                    continue
-                result = await asyncio.to_thread(_send_web_push, sub, payload)
-                if result == "gone":
-                    gone_ids.add(sub.id)
-                elif result == "sent":
-                    sent_count += 1
-            db.add(PushedNewsItemModel(item_id=item["id"]))
-
-        if gone_ids:
-            db.query(PushSubscriptionModel).filter(PushSubscriptionModel.id.in_(gone_ids)).delete(
-                synchronize_session=False
-            )
-        db.commit()
-        logger.info({
-            "event": "who_don_notify",
-            "new_items": len(new_items),
-            "subscriptions": len(subscriptions),
-            "sent": sent_count,
-            "pruned_gone": len(gone_ids),
-        })
-    except Exception as e:
-        logger.error({"event": "who_don_notify_error", "error": str(e)})
-        db.rollback()
-    finally:
-        db.close()
-
-
 # -----------------------------------------------------------------
 # LIFESPAN
 # -----------------------------------------------------------------
@@ -2798,21 +2440,7 @@ async def lifespan(app: FastAPI):
     await get_redis()
 
     _scheduler.add_job(_cleanup_stale_sessions, "interval", hours=1, id="session_cleanup")
-    _scheduler.add_job(
-        _refresh_who_don_feed_and_notify, "interval",
-        minutes=WHO_DON_CACHE_TTL_S // 60, id="who_don_refresh",
-    )
     _scheduler.start()
-
-    # Prime the WHO news cache immediately so the Home screen news card has
-    # real data on the very first request instead of waiting up to
-    # WHO_DON_CACHE_TTL_S for the first scheduled run. Never blocks or
-    # breaks startup if WHO is unreachable right now -- _get_who_don_items
-    # covers that case for every request regardless.
-    try:
-        await _refresh_who_don_feed_and_notify()
-    except Exception as e:
-        logger.warning({"event": "who_don_priming_failed", "error": str(e)})
 
     model_keys    = list(LOADED_MODELS.keys())
     required_keys = {"sctd_ensemble", "sctd_label_encoder", "sctd_feature_columns"}
@@ -4053,114 +3681,6 @@ async def clinics_nearby(
 
 
 # -----------------------------------------------------------------
-# ROUTES - News (WHO Disease Outbreak News)
-# -----------------------------------------------------------------
-
-@app.get("/api/v1/news/outbreaks")
-async def news_outbreaks(user_id: int = Depends(verify_token)):
-    """
-    Serves the server-side-cached, pre-parsed WHO Disease Outbreak News
-    list. Never fetches WHO live on the caller's behalf -- always reads
-    the cache that _refresh_who_don_feed_and_notify keeps warm -- so this
-    route stays fast regardless of how many users hit it or how slow WHO
-    itself is right now.
-    """
-    items = await _get_who_don_items()
-    return {"items": items}
-
-
-# -----------------------------------------------------------------
-# ROUTES - Push Notifications (Web Push / VAPID)
-# -----------------------------------------------------------------
-
-@app.get("/api/v1/push/public-key")
-async def push_public_key():
-    """
-    Public (unauthenticated) by design -- a VAPID *public* key is meant to
-    be handed to any browser that wants to create a subscription, exactly
-    like it's not a secret in any other Web Push implementation. The
-    private key never leaves the server.
-    """
-    if not settings.vapid_public_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Push notifications are not configured on this server.",
-        )
-    return {"publicKey": settings.vapid_public_key}
-
-
-@app.get("/api/v1/push/status")
-async def push_status(user_id: int = Depends(verify_token), db: Session = Depends(get_db)):
-    """
-    Whether THIS user currently has any active push subscription -- i.e.
-    whether their notifications are actually on, as opposed to whatever a
-    client-side toggle might optimistically show. Used by Settings on
-    load so a denied browser permission or a subscription that silently
-    expired never gets shown to the user as "on" when it isn't.
-    """
-    subscribed = (
-        db.query(PushSubscriptionModel.id)
-        .filter(PushSubscriptionModel.user_id == user_id)
-        .first()
-        is not None
-    )
-    return {"subscribed": subscribed}
-
-
-@app.post("/api/v1/push/subscribe", status_code=201)
-async def push_subscribe(
-    req: PushSubscriptionIn,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    """
-    Upserts by endpoint (globally unique per device) rather than per user,
-    so a device re-subscribing -- including under a different account on
-    a shared browser -- cleanly takes over its own existing row instead of
-    hitting a uniqueness error.
-    """
-    endpoint = _sanitize(req.endpoint.strip())
-    if not endpoint:
-        raise HTTPException(status_code=400, detail="A valid subscription endpoint is required.")
-
-    existing = db.query(PushSubscriptionModel).filter(PushSubscriptionModel.endpoint == endpoint).first()
-    if existing:
-        existing.user_id = user_id
-        existing.p256dh  = req.keys.p256dh
-        existing.auth    = req.keys.auth
-    else:
-        db.add(PushSubscriptionModel(
-            user_id=user_id,
-            endpoint=endpoint,
-            p256dh=req.keys.p256dh,
-            auth=req.keys.auth,
-        ))
-    db.commit()
-    return {"message": "Subscribed to push notifications."}
-
-
-@app.delete("/api/v1/push/subscribe")
-async def push_unsubscribe(
-    endpoint: str,
-    user_id: int = Depends(verify_token),
-    db: Session = Depends(get_db),
-):
-    """
-    `endpoint` is a query parameter (not a JSON body) so the shared
-    frontend `api.delete()` helper -- used unchanged everywhere else in
-    this app -- doesn't need to grow body support just for this one call.
-    Scoped to the caller's own user_id so one user can never remove
-    another user's subscription even if they somehow learned its endpoint.
-    """
-    db.query(PushSubscriptionModel).filter(
-        PushSubscriptionModel.user_id == user_id,
-        PushSubscriptionModel.endpoint == endpoint,
-    ).delete(synchronize_session=False)
-    db.commit()
-    return {"message": "Unsubscribed from push notifications."}
-
-
-# -----------------------------------------------------------------
 # ROUTES - Patient History
 # FIX: removed `request: Request` parameter — it was unused and caused
 # FastAPI to bind it incorrectly on some versions. The rate-limiter
@@ -4521,10 +4041,7 @@ async def sync_schema(admin_id: int = Depends(verify_admin)):
     run_schema_migrations()
     inspector = inspect(engine)
     report = {}
-    for model in (
-        UserModel, SessionModel, DiagnosisModel, PatientModel, PasswordResetTokenModel,
-        PushSubscriptionModel, PushedNewsItemModel,
-    ):
+    for model in (UserModel, SessionModel, DiagnosisModel, PatientModel, PasswordResetTokenModel):
         table = model.__table__
         try:
             cols = {c["name"] for c in inspector.get_columns(table.name)}
