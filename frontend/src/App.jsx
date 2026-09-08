@@ -1629,7 +1629,15 @@ export default function App() {
   }, [user?.id]);
 
   // ── Assessment flow ────────────────────────
+  // `patient` must be a real patient record (an object with an `id`) from
+  // the worker registration/selection flow, or null for a self-check.
+  // Guarding here means this is the single place that decides whether an
+  // assessment is worker- or individual-mode -- callers that pass an
+  // event object (e.g. a bare `onClick={onStart}`) or anything else
+  // id-less can never accidentally flip a self-check into worker mode.
   const startAssessment = async (patient = null) => {
+    const safePatient = patient && typeof patient === "object" && patient.id ? patient : null;
+
     setAnswers({});
     setAsked([]);
     setQIdx(0);
@@ -1637,13 +1645,13 @@ export default function App() {
     setAnalyzing(false);
     setSessionId(null);
     setTrajectory([]);
-    setAssessmentPatient(patient);
+    setAssessmentPatient(safePatient);
 
     let firstQ = ALL_QUESTIONS[0];
     let sid    = null;
 
     try {
-      const data = await api.post("/symptoms/start", patient?.id ? { patient_id: patient.id } : {});
+      const data = await api.post("/symptoms/start", safePatient ? { patient_id: safePatient.id } : {});
       if (_loggingOut) return;
       sid    = data.session_id;
       firstQ = data.first_question || ALL_QUESTIONS[0];
@@ -2573,7 +2581,7 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
         <div className="hero-bg-icon"><Icon name="heart" size={110} color="#fff" /></div>
         <div className="hero-eyebrow">Guided Clinical Assessment</div>
         <div className="hero-headline">Check your symptoms in under 2 minutes</div>
-        <button className="hero-btn" onClick={onStart}>
+        <button className="hero-btn" onClick={() => onStart()}>
           Start Assessment <Icon name="chevR" size={14} color="var(--teal-dd)" />
         </button>
       </div>
@@ -2624,7 +2632,7 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
             <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 18, lineHeight: 1.55 }}>
               Complete your first assessment to see your health history here.
             </div>
-            <button className="btn btn-primary" onClick={onStart}>
+            <button className="btn btn-primary" onClick={() => onStart()}>
               <Icon name="activity" size={15} color="#fff" />
               Start Assessment
             </button>
@@ -3619,7 +3627,7 @@ function AssessmentLanding({ onStart }) {
             This tool provides informational guidance only and does not replace a clinical diagnosis.
           </div>
         </div>
-        <button className="btn btn-primary btn-full btn-lg" onClick={onStart}>
+        <button className="btn btn-primary btn-full btn-lg" onClick={() => onStart()}>
           <Icon name="activity" size={18} color="#fff" />
           Begin Assessment
           <Icon name="chevR" size={16} color="rgba(255,255,255,0.7)" />
