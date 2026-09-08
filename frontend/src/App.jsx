@@ -1376,6 +1376,7 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "refresh":   return <svg {...p}><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>;
     case "download":  return <svg {...p}><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>;
     case "map":       return <svg {...p}><path d="M9 20l-6-3V4l6 3 6-3 6 3v13l-6-3-6 3z"/><line x1="9" y1="7" x2="9" y2="20"/><line x1="15" y1="4" x2="15" y2="17"/></svg>;
+    case "newspaper": return <svg {...p}><rect x="3" y="4" width="18" height="16" rx="2"/><rect x="7" y="8" width="4" height="4"/><line x1="13" y1="8" x2="17" y2="8"/><line x1="13" y1="11" x2="17" y2="11"/><line x1="7" y1="14" x2="17" y2="14"/><line x1="7" y1="17" x2="17" y2="17"/></svg>;
     default:          return <svg {...p}><circle cx="12" cy="12" r="4"/></svg>;
   }
 }
@@ -2512,6 +2513,85 @@ function AppleGlyph({ size = 20 }) {
 // ─────────────────────────────────────────────
 // HOME SCREEN
 // ─────────────────────────────────────────────
+// OUTBREAK NEWS (WHO Disease Outbreak News)
+// Fetches and renders completely independently of the profile/records
+// Promise.all above -- its own loading/error state, its own effect -- so
+// a slow or unreachable WHO feed can never delay the hero, stats, or
+// Recent Assessments that render above it. Renders nothing at all once
+// settled with zero items, rather than leaving an empty card on screen.
+// ─────────────────────────────────────────────
+function OutbreakNewsSection() {
+  const [items,   setItems]   = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.get("/news/outbreaks")
+      .then((data) => {
+        if (cancelled || _loggingOut) return;
+        setItems(Array.isArray(data?.items) ? data.items : []);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (cancelled || _loggingOut) return;
+        setError(true);
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  if (!loading && !error && items.length === 0) return null;
+
+  return (
+    <div className="section">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div className="section-ttl" style={{ margin: 0 }}>Health News</div>
+      </div>
+
+      {loading ? (
+        <div style={{ textAlign: "center", padding: "24px 0", color: "var(--muted)", fontSize: 13 }}>
+          Loading health news...
+        </div>
+      ) : error ? (
+        <div className="card card-p" style={{ textAlign: "center", padding: "20px" }}>
+          <div style={{ fontSize: 13, color: "var(--muted)" }}>
+            Could not load health news. Check your connection.
+          </div>
+        </div>
+      ) : (
+        <div className="rec-list">
+          {items.map((item) => (
+            <a
+              key={item.id}
+              href={item.link}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="rec-card"
+              style={{ textDecoration: "none" }}
+            >
+              <div className="rec-icon-wrap" style={{ background: "var(--teal)18" }}>
+                <Icon name="newspaper" size={18} color="var(--teal)" />
+              </div>
+              <div className="rec-info">
+                <div className="rec-name">{item.title}</div>
+                {item.summary && (
+                  <div className="t-subtitle" style={{ fontSize: 12, marginTop: 2, lineHeight: 1.45 }}>
+                    {item.summary}
+                  </div>
+                )}
+                <div className="rec-meta" style={{ marginTop: 4 }}>{fmtRelative(item.date)} · WHO</div>
+              </div>
+              <Icon name="chevR" size={14} color="var(--muted-l)" />
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
 function HomeScreen({ userId, user, onStart, onNav, toast }) {
   const [records,  setRecords]  = useState([]);
   const [profile,  setProfile]  = useState(null);
@@ -2646,6 +2726,8 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
           </div>
         )}
       </div>
+
+      <OutbreakNewsSection />
 
       <div style={{ height: 24 }} />
     </div>
@@ -5027,9 +5109,10 @@ function AboutScreen({ onBack }) {
 function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSizeChange, currentFontSize, focusSection }) {
   const [theme,    setTheme]    = useState(currentTheme || "light");
   const [fontSize, setFontSize] = useState(normalizeFontScale(currentFontSize));
-  const [notifs,   setNotifs]   = useState(true);
-  const [lang,     setLang]     = useState("en");
-  const [saved,    setSaved]    = useState(false);
+  const [notifs,     setNotifs]     = useState(true);
+  const [notifBusy,  setNotifBusy]  = useState(false);
+  const [lang,      setLang]      = useState("en");
+  const [saved,     setSaved]     = useState(false);
 
   // When opened from a Profile row (Notifications / Language / Theme), scroll
   // straight to that section and pulse it briefly, instead of always landing
@@ -5075,6 +5158,82 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
       if (s.language)      setLang(s.language);
     }
   }, []);
+
+  // Reconcile the toggle with what's actually true, rather than trusting
+  // the locally-cached guess above: whether this browser can even do push,
+  // whether the account has a real active subscription server-side, and
+  // whether the OS/browser permission is still granted (it can be revoked
+  // outside the app at any time). Never shows "on" unless all three hold.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!pushSupported()) {
+        if (!cancelled) setNotifs(false);
+        return;
+      }
+      try {
+        const status = await api.get("/push/status");
+        if (cancelled) return;
+        setNotifs(!!status.subscribed && Notification.permission === "granted");
+      } catch {
+        // Couldn't reach the backend -- leave the locally-cached value as
+        // the best available guess rather than forcing it off.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleNotifToggle = async (checked) => {
+    if (!pushSupported()) {
+      toast("Push notifications aren't supported on this browser.");
+      setNotifs(false);
+      return;
+    }
+
+    setNotifBusy(true);
+    try {
+      if (checked) {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          toast("Notifications were blocked. Enable them in your browser's site settings to turn this on.");
+          setNotifs(false);
+          return;
+        }
+
+        const { publicKey } = await api.get("/push/public-key");
+        const reg = await navigator.serviceWorker.register("/sw.js");
+        await navigator.serviceWorker.ready;
+
+        let subscription = await reg.pushManager.getSubscription();
+        if (!subscription) {
+          subscription = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(publicKey),
+          });
+        }
+
+        const subJson = subscription.toJSON();
+        await api.post("/push/subscribe", { endpoint: subJson.endpoint, keys: subJson.keys });
+
+        setNotifs(true);
+        toast("Push notifications turned on.");
+      } else {
+        const reg = await navigator.serviceWorker.getRegistration();
+        const subscription = reg && await reg.pushManager.getSubscription();
+        if (subscription) {
+          await api.delete(`/push/subscribe?endpoint=${encodeURIComponent(subscription.endpoint)}`);
+          await subscription.unsubscribe();
+        }
+        setNotifs(false);
+        toast("Push notifications turned off.");
+      }
+    } catch (e) {
+      toast("Couldn't update push notifications. Please try again.");
+      setNotifs(!checked);
+    } finally {
+      setNotifBusy(false);
+    }
+  };
 
   const applyTheme = (val) => {
     setTheme(val);
@@ -5128,9 +5287,14 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
     { val: "fr",     label: "French"  },
   ];
 
-  const Toggle = ({ checked, onChange }) => (
-    <label className="toggle">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+  const Toggle = ({ checked, onChange, disabled }) => (
+    <label className="toggle" style={disabled ? { opacity: 0.6, pointerEvents: "none" } : undefined}>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.checked)}
+      />
       <span className="toggle-slider" />
     </label>
   );
@@ -5220,7 +5384,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
                 <div style={{ fontWeight: 600, fontSize: 14, color: "var(--ink)" }}>Push Notifications</div>
                 <div className="t-subtitle" style={{ fontSize: 12 }}>Health reminders and updates</div>
               </div>
-              <Toggle checked={notifs} onChange={(v) => { setNotifs(v); setSaved(false); }} />
+              <Toggle checked={notifs} onChange={handleNotifToggle} disabled={notifBusy} />
             </div>
           </div>
         </div>
@@ -5281,4 +5445,44 @@ function fmtDate(iso) {
   return new Date(iso).toLocaleDateString("en-GB", {
     day: "2-digit", month: "short", year: "numeric",
   });
+}
+
+function fmtRelative(iso) {
+  if (!iso) return "";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const diffMin = Math.round((Date.now() - then) / 60000);
+  if (diffMin < 1)  return "Just now";
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.round(diffMin / 60);
+  if (diffHr < 24)  return `${diffHr}h ago`;
+  const diffDay = Math.round(diffHr / 24);
+  if (diffDay < 30) return `${diffDay}d ago`;
+  const diffMonth = Math.round(diffDay / 30);
+  if (diffMonth < 12) return `${diffMonth}mo ago`;
+  return `${Math.round(diffMonth / 12)}y ago`;
+}
+
+// Whether this browser can do real device push notifications at all --
+// checked before ever touching Notification/serviceWorker/PushManager so
+// an unsupported browser fails gracefully instead of throwing.
+function pushSupported() {
+  return (
+    typeof window !== "undefined" &&
+    "serviceWorker" in navigator &&
+    "PushManager" in window &&
+    "Notification" in window
+  );
+}
+
+// Standard conversion from a VAPID public key (URL-safe base64, as issued
+// by the backend) into the Uint8Array shape PushManager.subscribe expects
+// for applicationServerKey.
+function urlBase64ToUint8Array(base64String) {
+  const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+  const rawData = window.atob(base64);
+  const outputArray = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i++) outputArray[i] = rawData.charCodeAt(i);
+  return outputArray;
 }
