@@ -1508,6 +1508,22 @@ export default function App() {
     root.setAttribute("data-theme", theme);
   }, [theme]);
 
+  // Answers the service worker's TC_GET_TOKEN request (see sw.js's
+  // pushsubscriptionchange handler) so a silently-rotated push
+  // subscription can be re-registered with the backend without the app
+  // needing to be in the foreground when it happens.
+  useEffect(() => {
+    if (!("serviceWorker" in navigator)) return;
+    const handler = (event) => {
+      if (event.data?.type === "TC_GET_TOKEN" && event.ports?.[0]) {
+        event.ports[0].postMessage(api.getToken());
+      }
+    };
+    navigator.serviceWorker.addEventListener("message", handler);
+    return () => navigator.serviceWorker.removeEventListener("message", handler);
+  }, []);
+
+  
   const handleThemeChange = useCallback((t) => setTheme(t), []);
 
   // ── Font size ──────────────────────────────
