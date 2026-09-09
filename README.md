@@ -6,7 +6,14 @@ TropiCare helps people identify tropical disease risks through adaptive symptom 
 
 ---
 
-## Demo
+## Quick Demo
+
+<div align="center">
+<img src="https://github.com/Omensah-15/TropiCare_/raw/deec85a53b913aba2a6d0aa6d36699ef7271a334/assets/clinifinder-navigation-demo.gif"
+alt="Clinic Finder Navigation Demo"
+width="300">
+</div>
+
 
 <div align="center">
   <img src="https://github.com/Omensah-15/TropiCare_/raw//8135125c8155dc16b36e1b6429e58780e08a68e5/assets/tropicaredemo.gif" 
