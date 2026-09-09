@@ -1117,14 +1117,15 @@ const injectStyles = () => {
     .rec-name{font-size:calc(14px * var(--fs-scale,1));font-weight:700;color:var(--ink);}
     .rec-meta{font-size:calc(12px * var(--fs-scale,1));color:var(--muted);margin-top:2px;}
 
-    /* ── Health News feed ──────────────────────────────────────
+    /* ── Health & Outbreaks Update feed ─────────────────────────
        Mobile: a single Twitter-style timeline card with divider rows
        (unchanged from before). Desktop (min-width:768px): the same
        markup reflows into a proper multi-column card grid instead of
        one long narrow list -- each item becomes its own elevated tile
        (thumbnail on top, text below) so the feed actually uses the
        available width instead of sitting as a cramped column in the
-       middle of the screen. */
+       middle of the screen. 2 columns at tablet width, 3 at full
+       desktop -- both divide the 6 served items evenly. */
     .news-item{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;text-decoration:none;color:inherit;transition:background var(--t-fast),transform var(--t-med),box-shadow var(--t-med);}
     a.news-item:hover{background:var(--teal-xl);}
     a.news-item:active{background:var(--border-l);}
@@ -1160,14 +1161,19 @@ const injectStyles = () => {
          column -- fills the desktop layout properly while still
          stopping short of stretching edge-to-edge on an ultrawide
          monitor. */
-      .news-feed-section{max-width:1100px;margin-left:auto;margin-right:auto;}
+      .news-feed-section{max-width:1240px;margin-left:auto;margin-right:auto;}
       .news-feed-empty{max-width:520px;margin-left:auto;margin-right:auto;}
+      /* Fixed 2 columns at tablet width, 3 at full desktop -- deliberately
+         NOT auto-fit. With WHO_DON_RESULTS_LIMIT=6 items, a fixed column
+         count always divides evenly (2x3 or 3x2), so the grid's last row
+         is always full. auto-fit would size columns off the viewport
+         instead and could easily strand a lone card on its own row. */
       .news-feed-grid{
-        display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;
+        display:grid;grid-template-columns:repeat(2,1fr);gap:18px;
         background:none;border:none;box-shadow:none;border-radius:0;overflow:visible;
       }
       .news-feed-grid .news-item{
-        flex-direction:column;align-items:stretch;gap:0;padding:16px;
+        flex-direction:column;align-items:stretch;gap:0;padding:18px;
         background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-s);
       }
       .news-feed-grid .news-item:hover{background:var(--surface);transform:translateY(-3px);box-shadow:var(--shadow-l);}
@@ -1175,6 +1181,12 @@ const injectStyles = () => {
       .news-feed-grid .news-body{display:flex;flex-direction:column;flex:1;}
       .news-feed-grid .news-thumb{order:-1;margin-bottom:12px;}
       .news-feed-grid .news-avatar{margin-bottom:8px;}
+    }
+    @media(min-width:1100px){
+      /* Full desktop: 3 columns so the 6 cards form two complete rows
+         and each card gets more width than the cramped 300px minimum
+         the old auto-fit grid allowed. */
+      .news-feed-grid{grid-template-columns:repeat(3,1fr);gap:20px;}
     }
     .disease-grid{display:flex;flex-wrap:wrap;gap:6px;}
     .al-hero{background:linear-gradient(150deg,var(--teal-xl) 0%,#e3f1fb 100%);border-radius:var(--radius-l);padding:28px 24px 24px;margin-bottom:16px;display:flex;gap:20px;align-items:center;border:1px solid var(--teal-l);}
@@ -2749,7 +2761,7 @@ function AppleGlyph({ size = 20 }) {
 }
 
 // ─────────────────────────────────────────────
-// HEALTH NEWS FEED (WHO Disease Outbreak News)
+// HEALTH & OUTBREAKS UPDATE (WHO Disease Outbreak News)
 // ─────────────────────────────────────────────
 // Reads the server-side-cached, pre-parsed feed from GET /news/outbreaks
 // (see main.py) and renders it as a compact, timeline-style feed -- one
@@ -2759,8 +2771,11 @@ function AppleGlyph({ size = 20 }) {
 // never delays the greeting, recent-assessment list, or anything else on
 // the screen -- this card just shows its own loading/empty/error state
 // in place while the rest of Home renders normally.
-// A single news item's thumbnail. Local error state so one broken image
-// (a 404'd og:image, a CORS-blocked host, etc.) just quietly disappears
+// The backend already resolves each item's thumbnail to a real photo --
+// either the article's own image, or a relevant, openly-licensed health
+// photo when the article page doesn't yield one -- so this component just
+// renders whatever `image` it's given. Local error state so one broken
+// image (a dead link, a CORS-blocked host, etc.) just quietly disappears
 // instead of showing a broken-image icon or taking the rest of the card
 // down with it -- every other item in the list is unaffected.
 function NewsThumb({ src }) {
@@ -2794,11 +2809,11 @@ function NewsFeedCard() {
 
   return (
     <div className="section news-feed-section" style={{ paddingTop: 0 }}>
-      <div className="section-ttl">Health News</div>
+      <div className="section-ttl">Health &amp; Outbreaks Update</div>
 
       {items === null ? (
         <div className="card news-feed-grid">
-          {[0, 1, 2].map((i) => (
+          {[0, 1, 2, 3, 4, 5].map((i) => (
             <div key={i} className={`news-item news-skel${i > 0 ? " news-item-divider" : ""}`}>
               <div className="news-avatar skel-block" />
               <div className="news-body">
