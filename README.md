@@ -47,6 +47,11 @@ Built for West Africa, TropiCare bridges the gap between symptom onset and clini
 
 ## For Health Workers
 
+<div align="center">
+<img src="https://github.com/Omensah-15/TropiCare_/raw/54d2c09ce8af5edeff7933f2a8861e2c2edd93ae/assets/CHW_screen.png"
+alt="CHW">
+</div>
+
 Health worker accounts add a patient-management layer on top of the same assessment engine:
 
 - **Patient registration with consent** — name, age, gender, and community, gated on an explicit consent confirmation.
