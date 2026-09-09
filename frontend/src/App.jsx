@@ -1117,10 +1117,18 @@ const injectStyles = () => {
     .rec-name{font-size:calc(14px * var(--fs-scale,1));font-weight:700;color:var(--ink);}
     .rec-meta{font-size:calc(12px * var(--fs-scale,1));color:var(--muted);margin-top:2px;}
 
-    /* ── Health News feed (Twitter-style timeline card) ─────── */
-    .news-item{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;text-decoration:none;color:inherit;transition:background var(--t-fast);}
+    /* ── Health News feed ──────────────────────────────────────
+       Mobile: a single Twitter-style timeline card with divider rows
+       (unchanged from before). Desktop (min-width:768px): the same
+       markup reflows into a proper multi-column card grid instead of
+       one long narrow list -- each item becomes its own elevated tile
+       (thumbnail on top, text below) so the feed actually uses the
+       available width instead of sitting as a cramped column in the
+       middle of the screen. */
+    .news-item{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;text-decoration:none;color:inherit;transition:background var(--t-fast),transform var(--t-med),box-shadow var(--t-med);}
     a.news-item:hover{background:var(--teal-xl);}
     a.news-item:active{background:var(--border-l);}
+    .news-item-divider{border-top:1px solid var(--border-l);}
     .news-avatar{width:36px;height:36px;border-radius:50%;background:var(--teal-xl);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
     .news-body{flex:1;min-width:0;}
     .news-head{display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap;}
@@ -1130,26 +1138,44 @@ const injectStyles = () => {
     .news-title{font-size:calc(14px * var(--fs-scale,1));font-weight:700;color:var(--ink);line-height:1.4;margin-bottom:4px;}
     .news-summary{font-size:calc(13px * var(--fs-scale,1));color:var(--muted);line-height:1.5;margin-bottom:8px;
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
-    .news-link{display:inline-flex;align-items:center;gap:5px;font-size:calc(12px * var(--fs-scale,1));font-weight:700;color:var(--teal-d);}
-    /* Responsive by design, not by a flat fixed size: width:100% scales
-       with the card, which is itself capped at 640px on desktop (see
-       .news-feed-section below) -- so aspect-ratio can safely drive the
-       height again without ever ballooning like it did when the card
-       itself was unbounded. min/max-height are a belt-and-braces clamp
-       so it's never a cramped sliver on a tiny phone or an oversized
-       slab in an edge case (browser zoom, an unusually wide card). */
+    .news-link{display:inline-flex;align-items:center;gap:5px;font-size:calc(12px * var(--fs-scale,1));font-weight:700;color:var(--teal-d);margin-top:auto;padding-top:2px;}
+    /* width:100% scales with whatever contains it -- a full-width list
+       row on mobile, an individual grid tile on desktop -- so aspect-ratio
+       can safely drive the height without ever ballooning; min/max-height
+       are a belt-and-braces clamp against a cramped sliver or an
+       oversized slab in an edge case (browser zoom, unusual tile width). */
     .news-thumb{width:100%;aspect-ratio:16/9;min-height:140px;max-height:260px;border-radius:12px;overflow:hidden;background:var(--border-l);margin-bottom:10px;}
     .news-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
-    /* Keeps the whole news feed at a comfortable timeline-style reading
-       width on desktop/tablet, instead of stretching edge-to-edge across
-       a wide .main column -- matches the max-width treatment other pages
-       already get above 1280px, applied here from the point the sidebar
-       (i.e. desktop layout) appears. */
-    @media(min-width:768px){.news-feed-section{max-width:640px;}}
     .news-skel{pointer-events:none;}
     .skel-block{background:linear-gradient(90deg,var(--border-l) 25%,var(--border) 37%,var(--border-l) 63%);background-size:400% 100%;border-radius:6px;animation:skel-shimmer 1.4s ease infinite;}
     .news-avatar.skel-block{border-radius:50%;}
     @keyframes skel-shimmer{0%{background-position:100% 50%;}100%{background-position:0 50%;}}
+    /* Mobile default: one unified card with clipped corners around the
+       row list. Overridden to visible in the desktop grid below so each
+       tile's own shadow/hover-lift isn't clipped by this wrapper. */
+    .news-feed-grid{overflow:hidden;}
+
+    @media(min-width:768px){
+      /* Widened and centered instead of pinned to a narrow 640px
+         column -- fills the desktop layout properly while still
+         stopping short of stretching edge-to-edge on an ultrawide
+         monitor. */
+      .news-feed-section{max-width:1100px;margin-left:auto;margin-right:auto;}
+      .news-feed-empty{max-width:520px;margin-left:auto;margin-right:auto;}
+      .news-feed-grid{
+        display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;
+        background:none;border:none;box-shadow:none;border-radius:0;overflow:visible;
+      }
+      .news-feed-grid .news-item{
+        flex-direction:column;align-items:stretch;gap:0;padding:16px;
+        background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-s);
+      }
+      .news-feed-grid .news-item:hover{background:var(--surface);transform:translateY(-3px);box-shadow:var(--shadow-l);}
+      .news-feed-grid .news-item-divider{border-top:none;}
+      .news-feed-grid .news-body{display:flex;flex-direction:column;flex:1;}
+      .news-feed-grid .news-thumb{order:-1;margin-bottom:12px;}
+      .news-feed-grid .news-avatar{margin-bottom:8px;}
+    }
     .disease-grid{display:flex;flex-wrap:wrap;gap:6px;}
     .al-hero{background:linear-gradient(150deg,var(--teal-xl) 0%,#e3f1fb 100%);border-radius:var(--radius-l);padding:28px 24px 24px;margin-bottom:16px;display:flex;gap:20px;align-items:center;border:1px solid var(--teal-l);}
     @media(max-width:480px){.al-hero{flex-direction:column;text-align:center;padding:22px 18px;}}
@@ -2771,9 +2797,9 @@ function NewsFeedCard() {
       <div className="section-ttl">Health News</div>
 
       {items === null ? (
-        <div className="card" style={{ overflow: "hidden" }}>
+        <div className="card news-feed-grid">
           {[0, 1, 2].map((i) => (
-            <div key={i} className="news-item news-skel" style={i > 0 ? { borderTop: "1px solid var(--border-l)" } : undefined}>
+            <div key={i} className={`news-item news-skel${i > 0 ? " news-item-divider" : ""}`}>
               <div className="news-avatar skel-block" />
               <div className="news-body">
                 <div className="skel-block" style={{ width: "40%", height: 11, marginBottom: 10 }} />
@@ -2785,7 +2811,7 @@ function NewsFeedCard() {
           ))}
         </div>
       ) : items.length === 0 ? (
-        <div className="card card-p" style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div className="card card-p news-feed-empty" style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div className="news-avatar" style={{ flexShrink: 0 }}>
             <Icon name="globe" size={16} color="var(--teal-d)" />
           </div>
@@ -2796,15 +2822,14 @@ function NewsFeedCard() {
           </div>
         </div>
       ) : (
-        <div className="card" style={{ overflow: "hidden" }}>
+        <div className="card news-feed-grid">
           {items.map((item, i) => (
             <a
               key={item.id || i}
               href={item.link}
               target="_blank"
               rel="noopener noreferrer"
-              className="news-item"
-              style={i > 0 ? { borderTop: "1px solid var(--border-l)" } : undefined}>
+              className={`news-item${i > 0 ? " news-item-divider" : ""}`}>
               <div className="news-avatar">
                 <Icon name="globe" size={16} color="var(--teal-d)" />
               </div>
