@@ -2372,7 +2372,7 @@ _CATEGORY_KEYWORDS: List[tuple] = [
 
 CATEGORY_IMAGE_CACHE_TTL_S      = 6 * 60 * 60  # 6h -- these barely change, no need to refetch every WHO cycle
 CATEGORY_IMAGE_FETCH_TIMEOUT_S  = 8
-_CATEGORY_IMAGE_CACHE: Dict[str, Dict[str, Any]] = {}  # category -> {"url": str|None, "fetched_at": float}
+_CATEGORY_IMAGE_CACHE: Dict[str, Dict[str, Any]] = {}  # category -> {"urls": List[str], "fetched_at": float}
 
 
 def _classify_outbreak_category(title: str, summary: str) -> str:
@@ -2383,12 +2383,16 @@ def _classify_outbreak_category(title: str, summary: str) -> str:
     return "default"
 
 
-async def _fetch_commons_image(session: aiohttp.ClientSession, query: str) -> Optional[str]:
+async def _fetch_commons_images(session: aiohttp.ClientSession, query: str) -> List[str]:
     """
-    Best-effort search of Wikimedia Commons for one openly-licensed photo
-    matching `query`, returning an ~800px-wide thumbnail URL. Never raises
-    -- any failure just means the caller falls back further (a different
-    query, or ultimately no image at all).
+    Best-effort search of Wikimedia Commons for openly-licensed photos
+    matching `query`, returning up to 6 distinct ~800px-wide thumbnail
+    URLs (Commons' `gsrlimit` cap here) in ranked order. Never raises --
+    any failure just means the caller falls back further (a different
+    query, or ultimately no image at all). Returning the whole pool
+    rather than a single "best" match is what lets the caller vary the
+    fallback image across articles that share a category instead of
+    handing every one of them the same photo.
     """
     params = {
         "action":       "query",
@@ -2409,40 +2413,63 @@ async def _fetch_commons_image(session: aiohttp.ClientSession, query: str) -> Op
             headers={"User-Agent": "TropiCare/1.0 (health outbreak news feed; https://tropicare.onrender.com)"},
         ) as resp:
             if resp.status != 200:
-                return None
+                return []
             data = await resp.json(content_type=None)
             pages = (data.get("query") or {}).get("pages") or {}
+            urls: List[str] = []
+            seen: set = set()
             for page in pages.values():
                 for info in page.get("imageinfo") or []:
                     mime = info.get("mime") or ""
                     if not mime.startswith("image/") or mime == "image/svg+xml":
                         continue
                     url = info.get("thumburl") or info.get("url")
-                    if url:
-                        return url
-            return None
+                    if url and url not in seen:
+                        seen.add(url)
+                        urls.append(url)
+            return urls
     except Exception:
-        return None
+        return []
 
 
-async def _get_category_fallback_image(session: aiohttp.ClientSession, category: str) -> Optional[str]:
+def _pick_fallback_image(item_id: str, pool: List[str]) -> Optional[str]:
     """
-    Cached real photo for one outbreak category, refetched at most every
-    CATEGORY_IMAGE_CACHE_TTL_S. Falls back to the generic "default" query
-    if the category-specific search comes up empty, so a card only ever
-    ends up image-less when Commons itself is unreachable.
+    Deterministically selects one image from a category's candidate pool
+    for a given article. Deterministic (hash of the article's own id,
+    not random) so the same article keeps the same fallback image across
+    refreshes -- no flicker -- while different articles that land in the
+    same category spread across the pool instead of all showing image
+    #1. Falls back gracefully to None on an empty pool.
+    """
+    if not pool:
+        return None
+    digest = hashlib.sha256(item_id.encode("utf-8")).digest()
+    index = int.from_bytes(digest[:4], "big") % len(pool)
+    return pool[index]
+
+
+async def _get_category_fallback_pool(session: aiohttp.ClientSession, category: str) -> List[str]:
+    """
+    Cached pool of candidate photos for one outbreak category, refetched
+    at most every CATEGORY_IMAGE_CACHE_TTL_S. Falls back to the generic
+    "default" query if the category-specific search comes up empty, so a
+    card only ever ends up image-less when Commons itself is unreachable.
+    Returns the full pool -- the caller (_attach_article_images) is
+    responsible for picking one entry per article via
+    _pick_fallback_image, which is what keeps same-category articles from
+    all displaying the identical photo.
     """
     now = time.time()
     cached = _CATEGORY_IMAGE_CACHE.get(category)
     if cached and (now - cached["fetched_at"]) < CATEGORY_IMAGE_CACHE_TTL_S:
-        return cached["url"]
+        return cached["urls"]
 
     query = _CATEGORY_SEARCH_QUERIES.get(category, _CATEGORY_SEARCH_QUERIES["default"])
-    url = await _fetch_commons_image(session, query)
-    if url is None and category != "default":
-        url = await _fetch_commons_image(session, _CATEGORY_SEARCH_QUERIES["default"])
-    _CATEGORY_IMAGE_CACHE[category] = {"url": url, "fetched_at": now}
-    return url
+    urls = await _fetch_commons_images(session, query)
+    if not urls and category != "default":
+        urls = await _fetch_commons_images(session, _CATEGORY_SEARCH_QUERIES["default"])
+    _CATEGORY_IMAGE_CACHE[category] = {"urls": urls, "fetched_at": now}
+    return urls
 
 
 async def _attach_article_images(items: List[dict]) -> None:
@@ -2455,10 +2482,18 @@ async def _attach_article_images(items: List[dict]) -> None:
     after that -- a cleared generic, or a scrape that failed outright --
     gets a relevant category photo from Wikimedia Commons instead, so the
     feed reads as real health photography rather than a repeated logo or a
-    blank card. Best-effort end to end: any failure (network, timeout,
-    parse) leaves image=None on that item rather than dropping it or
-    failing the whole refresh -- the feed is always at least as good as
-    text-only.
+    blank card.
+
+    Category fallbacks are drawn from a per-category candidate pool
+    (_get_category_fallback_pool) and assigned per article via
+    _pick_fallback_image, a deterministic hash of the article's own id.
+    That's what keeps two same-category articles from showing the exact
+    same fallback photo, while still giving each article a stable image
+    across refreshes rather than a new random one every reload.
+
+    Best-effort end to end: any failure (network, timeout, parse) leaves
+    image=None on that item rather than dropping it or failing the whole
+    refresh -- the feed is always at least as good as text-only.
     """
     try:
         async with _who_don_http_session() as session:
@@ -2480,12 +2515,23 @@ async def _attach_article_images(items: List[dict]) -> None:
             missing = [item for item in items if not item["image"]]
             if missing:
                 categories = [_classify_outbreak_category(item["title"], item["summary"]) for item in missing]
-                fallbacks = await asyncio.gather(
-                    *[_get_category_fallback_image(session, c) for c in categories],
+
+                # Fetch each distinct category's pool once, not once per item,
+                # so several missing items sharing a category don't trigger
+                # redundant Commons requests.
+                unique_categories = sorted(set(categories))
+                pool_results = await asyncio.gather(
+                    *[_get_category_fallback_pool(session, c) for c in unique_categories],
                     return_exceptions=True,
                 )
-                for item, fallback in zip(missing, fallbacks):
-                    item["image"] = fallback if isinstance(fallback, str) else None
+                pools_by_category: Dict[str, List[str]] = {
+                    cat: (pool if isinstance(pool, list) else [])
+                    for cat, pool in zip(unique_categories, pool_results)
+                }
+
+                for item, category in zip(missing, categories):
+                    pool = pools_by_category.get(category, [])
+                    item["image"] = _pick_fallback_image(item["id"], pool)
     except Exception as e:
         logger.warning({"event": "who_don_image_fetch_failed", "error": str(e)})
         for item in items:
