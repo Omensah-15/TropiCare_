@@ -218,12 +218,48 @@ const Push = {
       throw new Error("Push notifications aren't available on this server right now.");
     }
 
+    // Reuse an existing browser subscription ONLY if it was made with
+    // today's VAPID public key. Blindly reusing any existing subscription
+    // is how a stale one (from before a key was rotated, or from an
+    // earlier failed attempt) gets silently re-registered with the
+    // backend forever -- unsubscribing first guarantees the subscription
+    // we send always matches the key the server can actually verify.
     let subscription = await registration.pushManager.getSubscription();
+    if (subscription) {
+      const currentKey = Push._urlBase64ToUint8Array(publicKey);
+      const subKey = new Uint8Array(subscription.options?.applicationServerKey || []);
+      const keyMatches = subKey.length === currentKey.length
+        && subKey.every((b, i) => b === currentKey[i]);
+      if (!keyMatches) {
+        await subscription.unsubscribe().catch(() => {});
+        subscription = null;
+      }
+    }
+
     if (!subscription) {
-      subscription = await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: Push._urlBase64ToUint8Array(publicKey),
-      });
+      try {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: Push._urlBase64ToUint8Array(publicKey),
+        });
+      } catch (err) {
+        // pushManager.subscribe() failures never reach the backend, so
+        // the server logs stay completely clean even when this is
+        // failing repeatedly -- translate the handful of DOMExceptions
+        // browsers actually throw here into something a person can act
+        // on, and guarantee this never bubbles up as a blank message.
+        const name = err?.name || "";
+        if (name === "NotAllowedError") {
+          throw new Error("Notifications are blocked for TropiCare in your browser settings.");
+        }
+        if (name === "AbortError") {
+          throw new Error("The browser's push service couldn't be reached. Check your connection and try again.");
+        }
+        if (name === "InvalidStateError") {
+          throw new Error("The service worker isn't active yet -- please try again in a moment.");
+        }
+        throw new Error(err?.message ? `Couldn't enable push notifications: ${err.message}` : "Couldn't enable push notifications in this browser.");
+      }
     }
 
     const subJson = subscription.toJSON();
@@ -1095,13 +1131,14 @@ const injectStyles = () => {
     .news-summary{font-size:calc(13px * var(--fs-scale,1));color:var(--muted);line-height:1.5;margin-bottom:8px;
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
     .news-link{display:inline-flex;align-items:center;gap:5px;font-size:calc(12px * var(--fs-scale,1));font-weight:700;color:var(--teal-d);}
-    /* Fixed height (not aspect-ratio) so the thumbnail can never grow
-       huge on a wide desktop window -- Home has no max-width cap like
-       the app's other pages do, so a width-driven aspect-ratio scaled
-       with the full unbounded .main column on desktop. object-fit:cover
-       on the <img> crops any source photo to fill this box cleanly at
-       every width instead. */
-    .news-thumb{width:100%;height:180px;border-radius:12px;overflow:hidden;background:var(--border-l);margin-bottom:10px;}
+    /* Responsive by design, not by a flat fixed size: width:100% scales
+       with the card, which is itself capped at 640px on desktop (see
+       .news-feed-section below) -- so aspect-ratio can safely drive the
+       height again without ever ballooning like it did when the card
+       itself was unbounded. min/max-height are a belt-and-braces clamp
+       so it's never a cramped sliver on a tiny phone or an oversized
+       slab in an edge case (browser zoom, an unusually wide card). */
+    .news-thumb{width:100%;aspect-ratio:16/9;min-height:140px;max-height:260px;border-radius:12px;overflow:hidden;background:var(--border-l);margin-bottom:10px;}
     .news-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
     /* Keeps the whole news feed at a comfortable timeline-style reading
        width on desktop/tablet, instead of stretching edge-to-edge across
@@ -2742,7 +2779,7 @@ function NewsFeedCard() {
                 <div className="skel-block" style={{ width: "40%", height: 11, marginBottom: 10 }} />
                 <div className="skel-block" style={{ width: "90%", height: 13, marginBottom: 8 }} />
                 <div className="skel-block" style={{ width: "70%", height: 12, marginBottom: 10 }} />
-                <div className="skel-block" style={{ width: "100%", height: 180, borderRadius: 12 }} />
+                <div className="skel-block" style={{ width: "100%", aspectRatio: "16/9", minHeight: 140, maxHeight: 260, borderRadius: 12 }} />
               </div>
             </div>
           ))}
@@ -5417,7 +5454,12 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
       setNotifs(false);
       const current = Store.get("tc_settings") || {};
       Store.set("tc_settings", { ...current, notifications: false });
-      const message = err?.message || "Couldn't update push notifications.";
+      // Guard against every shape a rejection could take -- a thrown
+      // string, a DOMException, a plain object, or nothing at all --
+      // so this can never show an empty toast with no way to act on it.
+      const message = (typeof err === "string" && err)
+        || (err?.message && String(err.message))
+        || "Couldn't update push notifications. Check your browser's notification permission and try again.";
       setNotifError(message);
       toast(message);
     } finally {
