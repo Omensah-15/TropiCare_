@@ -2370,8 +2370,10 @@ _CATEGORY_KEYWORDS: List[tuple] = [
     (("laboratory", "surveillance"),                "cases"),
 ]
 
-CATEGORY_IMAGE_CACHE_TTL_S      = 6 * 60 * 60  # 6h -- these barely change, no need to refetch every WHO cycle
-CATEGORY_IMAGE_FETCH_TIMEOUT_S  = 8
+CATEGORY_IMAGE_CACHE_TTL_S          = 6 * 60 * 60  # 6h -- successful pools barely change, no need to refetch every WHO cycle
+CATEGORY_IMAGE_NEGATIVE_CACHE_TTL_S = 5 * 60        # 5m -- an empty/failed pool gets retried soon rather than
+                                                     # being stuck imageless for 6h on one transient Commons blip
+CATEGORY_IMAGE_FETCH_TIMEOUT_S      = 8
 _CATEGORY_IMAGE_CACHE: Dict[str, Dict[str, Any]] = {}  # category -> {"urls": List[str], "fetched_at": float}
 
 
@@ -2450,19 +2452,23 @@ def _pick_fallback_image(item_id: str, pool: List[str]) -> Optional[str]:
 
 async def _get_category_fallback_pool(session: aiohttp.ClientSession, category: str) -> List[str]:
     """
-    Cached pool of candidate photos for one outbreak category, refetched
-    at most every CATEGORY_IMAGE_CACHE_TTL_S. Falls back to the generic
-    "default" query if the category-specific search comes up empty, so a
-    card only ever ends up image-less when Commons itself is unreachable.
-    Returns the full pool -- the caller (_attach_article_images) is
-    responsible for picking one entry per article via
-    _pick_fallback_image, which is what keeps same-category articles from
-    all displaying the identical photo.
+    Cached pool of candidate photos for one outbreak category. A
+    successful (non-empty) pool is cached for CATEGORY_IMAGE_CACHE_TTL_S
+    (6h) since these barely change. An empty pool -- meaning both the
+    category-specific query and the "default" query came back empty, or
+    Commons was unreachable -- is cached for only
+    CATEGORY_IMAGE_NEGATIVE_CACHE_TTL_S (5m) instead: caching a failure
+    for the same 6h as a success would leave every article in that
+    category imageless for hours over one transient timeout, with no
+    retry until the TTL expired. The short negative TTL means the next
+    refresh cycle tries again soon rather than staying stuck.
     """
     now = time.time()
     cached = _CATEGORY_IMAGE_CACHE.get(category)
-    if cached and (now - cached["fetched_at"]) < CATEGORY_IMAGE_CACHE_TTL_S:
-        return cached["urls"]
+    if cached:
+        ttl = CATEGORY_IMAGE_CACHE_TTL_S if cached["urls"] else CATEGORY_IMAGE_NEGATIVE_CACHE_TTL_S
+        if (now - cached["fetched_at"]) < ttl:
+            return cached["urls"]
 
     query = _CATEGORY_SEARCH_QUERIES.get(category, _CATEGORY_SEARCH_QUERIES["default"])
     urls = await _fetch_commons_images(session, query)
