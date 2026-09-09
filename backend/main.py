@@ -2866,32 +2866,60 @@ async def _refresh_who_don_feed_and_notify() -> None:
 
         gone_ids: set = set()
         sent_count = 0
+        failed_count = 0
+        notified_count = 0
+
         for item in new_items:
             payload = {
                 "title": "TropiCare Health Alert",
                 "body":  item["title"],
                 "url":   item["link"],
             }
-            for sub in subscriptions:
-                if sub.id in gone_ids:
-                    continue
-                result = await asyncio.to_thread(_send_web_push, sub, payload)
-                if result == "gone":
-                    gone_ids.add(sub.id)
-                elif result == "sent":
-                    sent_count += 1
-            db.add(PushedNewsItemModel(item_id=item["id"]))
+            try:
+                for sub in subscriptions:
+                    if sub.id in gone_ids:
+                        continue
+                    result = await asyncio.to_thread(_send_web_push, sub, payload)
+                    if result == "gone":
+                        gone_ids.add(sub.id)
+                    elif result == "sent":
+                        sent_count += 1
+                    else:
+                        failed_count += 1
+
+                # Committed per item, immediately after that item's send
+                # attempts finish, rather than batched at the end of the
+                # whole cycle. If the process crashes or redeploys mid-run
+                # (a real possibility on Render, and the exact failure mode
+                # a batched end-of-loop commit is exposed to), only the one
+                # item currently in flight is at risk of being retried --
+                # every item already sent and committed here is durably
+                # marked as pushed and can never trigger a duplicate
+                # notification on the next scheduled run.
+                db.add(PushedNewsItemModel(item_id=item["id"]))
+                db.commit()
+                notified_count += 1
+            except Exception as e:
+                # One item failing to record (e.g. a rare unique-constraint
+                # race, or a DB hiccup) must not abort the rest of the
+                # batch -- roll back just this item's uncommitted work and
+                # move on to the next one.
+                db.rollback()
+                logger.error({"event": "who_don_notify_item_error", "item_id": item.get("id"), "error": str(e)})
 
         if gone_ids:
             db.query(PushSubscriptionModel).filter(PushSubscriptionModel.id.in_(gone_ids)).delete(
                 synchronize_session=False
             )
-        db.commit()
+            db.commit()
+
         logger.info({
             "event": "who_don_notify",
             "new_items": len(new_items),
+            "notified_items": notified_count,
             "subscriptions": len(subscriptions),
             "sent": sent_count,
+            "failed": failed_count,
             "pruned_gone": len(gone_ids),
         })
     except Exception as e:
