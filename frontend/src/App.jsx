@@ -1095,8 +1095,20 @@ const injectStyles = () => {
     .news-summary{font-size:calc(13px * var(--fs-scale,1));color:var(--muted);line-height:1.5;margin-bottom:8px;
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
     .news-link{display:inline-flex;align-items:center;gap:5px;font-size:calc(12px * var(--fs-scale,1));font-weight:700;color:var(--teal-d);}
-    .news-thumb{width:100%;border-radius:12px;overflow:hidden;background:var(--border-l);margin-bottom:10px;aspect-ratio:16/9;}
+    /* Fixed height (not aspect-ratio) so the thumbnail can never grow
+       huge on a wide desktop window -- Home has no max-width cap like
+       the app's other pages do, so a width-driven aspect-ratio scaled
+       with the full unbounded .main column on desktop. object-fit:cover
+       on the <img> crops any source photo to fill this box cleanly at
+       every width instead. */
+    .news-thumb{width:100%;height:180px;border-radius:12px;overflow:hidden;background:var(--border-l);margin-bottom:10px;}
     .news-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+    /* Keeps the whole news feed at a comfortable timeline-style reading
+       width on desktop/tablet, instead of stretching edge-to-edge across
+       a wide .main column -- matches the max-width treatment other pages
+       already get above 1280px, applied here from the point the sidebar
+       (i.e. desktop layout) appears. */
+    @media(min-width:768px){.news-feed-section{max-width:640px;}}
     .news-skel{pointer-events:none;}
     .skel-block{background:linear-gradient(90deg,var(--border-l) 25%,var(--border) 37%,var(--border-l) 63%);background-size:400% 100%;border-radius:6px;animation:skel-shimmer 1.4s ease infinite;}
     .news-avatar.skel-block{border-radius:50%;}
@@ -2718,7 +2730,7 @@ function NewsFeedCard() {
   }, []);
 
   return (
-    <div className="section" style={{ paddingTop: 0 }}>
+    <div className="section news-feed-section" style={{ paddingTop: 0 }}>
       <div className="section-ttl">Health News</div>
 
       {items === null ? (
@@ -2730,7 +2742,7 @@ function NewsFeedCard() {
                 <div className="skel-block" style={{ width: "40%", height: 11, marginBottom: 10 }} />
                 <div className="skel-block" style={{ width: "90%", height: 13, marginBottom: 8 }} />
                 <div className="skel-block" style={{ width: "70%", height: 12, marginBottom: 10 }} />
-                <div className="skel-block" style={{ width: "100%", height: 110, borderRadius: 12 }} />
+                <div className="skel-block" style={{ width: "100%", height: 180, borderRadius: 12 }} />
               </div>
             </div>
           ))}
