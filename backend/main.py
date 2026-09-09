@@ -2132,7 +2132,10 @@ def _rank_places_by_distance(
 WHO_DON_API_URL      = "https://www.who.int/api/news/diseaseoutbreaknews"
 WHO_DON_ARTICLE_BASE = "https://www.who.int/emergencies/disease-outbreak-news/item"
 WHO_DON_FETCH_LIMIT  = 40    # batch size fetched before we sort/trim ourselves
-WHO_DON_RESULTS_LIMIT = 5    # items actually served to the frontend
+WHO_DON_RESULTS_LIMIT = 6    # items actually served to the frontend -- kept even
+                              # so the desktop card grid (2 or 3 columns) always
+                              # fills complete rows instead of stranding one card
+                              # alone on the last row
 WHO_DON_SUMMARY_MAX_CHARS = 220
 WHO_DON_SOURCE_TIMEOUT_S  = 10
 WHO_DON_CACHE_TTL_S       = 30 * 60   # refresh cadence -- matches the scheduler interval
@@ -2305,22 +2308,184 @@ async def _fetch_article_image(session: aiohttp.ClientSession, article_url: str)
         return None
 
 
+
+# -----------------------------------------------------------------
+# CATEGORY FALLBACK PHOTOS (Wikimedia Commons)
+# -----------------------------------------------------------------
+# WHO's Disease Outbreak News article pages are a JS-rendered single-page
+# app -- the server-side HTML that _fetch_article_image() reads back often
+# carries the *site's* generic default og:image (the WHO emblem) rather
+# than anything specific to that article. That tag can't tell the two
+# cases apart on its own, so _attach_article_images() below does: a real
+# per-article photo cannot be byte-identical across different articles, so
+# any image URL that repeats across more than one item in the same batch
+# is treated as that generic fallback and discarded, same as a scrape that
+# returned nothing.
+#
+# Whatever's left without a real photo gets a *relevant* one instead of a
+# blank card: a health/outbreak-appropriate picture pulled from Wikimedia
+# Commons, keyed off the disease named in the article's own title. Commons
+# is a keyless, stable API and every image on it is openly licensed
+# (public domain or CC), so these are safe to hotlink indefinitely with no
+# rights-clearance risk -- unlike scraping a photo from an arbitrary
+# third-party news site.
+WIKIMEDIA_COMMONS_API = "https://commons.wikimedia.org/w/api.php"
+
+_CATEGORY_SEARCH_QUERIES = {
+    "ebola":        "Ebola virus disease response Africa",
+    "marburg":      "Marburg virus outbreak response hospital",
+    "cholera":      "cholera treatment center Africa",
+    "measles":      "measles vaccination child clinic",
+    "malaria":      "malaria bed net prevention Africa",
+    "polio":        "polio vaccination campaign child",
+    "mpox":         "mpox vaccination clinic Africa",
+    "covid":        "COVID-19 vaccination Africa",
+    "influenza":    "influenza vaccination clinic",
+    "yellow_fever": "yellow fever vaccination campaign",
+    "dengue":       "dengue mosquito control community",
+    "lassa":        "Lassa fever hospital West Africa",
+    "mumps":        "mumps vaccination clinic",
+    "diphtheria":   "diphtheria vaccination campaign",
+    "cases":        "disease surveillance laboratory Africa",
+    "default":      "community health worker rural clinic Africa",
+}
+
+# Ordered so a more specific term (e.g. "yellow fever") is checked before
+# a broader one; first match wins.
+_CATEGORY_KEYWORDS: List[tuple] = [
+    (("ebola",),                                   "ebola"),
+    (("marburg",),                                 "marburg"),
+    (("cholera",),                                 "cholera"),
+    (("measles",),                                 "measles"),
+    (("malaria",),                                 "malaria"),
+    (("poliomyelitis", "polio"),                   "polio"),
+    (("mpox", "monkeypox"),                        "mpox"),
+    (("covid-19", "covid", "coronavirus", "sars-cov-2"), "covid"),
+    (("influenza",),                               "influenza"),
+    (("yellow fever",),                            "yellow_fever"),
+    (("dengue",),                                  "dengue"),
+    (("lassa",),                                   "lassa"),
+    (("mumps",),                                   "mumps"),
+    (("diphtheria",),                              "diphtheria"),
+    (("laboratory", "surveillance"),                "cases"),
+]
+
+CATEGORY_IMAGE_CACHE_TTL_S      = 6 * 60 * 60  # 6h -- these barely change, no need to refetch every WHO cycle
+CATEGORY_IMAGE_FETCH_TIMEOUT_S  = 8
+_CATEGORY_IMAGE_CACHE: Dict[str, Dict[str, Any]] = {}  # category -> {"url": str|None, "fetched_at": float}
+
+
+def _classify_outbreak_category(title: str, summary: str) -> str:
+    text = f"{title} {summary}".lower()
+    for keywords, category in _CATEGORY_KEYWORDS:
+        if any(kw in text for kw in keywords):
+            return category
+    return "default"
+
+
+async def _fetch_commons_image(session: aiohttp.ClientSession, query: str) -> Optional[str]:
+    """
+    Best-effort search of Wikimedia Commons for one openly-licensed photo
+    matching `query`, returning an ~800px-wide thumbnail URL. Never raises
+    -- any failure just means the caller falls back further (a different
+    query, or ultimately no image at all).
+    """
+    params = {
+        "action":       "query",
+        "generator":    "search",
+        "gsrsearch":    f"{query} filetype:bitmap",
+        "gsrnamespace": "6",   # File namespace
+        "gsrlimit":     "6",
+        "prop":         "imageinfo",
+        "iiprop":       "url|mime",
+        "iiurlwidth":   "800",
+        "format":       "json",
+    }
+    try:
+        async with session.get(
+            WIKIMEDIA_COMMONS_API,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=CATEGORY_IMAGE_FETCH_TIMEOUT_S),
+            headers={"User-Agent": "TropiCare/1.0 (health outbreak news feed; https://tropicare.onrender.com)"},
+        ) as resp:
+            if resp.status != 200:
+                return None
+            data = await resp.json(content_type=None)
+            pages = (data.get("query") or {}).get("pages") or {}
+            for page in pages.values():
+                for info in page.get("imageinfo") or []:
+                    mime = info.get("mime") or ""
+                    if not mime.startswith("image/") or mime == "image/svg+xml":
+                        continue
+                    url = info.get("thumburl") or info.get("url")
+                    if url:
+                        return url
+            return None
+    except Exception:
+        return None
+
+
+async def _get_category_fallback_image(session: aiohttp.ClientSession, category: str) -> Optional[str]:
+    """
+    Cached real photo for one outbreak category, refetched at most every
+    CATEGORY_IMAGE_CACHE_TTL_S. Falls back to the generic "default" query
+    if the category-specific search comes up empty, so a card only ever
+    ends up image-less when Commons itself is unreachable.
+    """
+    now = time.time()
+    cached = _CATEGORY_IMAGE_CACHE.get(category)
+    if cached and (now - cached["fetched_at"]) < CATEGORY_IMAGE_CACHE_TTL_S:
+        return cached["url"]
+
+    query = _CATEGORY_SEARCH_QUERIES.get(category, _CATEGORY_SEARCH_QUERIES["default"])
+    url = await _fetch_commons_image(session, query)
+    if url is None and category != "default":
+        url = await _fetch_commons_image(session, _CATEGORY_SEARCH_QUERIES["default"])
+    _CATEGORY_IMAGE_CACHE[category] = {"url": url, "fetched_at": now}
+    return url
+
+
 async def _attach_article_images(items: List[dict]) -> None:
     """
     Fetches a thumbnail for each already-trimmed item (WHO_DON_RESULTS_LIMIT
     of them, not the full batch) concurrently and sets item["image"] in
-    place. Best-effort end to end: any failure (network, timeout, parse)
-    leaves image=None on that item rather than dropping it or failing the
-    whole refresh -- the feed is always at least as good as text-only.
+    place. A scraped URL that repeats across more than one item is treated
+    as WHO's generic site image rather than a real per-article photo (see
+    module comment above) and cleared. Anything still missing an image
+    after that -- a cleared generic, or a scrape that failed outright --
+    gets a relevant category photo from Wikimedia Commons instead, so the
+    feed reads as real health photography rather than a repeated logo or a
+    blank card. Best-effort end to end: any failure (network, timeout,
+    parse) leaves image=None on that item rather than dropping it or
+    failing the whole refresh -- the feed is always at least as good as
+    text-only.
     """
     try:
         async with _who_don_http_session() as session:
-            images = await asyncio.gather(
+            scraped_raw = await asyncio.gather(
                 *[_fetch_article_image(session, item["link"]) for item in items],
                 return_exceptions=True,
             )
-        for item, image in zip(items, images):
-            item["image"] = image if isinstance(image, str) else None
+            scraped = [img if isinstance(img, str) else None for img in scraped_raw]
+
+            counts: Dict[str, int] = {}
+            for url in scraped:
+                if url:
+                    counts[url] = counts.get(url, 0) + 1
+            cleaned = [url if url and counts[url] == 1 else None for url in scraped]
+
+            for item, image in zip(items, cleaned):
+                item["image"] = image
+
+            missing = [item for item in items if not item["image"]]
+            if missing:
+                categories = [_classify_outbreak_category(item["title"], item["summary"]) for item in missing]
+                fallbacks = await asyncio.gather(
+                    *[_get_category_fallback_image(session, c) for c in categories],
+                    return_exceptions=True,
+                )
+                for item, fallback in zip(missing, fallbacks):
+                    item["image"] = fallback if isinstance(fallback, str) else None
     except Exception as e:
         logger.warning({"event": "who_don_image_fetch_failed", "error": str(e)})
         for item in items:
