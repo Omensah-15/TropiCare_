@@ -1,6 +1,6 @@
 # TropiCare
 
-TropiCare helps people identify tropical disease risks through adaptive symptom assessment, machine learning prediction, risk classification, and nearby clinic navigation. Individuals can screen themselves, and health workers can register and screen patients in their care.
+TropiCare helps people assess tropical disease risks through adaptive symptom assessment, machine learning prediction, risk classification, and personalized health guidance. Users can stay informed through WHO health news and disease outbreak updates, find nearby healthcare facilities, and receive optional outbreak notifications. Individuals can screen themselves, while health workers can register and screen patients in their care.
 
 🌐 **Live App:** [TropiCare](https://tropi-care.vercel.app/)
 
