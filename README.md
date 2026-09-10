@@ -1,6 +1,6 @@
 # TropiCare
 <h1 align="center">
-  <img src="https://github.com/Omensah-15/TropiCare_/blob/e20c94086bea1cbc7cb7db2f7f73c8e9f837022d/assets/logo-lockup-dark-bg.png" width="45" height="45" alt="TropiCare Logo">
+  <img src="https://github.com/Omensah-15/TropiCare_/blob/215ef6901291664de322e9de4f82c5a5736715e9/assets/icon-512.png" width="45" height="45" alt="TropiCare Logo">
   TropiCare
 </h1>
 
