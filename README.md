@@ -40,7 +40,7 @@ Built for West Africa, TropiCare bridges the gap between symptom onset and clini
 **System coverage:**
 - 41 diseases
 - 130 symptoms
-- Up to 15 adaptive questions
+- 15-question standard assessment, with adaptive expansion to up to 22 questions based on user responses
 - 3 ML models:
   - Random Forest
   - XGBoost
