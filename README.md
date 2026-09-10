@@ -23,21 +23,24 @@ width="300">
 alt="app">
 </div>
 
-Built for West Africa, TropiCare bridges the gap between symptom onset and clinical support by providing early risk assessment and actionable health guidance, for both individuals checking their own symptoms and health workers screening people in their community.
+Built for West Africa, TropiCare bridges the gap between symptom onset and clinical support by providing early health risk assessment and actionable guidance. It supports both individuals assessing their own symptoms and health workers screening people in their communities.
 
 **Key capabilities:**
 - Adaptive symptom assessment
-- ML disease risk prediction
+- ML-based disease risk prediction
 - High / Medium / Low risk classification
-- AI-powered recommendations
-- Assessment history tracking
-- Nearby clinic finder and navigation, available at every risk level
+- AI-powered personalized health guidance
+- Assessment history and insights
+- Health reports and downloadable PDF summaries
+- Nearby clinic finder and navigation at every risk level
+- WHO health news and disease outbreak updates
+- Optional outbreak notifications
 - Individual and health-worker accounts
 
 **System coverage:**
 - 41 diseases
 - 130 symptoms
-- 15 maximum questions
+- Up to 15 adaptive questions
 - 3 ML models:
   - Random Forest
   - XGBoost
