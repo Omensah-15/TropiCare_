@@ -1,6 +1,6 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/Omensah-15/TropiCare_/215ef6901291664de322e9de4f82c5a5736715e9/assets/icon-512.png" width="45" height="45" alt="TropiCare Logo">
-  <strong style="font-size: 32px; vertical-align: middle;">TropiCare</strong>
+  <img src="https://raw.githubusercontent.com/Omensah-15/TropiCare_/215ef6901291664de322e9de4f82c5a5736715e9/assets/icon-512.png" width="52" height="52" alt="TropiCare Logo">
+  <strong style="font-size: 36px; vertical-align: 8px;">TropiCare</strong>
 </p>
 
 TropiCare helps people assess tropical disease risks through adaptive symptom assessment, machine learning prediction, risk classification, and personalized health guidance. Users can stay informed through WHO health news and disease outbreak updates, find nearby healthcare facilities, and receive optional outbreak notifications. Individuals can screen themselves, while health workers can register and screen patients in their care.
