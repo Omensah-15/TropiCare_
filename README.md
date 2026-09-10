@@ -1,5 +1,5 @@
 <h1 align="center">
-  <img src="https://github.com/Omensah-15/TropiCare_/blob/215ef6901291664de322e9de4f82c5a5736715e9/assets/icon-512.png" width="45" height="45" alt="TropiCare Logo">
+  <img src="https://raw.githubusercontent.com/Omensah-15/TropiCare_/215ef6901291664de322e9de4f82c5a5736715e9/assets/icon-512.png" width="40" height="40" alt="TropiCare Logo" style="vertical-align: middle;">
   TropiCare
 </h1>
 
