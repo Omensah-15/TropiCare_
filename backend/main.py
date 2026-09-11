@@ -3090,7 +3090,16 @@ async def _refresh_who_don_feed_and_notify() -> None:
             payload = {
                 "title": "TropiCare Health Alert",
                 "body":  item["title"],
-                "url":   item["link"],
+                # In-app deep link, NOT the raw who.int URL. App.jsx reads
+                # "?outbreak=<id>" once on load (same pattern it already
+                # uses for "?reset_token=") and opens its in-app
+                # OutbreakDetailScreen for this id, which fetches the full
+                # item from GET /news/outbreaks/{id} below and still
+                # offers a "Read full report on who.int" link out for
+                # anyone who wants the original source. sw.js needs no
+                # changes for this -- notificationclick already just
+                # navigates to whatever "url" this payload carries.
+                "url": f"/?outbreak={item['id']}",
             }
             try:
                 for sub in subscriptions:
@@ -4432,6 +4441,35 @@ async def news_outbreaks(user_id: int = Depends(verify_token)):
     """
     items = await _get_who_don_items()
     return {"items": items}
+
+
+@app.get("/api/v1/news/outbreaks/{item_id}")
+async def news_outbreak_detail(item_id: str, user_id: int = Depends(verify_token)):
+    """
+    Serves a single cached WHO Disease Outbreak News item by id -- backs
+    the in-app OutbreakDetailScreen (App.jsx) that both the Home feed
+    cards and "TropiCare Health Alert" push notifications now open,
+    instead of sending people straight to who.int (see the "url" field
+    built in _refresh_who_don_feed_and_notify above). Reads the exact
+    same cache _get_who_don_items() already serves to the list route --
+    no separate fetch or storage -- so this can only ever return an item
+    that's also visible on the Home feed right now.
+
+    The cache only ever holds the current top WHO_DON_RESULTS_LIMIT items,
+    so an id from an older, already-delivered notification can legitimately
+    roll off it before someone taps that notification. That's not an error
+    to hide -- it's surfaced as a normal 404 and the frontend's detail
+    screen shows a clear "no longer available" state with a link to WHO's
+    site instead of a broken page.
+    """
+    items = await _get_who_don_items()
+    for item in items:
+        if item["id"] == item_id:
+            return {"item": item}
+    raise HTTPException(
+        status_code=404,
+        detail="This outbreak report is no longer available.",
+    )
 
 
 @app.post("/api/v1/admin/news/refresh")
