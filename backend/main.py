@@ -4434,6 +4434,48 @@ async def news_outbreaks(user_id: int = Depends(verify_token)):
     return {"items": items}
 
 
+@app.post("/api/v1/admin/news/refresh")
+async def admin_refresh_news(admin_id: int = Depends(verify_admin)):
+    """
+    Manually triggers the same WHO Disease Outbreak News refresh the
+    scheduler runs every WHO_DON_CACHE_TTL_S (see _refresh_who_don_feed_and_notify
+    and the "who_don_refresh" job in lifespan()). Lets an admin force a
+    retry -- e.g. after a transient WHO/network failure left the cache
+    empty, the exact failure mode behind the "No outbreak news to show
+    right now" empty state -- without waiting up to WHO_DON_CACHE_TTL_S
+    for the next scheduled cycle or redeploying the whole service.
+
+    Calls _refresh_who_don_feed_and_notify() directly -- the identical
+    function the scheduler itself calls -- so the cache-update, stale-
+    cache-fallback, and push-notification logic all stay on that one
+    code path instead of being duplicated or reimplemented here. That
+    function already never raises on a WHO/network failure (every fetch
+    it calls is best-effort and catches its own exceptions), so the
+    try/except below is a safety net for anything truly unexpected
+    rather than the normal way failures surface -- a normal WHO failure
+    instead shows up as "refreshed": false below, with the reason in the
+    server logs under the "who_don_fetch_failed" or "who_don_refresh_failed"
+    events.
+    """
+    fetched_at_before = _WHO_DON_CACHE["fetched_at"]
+    try:
+        await _refresh_who_don_feed_and_notify()
+    except Exception as e:
+        logger.error({"event": "who_don_manual_refresh_error", "error": str(e)})
+        raise HTTPException(status_code=502, detail="Refresh failed -- see server logs")
+
+    items = _WHO_DON_CACHE["items"]
+    refreshed = _WHO_DON_CACHE["fetched_at"] != fetched_at_before
+    return {
+        "refreshed":         refreshed,
+        "item_count":        len(items) if items else 0,
+        "cache_fetched_at":  (
+            datetime.fromtimestamp(_WHO_DON_CACHE["fetched_at"]).isoformat()
+            if _WHO_DON_CACHE["fetched_at"] else None
+        ),
+    }
+
+
 # -----------------------------------------------------------------
 # ROUTES - Push Notifications (Web Push / VAPID)
 # -----------------------------------------------------------------
