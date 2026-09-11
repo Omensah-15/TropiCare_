@@ -1761,7 +1761,7 @@ function RecBubble({ icon, label, text, accent }) {
 // screen, the splash-adjacent first paint, and every page after sign-in.
 // It no longer lives inside HomeScreen, which only ever rendered after
 // login and is why it never appeared for a signed-out visitor before.
-function InstallTopBar({ visible }) {
+function InstallTopBar({ visible, toast }) {
   const installPrompt = useInstallPrompt();
   const [busy, setBusy] = useState(false);
   const [dismissed, setDismissed] = useState(() => Store.get("tc_install_dismissed") === true);
@@ -1774,6 +1774,22 @@ function InstallTopBar({ visible }) {
   useEffect(() => {
     if (visible) setInstalled(isRunningStandalone());
   }, [visible]);
+
+  // "appinstalled" is the ONE authoritative, cross-browser signal that
+  // installation actually completed -- it fires "no matter what mechanism
+  // is used" (the button below, the browser's own omnibox icon, the
+  // native menu), per web.dev's own guidance. There is no API to then
+  // launch the newly-installed app window -- browsers intentionally don't
+  // expose one, the same way no webpage can force-focus another app on
+  // your device. This toast is the honest substitute: an unmistakable
+  // in-app confirmation instead of the banner just quietly disappearing,
+  // which is what made it feel like nothing had happened before.
+  useEffect(() => {
+    if (typeof window === "undefined" || !toast) return;
+    const onInstalled = () => toast("Installed! Find TropiCare on your home screen or app list.");
+    window.addEventListener("appinstalled", onInstalled);
+    return () => window.removeEventListener("appinstalled", onInstalled);
+  }, [toast]);
 
   const show = visible && !installed && !dismissed && (installPrompt || iOS);
 
@@ -2385,7 +2401,7 @@ export default function App() {
 
   return (
     <>
-      <InstallTopBar visible={!splash} />
+      <InstallTopBar visible={!splash} toast={toast} />
       <Notif msg={notif} />
       {renderScreen()}
     </>
