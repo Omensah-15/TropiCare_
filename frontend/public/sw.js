@@ -14,8 +14,14 @@
 // never touches API calls, so diagnostic/session data is always fetched
 // fresh and is never served stale from a cache.
 
-const CACHE_NAME = "tropicare-shell-v1";
-const SHELL_URLS = ["/", "/manifest.json", "/icons/icon-192.png", "/icons/icon-512.png"];
+const CACHE_NAME = "tropicare-shell-v2";
+const SHELL_URLS = [
+  "/",
+  "/manifest.json",
+  "/icons/icon-192.png",
+  "/icons/icon-512.png",
+  "/icons/badge-96.png",
+];
 
 // Must match App.jsx's API_BASE -- used only by the pushsubscriptionchange
 // handler below to re-register a rotated subscription with the backend
@@ -106,8 +112,16 @@ self.addEventListener("push", (event) => {
 
   const options = {
     body: data.body,
+    // Large icon shown inside the notification body -- full color is
+    // fine here, this is NOT what renders in the status bar.
     icon: "/icons/icon-192.png",
-    badge: "/icons/icon-192.png",
+    // Status-bar / task-bar glyph. Android and Chrome render this as a
+    // MONOCHROME SILHOUETTE: they discard all color and mask it from
+    // the alpha channel alone. It must be its own dedicated asset --
+    // white artwork on a transparent background -- never the full-color
+    // app icon, or the OS has nothing to carve a shape out of and just
+    // shows a solid block. See /icons/badge-96.png.
+    badge: "/icons/badge-96.png",
     data: { url: data.url },
     tag: "tropicare-outbreak-news",
     renotify: true,
