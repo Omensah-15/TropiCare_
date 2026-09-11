@@ -1127,8 +1127,8 @@ const injectStyles = () => {
        middle of the screen. 2 columns at tablet width, 3 at full
        desktop -- both divide the 6 served items evenly. */
     .news-item{display:flex;align-items:flex-start;gap:12px;padding:14px 16px;text-decoration:none;color:inherit;transition:background var(--t-fast),transform var(--t-med),box-shadow var(--t-med);}
-    a.news-item:hover{background:var(--teal-xl);}
-    a.news-item:active{background:var(--border-l);}
+    .news-item:hover{background:var(--teal-xl);}
+    .news-item:active{background:var(--border-l);}
     .news-item-divider{border-top:1px solid var(--border-l);}
     .news-avatar{width:36px;height:36px;border-radius:50%;background:var(--teal-xl);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
     .news-body{flex:1;min-width:0;}
@@ -1692,7 +1692,27 @@ export default function App() {
   const [splash,     setSplash]     = useState(true);
   const [splashFade, setSplashFade] = useState(false);
   const [user,       setUser]       = useState(null);
-  const [page,       setPage]       = useState("home");
+  // "TropiCare Health Alert" push notifications deep-link to
+  // "<frontend_url>/?outbreak=<id>" (see main.py's
+  // _refresh_who_don_feed_and_notify) so sw.js's notificationclick can
+  // navigate straight back into the app. Read once on load -- same
+  // pattern as resetToken further below -- then stripped from the address
+  // bar so refreshing never re-opens it. Encoded directly onto `page` as
+  // "outbreak#<id>", reusing the same "page#anchor" shape already used to
+  // deep-link into a Settings section, so it flows through the existing
+  // pageId/pageAnchor split with no extra state: if the person isn't
+  // signed in yet, the !user check below still shows AuthScreen first,
+  // and this is simply the page they land on right after logging in.
+  const [page,       setPage]       = useState(() => {
+    const outbreakId = new URLSearchParams(window.location.search).get("outbreak");
+    if (outbreakId) {
+      const url = new URL(window.location.href);
+      url.searchParams.delete("outbreak");
+      window.history.replaceState({}, "", url.toString());
+      return `outbreak#${outbreakId}`;
+    }
+    return "home";
+  });
   const [notif,      setNotif]      = useState("");
   const [detailRec,  setDetailRec]  = useState(null);
   const [assActive,  setAssActive]  = useState(false);
@@ -2057,6 +2077,8 @@ export default function App() {
         return <AboutScreen onBack={() => setPage("profile")} />;
       case "mydata":
         return <MyDataScreen onBack={() => setPage("profile")} toast={toast} />;
+      case "outbreak":
+        return <OutbreakDetailScreen itemId={pageAnchor} onBack={() => setPage("home")} />;
       default:
         return <HomeScreen userId={user.id} user={user} onStart={startAssessment} onNav={setPage} />;
     }
@@ -2788,7 +2810,7 @@ function NewsThumb({ src }) {
   );
 }
 
-function NewsFeedCard() {
+function NewsFeedCard({ onNav }) {
   const [items,   setItems]   = useState(null); // null = loading
   const [failed,  setFailed]  = useState(false);
 
@@ -2839,11 +2861,18 @@ function NewsFeedCard() {
       ) : (
         <div className="card news-feed-grid">
           {items.map((item, i) => (
-            <a
+            <div
               key={item.id || i}
-              href={item.link}
-              target="_blank"
-              rel="noopener noreferrer"
+              role="button"
+              tabIndex={0}
+              onClick={() => onNav(`outbreak#${item.id}`)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onNav(`outbreak#${item.id}`);
+                }
+              }}
+              style={{ cursor: "pointer" }}
               className={`news-item${i > 0 ? " news-item-divider" : ""}`}>
               <div className="news-avatar">
                 <Icon name="globe" size={16} color="var(--teal-d)" />
@@ -2858,14 +2887,109 @@ function NewsFeedCard() {
                 {item.summary && <div className="news-summary">{item.summary}</div>}
                 <NewsThumb src={item.image} />
                 <div className="news-link">
-                  Read full report
-                  <Icon name="external" size={12} color="var(--teal-d)" />
+                  View outbreak details
+                  <Icon name="chevR" size={12} color="var(--teal-d)" />
                 </div>
               </div>
-            </a>
+            </div>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────
+// OUTBREAK DETAIL SCREEN
+// ─────────────────────────────────────────────
+// Reached by tapping a Home feed card or a "TropiCare Health Alert" push
+// notification (sw.js navigates to "/?outbreak=<id>", parsed once at
+// App() mount into page="outbreak#<id>" -- see App()). Always fetches the
+// item fresh from GET /news/outbreaks/{id} rather than trusting whatever
+// the Home feed already had in memory, so this renders identically
+// whether someone tapped a card already on screen or opened a cold-start
+// deep link straight from a notification with Home never having loaded.
+// This screen is a convenient in-app summary, not a replacement for WHO's
+// own report -- it always ends with an explicit link out to who.int.
+function OutbreakDetailScreen({ itemId, onBack }) {
+  const [item,  setItem]  = useState(null); // null = loading
+  const [error, setError] = useState(null); // string message, or null once loaded
+
+  useEffect(() => {
+    let cancelled = false;
+    setItem(null);
+    setError(null);
+    api.get(`/news/outbreaks/${encodeURIComponent(itemId)}`)
+      .then((data) => {
+        if (cancelled || _loggingOut) return;
+        if (data?.item) setItem(data.item);
+        else setError("This outbreak report is no longer available.");
+      })
+      .catch((e) => {
+        if (cancelled || _loggingOut) return;
+        setError(e.message || "This outbreak report is no longer available.");
+      });
+    return () => { cancelled = true; };
+  }, [itemId]);
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+        <button onClick={onBack} className="icon-btn"
+          style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
+          <Icon name="chevL" size={16} color="var(--ink)" />
+        </button>
+        <div className="t-display" style={{ fontSize: 20 }}>Outbreak Report</div>
+      </div>
+
+      <div className="page-body">
+        {item === null && !error ? (
+          <div className="card card-p">
+            <div className="skel-block" style={{ width: "100%", aspectRatio: "16/9", borderRadius: 12, marginBottom: 16 }} />
+            <div className="skel-block" style={{ width: "40%", height: 11, marginBottom: 10 }} />
+            <div className="skel-block" style={{ width: "90%", height: 18, marginBottom: 8 }} />
+            <div className="skel-block" style={{ width: "100%", height: 13, marginBottom: 6 }} />
+            <div className="skel-block" style={{ width: "80%", height: 13 }} />
+          </div>
+        ) : error ? (
+          <div className="card card-p" style={{ display: "flex", flexDirection: "column", gap: 14, alignItems: "flex-start" }}>
+            <div className="news-avatar" style={{ flexShrink: 0 }}>
+              <Icon name="alert" size={16} color="var(--amber)" />
+            </div>
+            <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>{error}</div>
+            <a className="btn btn-outline"
+              href="https://www.who.int/emergencies/disease-outbreak-news"
+              target="_blank" rel="noopener noreferrer">
+              Browse WHO Outbreak News
+              <Icon name="external" size={13} />
+            </a>
+          </div>
+        ) : (
+          <div className="card card-p">
+            {item.image && (
+              <div className="news-thumb" style={{ marginBottom: 16 }}>
+                <img src={item.image} alt="" />
+              </div>
+            )}
+            <div className="news-head" style={{ marginBottom: 8 }}>
+              <span className="news-source">WHO Disease Outbreak News</span>
+              <span className="news-dot">·</span>
+              <span className="news-time">{timeAgo(item.date)}</span>
+            </div>
+            <div className="t-display" style={{ fontSize: 20, marginBottom: 12 }}>{item.title}</div>
+            {item.summary && (
+              <div style={{ fontSize: 14, color: "var(--ink-2)", lineHeight: 1.6, marginBottom: 20 }}>
+                {item.summary}
+              </div>
+            )}
+            <a className="btn btn-primary btn-full"
+              href={item.link} target="_blank" rel="noopener noreferrer">
+              Read full report on who.int
+              <Icon name="external" size={14} />
+            </a>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -3008,7 +3132,7 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
         )}
       </div>
 
-      <NewsFeedCard />
+      <NewsFeedCard onNav={onNav} />
 
       <div style={{ height: 24 }} />
     </div>
