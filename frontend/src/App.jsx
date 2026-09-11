@@ -140,6 +140,65 @@ const Store = {
 };
 
 // ─────────────────────────────────────────────
+// PWA INSTALL PROMPT
+// ─────────────────────────────────────────────
+// Chrome/Edge/Android fire "beforeinstallprompt" once per page load, and
+// only when the app isn't already installed -- and it can fire before
+// React ever mounts. So this is captured here at module scope, the
+// instant the script runs, rather than inside a component's useEffect,
+// which could attach its listener a tick too late and miss the event
+// for good (the browser doesn't refire it). preventDefault() suppresses
+// Chrome's own install mini-infobar so the "Install" button below is the
+// only prompt shown. iOS Safari and desktop Firefox never fire this
+// event at all -- there is no programmatic install API there, only the
+// OS's manual "Add to Home Screen" flow, which isIOSDevice() surfaces
+// separately below with instructions instead of a button.
+let _deferredInstallPrompt = null;
+let _installPromptListeners = [];
+
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeinstallprompt", (e) => {
+    e.preventDefault();
+    _deferredInstallPrompt = e;
+    _installPromptListeners.forEach((fn) => fn(e));
+  });
+  // Fires on successful install however it happened (this button, the
+  // browser's own menu, etc.) -- clears the captured event, since a used
+  // or now-irrelevant prompt can't be shown again anyway.
+  window.addEventListener("appinstalled", () => {
+    _deferredInstallPrompt = null;
+    _installPromptListeners.forEach((fn) => fn(null));
+  });
+}
+
+// Exposes the captured beforeinstallprompt event (if any) to whichever
+// component renders the install button, and re-renders that component if
+// the event arrives later or the app gets installed while it's mounted.
+function useInstallPrompt() {
+  const [prompt, setPrompt] = useState(_deferredInstallPrompt);
+  useEffect(() => {
+    _installPromptListeners.push(setPrompt);
+    return () => {
+      _installPromptListeners = _installPromptListeners.filter((fn) => fn !== setPrompt);
+    };
+  }, []);
+  return prompt;
+}
+
+// True once the app is actually running installed/standalone -- the
+// "display-mode" media query Chrome/Edge/Android set, or iOS Safari's
+// older navigator.standalone flag.
+function isRunningStandalone() {
+  return (
+    (typeof window.matchMedia === "function" && window.matchMedia("(display-mode: standalone)").matches) ||
+    window.navigator.standalone === true
+  );
+}
+
+const isIOSDevice = () =>
+  /iphone|ipad|ipod/i.test(window.navigator.userAgent) && !window.MSStream;
+
+// ─────────────────────────────────────────────
 // WEB PUSH (real device notifications)
 // ─────────────────────────────────────────────
 // Talks to the browser's Push API and the service worker (sw.js) to turn
@@ -3003,6 +3062,43 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
   const [loading,  setLoading]  = useState(true);
   const [error,    setError]    = useState(false);
 
+  // PWA install banner -- see useInstallPrompt() above. Dismissal is
+  // remembered per-device so it doesn't re-appear every visit once
+  // someone has explicitly closed it, but it isn't shown at all once the
+  // app is actually installed, dismissed or not.
+  const installPrompt = useInstallPrompt();
+  const [installBusy,       setInstallBusy]       = useState(false);
+  const [bannerDismissed,   setBannerDismissed]   = useState(() => Store.get("tc_install_dismissed") === true);
+  const iOS       = isIOSDevice();
+  const installed = isRunningStandalone();
+  const showInstallBanner = !installed && !bannerDismissed && (installPrompt || iOS);
+
+  async function handleInstall() {
+    if (!installPrompt) return;
+    setInstallBusy(true);
+    try {
+      installPrompt.prompt();
+      const choice = await installPrompt.userChoice;
+      if (choice.outcome === "accepted" && toast) toast("TropiCare installed!");
+      // A captured beforeinstallprompt event can only be used once --
+      // clear it either way so a dismissed prompt doesn't leave a dead
+      // button behind. A fresh event fires again on the next page load.
+      _deferredInstallPrompt = null;
+      _installPromptListeners.forEach((fn) => fn(null));
+    } catch {
+      // Nothing actionable to tell the person if prompt() itself throws
+      // (e.g. it was already used) -- the button simply disappears once
+      // installPrompt clears above.
+    } finally {
+      setInstallBusy(false);
+    }
+  }
+
+  function dismissBanner() {
+    Store.set("tc_install_dismissed", true);
+    setBannerDismissed(true);
+  }
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -3052,6 +3148,36 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
         </div>
         <Avatar src={user?.avatar} name={user?.name || "P"} />
       </div>
+
+      {/* Install App */}
+      {showInstallBanner && (
+        <div className="card card-p" style={{
+          marginBottom: 16, display: "flex", alignItems: "center", gap: 12,
+          background: "var(--teal-xl)", border: "1px solid var(--teal-l)",
+        }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 9, background: "var(--teal)",
+            display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+          }}>
+            <Icon name="download" size={17} color="#fff" />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, color: "var(--ink)" }}>Install TropiCare</div>
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>
+              {iOS ? 'Tap Share, then "Add to Home Screen"' : "One tap for offline access and alerts"}
+            </div>
+          </div>
+          {!iOS && installPrompt && (
+            <button className="btn btn-primary btn-sm" onClick={handleInstall} disabled={installBusy} style={{ flexShrink: 0 }}>
+              Install
+            </button>
+          )}
+          <button onClick={dismissBanner} className="icon-btn" aria-label="Dismiss"
+            style={{ border: "none", background: "transparent", padding: 6, cursor: "pointer", flexShrink: 0 }}>
+            <Icon name="x" size={14} color="var(--muted)" />
+          </button>
+        </div>
+      )}
 
       {/* Hero */}
       <div className="hero-card">
