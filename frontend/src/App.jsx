@@ -365,17 +365,30 @@ const Push = {
   },
 };
 
-// Text size is a continuous scale (not fixed steps) applied everywhere via
-// the --fs-scale CSS variable, bounded so dense screens (nav, chips, cards)
-// never wrap or overflow. Older saved prefs stored "small"/"medium"/"large"
-// -- map those to the nearest scale value so upgrading is seamless.
-const FS_MIN = 0.85, FS_MAX = 1.3, FS_DEFAULT = 1;
-const FS_LEGACY = { small: 0.87, medium: 1, large: 1.15 };
-const normalizeFontScale = (v) => {
-  if (typeof v === "string") return FS_LEGACY[v] ?? FS_DEFAULT;
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.min(FS_MAX, Math.max(FS_MIN, n)) : FS_DEFAULT;
-};
+// Text size used to be an in-app slider, but a user-controlled multiplier
+// duplicates a setting the OS/browser already exposes (iOS "Text Size",
+// Android "Font size", desktop browser zoom) and letting it run too far in
+// either direction is exactly what broke dense screens (nav, chips, cards).
+// Instead we read the *actual* rendered size of an unstyled 1rem element --
+// the same thing the OS/browser text-size setting scales -- and turn that
+// into the --fs-scale CSS variable every font-size in this file multiplies
+// against. FS_MIN/FS_MAX keep that automatic value inside the same safe
+// range the old slider used to enforce, so no device setting can overflow
+// the layout.
+const FS_MIN = 0.85, FS_MAX = 1.3;
+const FS_BASE_PX = 16; // browser's own unscaled 1rem
+
+function detectSystemFontScale() {
+  if (typeof document === "undefined") return 1;
+  const probe = document.createElement("div");
+  probe.style.cssText =
+    "position:absolute;visibility:hidden;pointer-events:none;height:0;width:0;overflow:hidden;font-size:1rem;";
+  document.body.appendChild(probe);
+  const measuredPx = parseFloat(getComputedStyle(probe).fontSize);
+  document.body.removeChild(probe);
+  const scale = Number.isFinite(measuredPx) ? measuredPx / FS_BASE_PX : 1;
+  return Number.isFinite(scale) ? Math.min(FS_MAX, Math.max(FS_MIN, scale)) : 1;
+}
 
 // ─────────────────────────────────────────────
 // RISK HELPERS
@@ -1447,14 +1460,7 @@ const injectStyles = () => {
     .theme-preview-swatch.system-sw{background:linear-gradient(135deg,#f4f7f9 50%,#0f161e 50%);color:var(--ink);}
     @media(max-width:480px){.theme-preview-strip{gap:5px;}.theme-preview-swatch{height:38px;font-size:10px;padding:0 6px;gap:4px;}}
     @media(max-width:360px){.theme-preview-swatch{height:36px;font-size:0;gap:0;}.theme-preview-swatch svg{margin:0;}}
-    .fs-slider-row{display:flex;align-items:center;gap:10px;}
-    .fs-slider-a{color:var(--muted);font-weight:700;flex-shrink:0;user-select:none;line-height:1;}
-    .fs-slider{-webkit-appearance:none;appearance:none;flex:1;height:6px;border-radius:999px;outline:none;cursor:pointer;background:linear-gradient(to right,var(--teal) 0%,var(--teal) var(--fs-pct,50%),var(--border) var(--fs-pct,50%),var(--border) 100%);}
-    .fs-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:var(--surface);border:3px solid var(--teal);box-shadow:var(--shadow-s);cursor:pointer;transition:transform var(--t-fast);}
-    .fs-slider::-webkit-slider-thumb:active{transform:scale(1.15);}
-    .fs-slider::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--surface);border:3px solid var(--teal);box-shadow:var(--shadow-s);cursor:pointer;}
-    .fs-slider::-moz-range-track{height:6px;border-radius:999px;background:var(--border);}
-    .fs-slider::-moz-range-progress{height:6px;border-radius:999px;background:var(--teal);}
+
     @media(max-width:359px){.stats-row{grid-template-columns:1fr 1fr 1fr;}.q-answers{max-width:100%;}.hero-card{padding:20px 16px;}}
     @media(min-width:1280px){.page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}}
   `;
@@ -1962,17 +1968,26 @@ export default function App() {
 
   const handleThemeChange = useCallback((t) => setTheme(t), []);
 
-  // ── Font size ──────────────────────────────
-  const [fontSize, setFontSize] = useState(() => {
-    const saved = Store.get("tc_settings");
-    return normalizeFontScale(saved?.fontSize);
-  });
-
+  // ── Font size (automatic, from the device's own text-size setting) ──
   useEffect(() => {
-    document.documentElement.style.setProperty("--fs-scale", fontSize);
-  }, [fontSize]);
-
-  const handleFontSizeChange = useCallback((fs) => setFontSize(normalizeFontScale(fs)), []);
+    const applyScale = () => {
+      document.documentElement.style.setProperty("--fs-scale", detectSystemFontScale());
+    };
+    applyScale();
+    // Re-measure whenever the browser's default text size could have
+    // changed: desktop zoom fires "resize" directly; an OS-level text-size
+    // change made while the app was backgrounded surfaces as a resize/
+    // orientation event or a visibility change once the app is foregrounded
+    // again.
+    window.addEventListener("resize", applyScale);
+    window.addEventListener("orientationchange", applyScale);
+    document.addEventListener("visibilitychange", applyScale);
+    return () => {
+      window.removeEventListener("resize", applyScale);
+      window.removeEventListener("orientationchange", applyScale);
+      document.removeEventListener("visibilitychange", applyScale);
+    };
+  }, []);
 
   // ── Language ───────────────────────────────
   // Sets the real <html lang> attribute (used by screen readers and the
@@ -2256,8 +2271,6 @@ export default function App() {
             toast={toast}
             onThemeChange={handleThemeChange}
             currentTheme={theme}
-            onFontSizeChange={handleFontSizeChange}
-            currentFontSize={fontSize}
             focusSection={pageAnchor}
           />
         );
@@ -5702,9 +5715,8 @@ function AboutScreen({ onBack }) {
 // ─────────────────────────────────────────────
 // SETTINGS SCREEN
 // ─────────────────────────────────────────────
-function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSizeChange, currentFontSize, focusSection }) {
+function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, focusSection }) {
   const [theme,    setTheme]    = useState(currentTheme || "light");
-  const [fontSize, setFontSize] = useState(normalizeFontScale(currentFontSize));
   const [notifs,   setNotifs]   = useState(false);
   const [lang,     setLang]     = useState("en");
   const [saved,    setSaved]    = useState(false);
@@ -5748,11 +5760,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
   // Sync if parent-supplied values change
   useEffect(() => {
     if (currentTheme && currentTheme !== theme) setTheme(currentTheme);
-    if (currentFontSize !== undefined) {
-      const n = normalizeFontScale(currentFontSize);
-      if (n !== fontSize) setFontSize(n);
-    }
-  }, [currentTheme, currentFontSize]);
+  }, [currentTheme]);
 
   // Load persisted settings on mount. The `notifications` flag here is
   // shown immediately as an optimistic best-guess (avoids a blank/off
@@ -5763,7 +5771,6 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
     const s = Store.get("tc_settings");
     if (s) {
       if (s.theme)         setTheme(s.theme);
-      if (s.fontSize !== undefined) setFontSize(normalizeFontScale(s.fontSize));
       if (s.notifications !== undefined) setNotifs(s.notifications !== false);
       if (s.language)      setLang(s.language);
     }
@@ -5828,15 +5835,6 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
     if (onThemeChange) onThemeChange(val);
   };
 
-  const applyFontSize = (val) => {
-    const scale = normalizeFontScale(val);
-    setFontSize(scale);
-    setSaved(false);
-    // Apply immediately for live preview
-    document.documentElement.style.setProperty("--fs-scale", scale);
-    if (onFontSizeChange) onFontSizeChange(scale);
-  };
-
   // "System" resolves to whatever the device/browser is set to -- we only
   // ship English and French copy, so anything else falls back to English,
   // same as most apps do when a device language isn't one they support yet.
@@ -5854,9 +5852,8 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
   };
 
   const save = () => {
-    Store.set("tc_settings", { theme, fontSize, notifications: notifs, language: lang });
-    if (onThemeChange)    onThemeChange(theme);
-    if (onFontSizeChange) onFontSizeChange(fontSize);
+    Store.set("tc_settings", { theme, notifications: notifs, language: lang });
+    if (onThemeChange) onThemeChange(theme);
     document.documentElement.setAttribute("lang", lang === "system" ? detectSystemLanguage() : lang);
     setSaved(true);
     toast("Settings saved.");
@@ -5934,29 +5931,9 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
               </div>
             )}
 
-            {/* Font size */}
-            <div style={{ borderTop: "1px solid var(--border)", marginTop: 16, paddingTop: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                <div className="t-label" style={{ marginBottom: 0 }}>Text Size</div>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "var(--teal)" }}>{Math.round((fontSize / FS_DEFAULT) * 100)}%</span>
-              </div>
-              <div className="fs-slider-row">
-                <span className="fs-slider-a" style={{ fontSize: 12 }}>A</span>
-                <input
-                  type="range"
-                  className="fs-slider"
-                  min={FS_MIN}
-                  max={FS_MAX}
-                  step={0.01}
-                  value={fontSize}
-                  onChange={(e) => applyFontSize(Number(e.target.value))}
-                  style={{ "--fs-pct": `${((fontSize - FS_MIN) / (FS_MAX - FS_MIN)) * 100}%` }}
-                  aria-label="Text size"
-                  aria-valuetext={`${Math.round((fontSize / FS_DEFAULT) * 100)}%`}
-                />
-                <span className="fs-slider-a" style={{ fontSize: 21 }}>A</span>
-              </div>
-            </div>
+            {/* Text size now follows the device's own accessibility text-size
+                setting automatically (see detectSystemFontScale) rather than
+                a manual in-app control -- so there's no slider to show here. */}
           </div>
         </div>
 
