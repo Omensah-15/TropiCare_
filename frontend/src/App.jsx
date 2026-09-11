@@ -346,17 +346,14 @@ const Push = {
   },
 };
 
-// Text size is a continuous scale (not fixed steps) applied everywhere via
-// the --fs-scale CSS variable, bounded so dense screens (nav, chips, cards)
-// never wrap or overflow. Older saved prefs stored "small"/"medium"/"large"
-// -- map those to the nearest scale value so upgrading is seamless.
-const FS_MIN = 0.85, FS_MAX = 1.3, FS_DEFAULT = 1;
-const FS_LEGACY = { small: 0.87, medium: 1, large: 1.15 };
-const normalizeFontScale = (v) => {
-  if (typeof v === "string") return FS_LEGACY[v] ?? FS_DEFAULT;
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.min(FS_MAX, Math.max(FS_MIN, n)) : FS_DEFAULT;
-};
+// Text sizing is intentionally NOT controlled by an in-app setting. Every
+// font-size in this file is defined in rem, and the document root never
+// hardcodes a px font-size (see the `html,body` rule below), so 1rem always
+// resolves to the browser/OS default font size. That means text size
+// automatically follows the user's own device settings -- OS-level "Larger
+// Text" / accessibility text scaling on iOS and Android, and desktop browser
+// zoom / minimum font size prefs -- with zero extra code, and it can never
+// desync from what the platform is already doing for every other app.
 
 // ─────────────────────────────────────────────
 // RISK HELPERS
@@ -989,8 +986,14 @@ const injectStyles = () => {
     :root[data-theme="dark"] .empty-state-card { background:var(--surface); border-color:var(--border); }
 
     /* ── Base styles ─────────────────────── */
+    /* html deliberately has NO fixed px font-size. Leaving it at the
+       browser/OS default (normally 100% = 16px, but this is exactly what
+       varies when someone raises their device's text size or browser zoom)
+       is what lets every rem value below track the user's own settings
+       automatically -- there is no in-app override sitting on top of it. */
+    html{-webkit-text-size-adjust:100%;text-size-adjust:100%;}
     html,body{height:100%;font-family:var(--font);background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent;}
-    body{font-size:calc(15px * var(--fs-scale,1));}
+    body{font-size:0.9375rem;}
     #root{height:100%;}
     ::selection{background:var(--teal-l);color:var(--teal-dd);}
     a{color:var(--teal-d);}
@@ -1007,7 +1010,7 @@ const injectStyles = () => {
     .brand-name{font-family:var(--display);font-size:18px;font-weight:700;color:var(--ink);letter-spacing:-0.2px;}
     .brand-sub{font-size:10px;color:var(--muted);font-weight:600;letter-spacing:0.04em;text-transform:uppercase;}
     .sidebar-nav{flex:1;padding:0 10px;}
-    .nav-item{display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px;border-radius:var(--radius-s);border:none;background:none;font-family:var(--font);font-size:calc(14px * var(--fs-scale,1));font-weight:600;color:var(--muted);cursor:pointer;transition:background var(--t-fast),color var(--t-fast),transform var(--t-fast);margin-bottom:2px;text-align:left;position:relative;}
+    .nav-item{display:flex;align-items:center;gap:10px;width:100%;padding:11px 14px;border-radius:var(--radius-s);border:none;background:none;font-family:var(--font);font-size:0.875rem;font-weight:600;color:var(--muted);cursor:pointer;transition:background var(--t-fast),color var(--t-fast),transform var(--t-fast);margin-bottom:2px;text-align:left;position:relative;}
     .nav-item:hover{background:var(--teal-xl);color:var(--teal-d);}
     .nav-item:active{transform:scale(0.98);}
     .nav-item.active{background:var(--teal-xl);color:var(--teal-d);font-weight:700;}
@@ -1015,7 +1018,7 @@ const injectStyles = () => {
     .sidebar-foot{padding:16px 10px 0;border-top:1px solid var(--border);margin:0 10px;}
     .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);display:none;z-index:100;padding:6px 0 calc(6px + env(safe-area-inset-bottom));box-shadow:0 -6px 24px rgba(11,23,38,0.06);}
     @media(max-width:767px){.bottom-nav{display:flex;}}
-    .bnav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 4px;border:none;background:none;font-family:var(--font);font-size:calc(10px * var(--fs-scale,1));font-weight:700;color:var(--muted-l);cursor:pointer;transition:color var(--t-fast),transform var(--t-fast);min-height:48px;justify-content:center;}
+    .bnav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 4px;border:none;background:none;font-family:var(--font);font-size:0.625rem;font-weight:700;color:var(--muted-l);cursor:pointer;transition:color var(--t-fast),transform var(--t-fast);min-height:48px;justify-content:center;}
     .bnav-item:active{transform:scale(0.94);}
     .bnav-item.active{color:var(--teal-d);}
     .bnav-item svg{width:20px;height:20px;}
@@ -1026,11 +1029,11 @@ const injectStyles = () => {
     @media(max-width:767px){.page-head{padding:18px 16px 0;}.page-body{padding:16px 16px 32px;}}
     @media(max-width:380px){.page-head{padding:16px 12px 0;}.page-body{padding:14px 12px 28px;}}
     .form-narrow{width:100%;max-width:520px;margin:0 auto;}
-    .t-display{font-family:var(--display);font-size:calc(26px * var(--fs-scale,1));font-weight:700;color:var(--ink);line-height:1.2;letter-spacing:-0.3px;}
-    @media(max-width:480px){.t-display{font-size:calc(22px * var(--fs-scale,1));}}
-    .t-title{font-size:calc(18px * var(--fs-scale,1));font-weight:700;color:var(--ink);line-height:1.3;}
-    .t-subtitle{font-size:calc(14px * var(--fs-scale,1));color:var(--muted);font-weight:400;line-height:1.55;}
-    .t-label{font-size:calc(11px * var(--fs-scale,1));font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);}
+    .t-display{font-family:var(--display);font-size:1.625rem;font-weight:700;color:var(--ink);line-height:1.2;letter-spacing:-0.3px;}
+    @media(max-width:480px){.t-display{font-size:1.375rem;}}
+    .t-title{font-size:1.125rem;font-weight:700;color:var(--ink);line-height:1.3;}
+    .t-subtitle{font-size:0.875rem;color:var(--muted);font-weight:400;line-height:1.55;}
+    .t-label{font-size:0.6875rem;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);}
     .t-mono{font-feature-settings:'tnum';}
     .card{background:var(--surface);border-radius:var(--radius);box-shadow:var(--shadow-s);border:1px solid var(--border);transition:box-shadow var(--t-med),transform var(--t-med);}
     .card-p{padding:20px;}
@@ -1040,7 +1043,7 @@ const injectStyles = () => {
        obvious which section the user was sent to land on. */
     @keyframes settings-focus-pulse{0%,100%{box-shadow:var(--shadow-s);}50%{box-shadow:0 0 0 3px var(--teal-t,rgba(20,166,166,0.28)),var(--shadow-s);}}
     .settings-section-focus{animation:settings-focus-pulse 1.1s ease-in-out 2;border-color:var(--teal);}
-    .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:13px 22px;border-radius:var(--radius-s);font-family:var(--font);font-size:calc(14px * var(--fs-scale,1));font-weight:600;cursor:pointer;border:none;transition:background var(--t-fast),box-shadow var(--t-fast),transform var(--t-fast),opacity var(--t-fast);line-height:1;min-height:44px;}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:13px 22px;border-radius:var(--radius-s);font-family:var(--font);font-size:0.875rem;font-weight:600;cursor:pointer;border:none;transition:background var(--t-fast),box-shadow var(--t-fast),transform var(--t-fast),opacity var(--t-fast);line-height:1;min-height:44px;}
     .btn:active:not(:disabled){transform:scale(0.97);}
     .btn:disabled{opacity:0.5;cursor:not-allowed;}
     .btn-primary{background:linear-gradient(160deg,var(--teal) 0%,var(--teal-d) 100%);color:#fff;box-shadow:0 4px 14px rgba(var(--teal-rgb),0.3);}
@@ -1057,8 +1060,8 @@ const injectStyles = () => {
     .btn-lg{padding:16px 28px;font-size:15px;border-radius:var(--radius);min-height:52px;}
     .btn-sm{padding:9px 16px;font-size:12px;min-height:36px;}
     .field{margin-bottom:14px;}
-    .field-label{display:block;font-size:calc(11px * var(--fs-scale,1));font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:6px;}
-    .field-input{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:calc(15px * var(--fs-scale,1));color:var(--ink);background:var(--surface);outline:none;transition:border-color var(--t-fast),box-shadow var(--t-fast);min-height:46px;}
+    .field-label{display:block;font-size:0.6875rem;font-weight:700;text-transform:uppercase;letter-spacing:0.07em;color:var(--muted);margin-bottom:6px;}
+    .field-input{width:100%;padding:12px 14px;border:1.5px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:0.9375rem;color:var(--ink);background:var(--surface);outline:none;transition:border-color var(--t-fast),box-shadow var(--t-fast);min-height:46px;}
     .field-input:hover{border-color:var(--muted-l);}
     .field-input:focus{border-color:var(--teal);box-shadow:var(--focus-ring);}
     .field-input::placeholder{color:var(--muted-l);}
@@ -1069,7 +1072,7 @@ const injectStyles = () => {
     .pw-req.met{color:var(--green-d);}
     .pw-req svg{flex-shrink:0;}
     .field-select{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2390a0ae' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center;background-size:16px;cursor:pointer;}
-    .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:99px;font-size:calc(11px * var(--fs-scale,1));font-weight:700;letter-spacing:0.01em;}
+    .badge{display:inline-flex;align-items:center;padding:3px 10px;border-radius:99px;font-size:0.6875rem;font-weight:700;letter-spacing:0.01em;}
     .badge-High{background:var(--red-l);color:var(--red-d);}
     .badge-Medium{background:var(--amber-l);color:var(--amber-d);}
     .badge-Low{background:var(--green-l);color:var(--green-d);}
@@ -1105,7 +1108,7 @@ const injectStyles = () => {
     .auth-card{padding:28px 24px;border-radius:var(--radius-l);backdrop-filter:blur(18px);background:rgba(255,255,255,0.86);}
     :root[data-theme="dark"] .auth-card{background:rgba(22,31,41,0.82);}
     .tabs{display:flex;background:var(--border-l);border-radius:var(--radius-s);padding:4px;margin-bottom:22px;}
-    .tab{flex:1;padding:10px;text-align:center;border-radius:8px;font-family:var(--font);font-size:calc(13px * var(--fs-scale,1));font-weight:700;cursor:pointer;border:none;background:none;color:var(--muted);transition:background var(--t-fast),color var(--t-fast),box-shadow var(--t-fast);min-height:40px;}
+    .tab{flex:1;padding:10px;text-align:center;border-radius:8px;font-family:var(--font);font-size:0.8125rem;font-weight:700;cursor:pointer;border:none;background:none;color:var(--muted);transition:background var(--t-fast),color var(--t-fast),box-shadow var(--t-fast);min-height:40px;}
     .tab.active{background:var(--surface);color:var(--ink);box-shadow:var(--shadow-s);}
     .field-icon-wrap{position:relative;}
     .auth-input-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--muted-l);pointer-events:none;}
@@ -1161,20 +1164,20 @@ const injectStyles = () => {
     .stat-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:16px 12px;text-align:center;transition:box-shadow var(--t-med),transform var(--t-med);}
     .stat-card:hover{box-shadow:var(--shadow);transform:translateY(-2px);}
     .stat-icon{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;margin:0 auto 8px;}
-    .stat-val{font-size:calc(20px * var(--fs-scale,1));font-weight:800;color:var(--ink);line-height:1;}
-    @media(max-width:360px){.stat-val{font-size:calc(17px * var(--fs-scale,1));}}
-    .stat-lbl{font-size:calc(10px * var(--fs-scale,1));color:var(--muted);font-weight:600;margin-top:3px;text-transform:uppercase;letter-spacing:0.05em;}
+    .stat-val{font-size:1.25rem;font-weight:800;color:var(--ink);line-height:1;}
+    @media(max-width:360px){.stat-val{font-size:1.0625rem;}}
+    .stat-lbl{font-size:0.625rem;color:var(--muted);font-weight:600;margin-top:3px;text-transform:uppercase;letter-spacing:0.05em;}
     .section{padding:0 24px 20px;}
     @media(max-width:767px){.section{padding:0 16px 16px;}}
-    .section-ttl{font-size:calc(11px * var(--fs-scale,1));font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin-bottom:10px;}
+    .section-ttl{font-size:0.6875rem;font-weight:700;text-transform:uppercase;letter-spacing:0.08em;color:var(--muted);margin-bottom:10px;}
     .rec-list{display:flex;flex-direction:column;gap:8px;}
     .rec-card{background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);padding:14px 16px;display:flex;align-items:center;gap:12px;cursor:pointer;transition:box-shadow var(--t-med),transform var(--t-med),border-color var(--t-med);}
     .rec-card:hover{box-shadow:var(--shadow);border-color:var(--teal-l);transform:translateY(-1px);}
     .rec-card:active{transform:translateY(0) scale(0.99);}
     .rec-icon-wrap{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
     .rec-info{flex:1;min-width:0;}
-    .rec-name{font-size:calc(14px * var(--fs-scale,1));font-weight:700;color:var(--ink);}
-    .rec-meta{font-size:calc(12px * var(--fs-scale,1));color:var(--muted);margin-top:2px;}
+    .rec-name{font-size:0.875rem;font-weight:700;color:var(--ink);}
+    .rec-meta{font-size:0.75rem;color:var(--muted);margin-top:2px;}
 
     /* ── Health & Outbreaks Update feed ─────────────────────────
        Mobile: a single Twitter-style timeline card with divider rows
@@ -1192,13 +1195,13 @@ const injectStyles = () => {
     .news-avatar{width:36px;height:36px;border-radius:50%;background:var(--teal-xl);display:flex;align-items:center;justify-content:center;flex-shrink:0;}
     .news-body{flex:1;min-width:0;}
     .news-head{display:flex;align-items:center;gap:6px;margin-bottom:3px;flex-wrap:wrap;}
-    .news-source{font-size:calc(12px * var(--fs-scale,1));font-weight:700;color:var(--ink);}
+    .news-source{font-size:0.75rem;font-weight:700;color:var(--ink);}
     .news-dot{color:var(--muted-l);font-size:12px;}
-    .news-time{font-size:calc(12px * var(--fs-scale,1));color:var(--muted);}
-    .news-title{font-size:calc(14px * var(--fs-scale,1));font-weight:700;color:var(--ink);line-height:1.4;margin-bottom:4px;}
-    .news-summary{font-size:calc(13px * var(--fs-scale,1));color:var(--muted);line-height:1.5;margin-bottom:8px;
+    .news-time{font-size:0.75rem;color:var(--muted);}
+    .news-title{font-size:0.875rem;font-weight:700;color:var(--ink);line-height:1.4;margin-bottom:4px;}
+    .news-summary{font-size:0.8125rem;color:var(--muted);line-height:1.5;margin-bottom:8px;
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
-    .news-link{display:inline-flex;align-items:center;gap:5px;font-size:calc(12px * var(--fs-scale,1));font-weight:700;color:var(--teal-d);margin-top:auto;padding-top:2px;}
+    .news-link{display:inline-flex;align-items:center;gap:5px;font-size:0.75rem;font-weight:700;color:var(--teal-d);margin-top:auto;padding-top:2px;}
     /* width:100% scales with whatever contains it -- a full-width list
        row on mobile, an individual grid tile on desktop -- so aspect-ratio
        can safely drive the height without ever ballooning; min/max-height
@@ -1257,8 +1260,8 @@ const injectStyles = () => {
     .feat-row{display:flex;align-items:flex-start;gap:14px;padding:14px 0;}
     .feat-row+.feat-row{border-top:1px solid var(--border);}
     .feat-icon{width:36px;height:36px;background:var(--teal-xl);border-radius:10px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-    .feat-title{font-size:calc(13px * var(--fs-scale,1));font-weight:700;color:var(--ink);margin-bottom:2px;}
-    .feat-desc{font-size:calc(12px * var(--fs-scale,1));color:var(--muted);line-height:1.55;}
+    .feat-title{font-size:0.8125rem;font-weight:700;color:var(--ink);margin-bottom:2px;}
+    .feat-desc{font-size:0.75rem;color:var(--muted);line-height:1.55;}
     .q-screen{height:100vh;display:flex;flex-direction:column;background:var(--bg);}
     .q-topbar{background:var(--surface);border-bottom:1px solid var(--border);padding:14px 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;}
     @media(max-width:480px){.q-topbar{padding:12px 14px;}}
@@ -1278,10 +1281,10 @@ const injectStyles = () => {
     .q-illus{width:160px;height:160px;margin-bottom:24px;}
     @media(max-width:480px){.q-illus{width:128px;height:128px;margin-bottom:18px;}}
     .q-illus-svg{width:100%;height:100%;}
-    .q-text{font-family:var(--display);font-size:calc(22px * var(--fs-scale,1));font-weight:700;color:var(--ink);text-align:center;line-height:1.35;margin-bottom:32px;max-width:320px;}
-    @media(max-width:480px){.q-text{font-size:calc(19px * var(--fs-scale,1));margin-bottom:24px;}}
+    .q-text{font-family:var(--display);font-size:1.375rem;font-weight:700;color:var(--ink);text-align:center;line-height:1.35;margin-bottom:32px;max-width:320px;}
+    @media(max-width:480px){.q-text{font-size:1.1875rem;margin-bottom:24px;}}
     .q-answers{display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px;}
-    .ans-btn{display:flex;align-items:center;gap:12px;padding:16px 18px;border-radius:var(--radius);border:2px solid var(--border);background:var(--surface);font-family:var(--font);font-size:calc(15px * var(--fs-scale,1));font-weight:700;cursor:pointer;transition:border-color var(--t-fast),background var(--t-fast),transform var(--t-fast),box-shadow var(--t-fast);min-height:56px;}
+    .ans-btn{display:flex;align-items:center;gap:12px;padding:16px 18px;border-radius:var(--radius);border:2px solid var(--border);background:var(--surface);font-family:var(--font);font-size:0.9375rem;font-weight:700;cursor:pointer;transition:border-color var(--t-fast),background var(--t-fast),transform var(--t-fast),box-shadow var(--t-fast);min-height:56px;}
     .ans-btn:hover{box-shadow:var(--shadow-s);}
     .ans-btn:active{transform:scale(0.97);}
     .ans-btn.yes{border-color:#5fc9bb;background:var(--teal-xl);color:var(--teal-dd);}
@@ -1315,22 +1318,22 @@ const injectStyles = () => {
     .rec-bubble:nth-child(4){animation-delay:0.26s;}
     @keyframes bubble-in{from{opacity:0;transform:translateX(-8px);}to{opacity:1;transform:none;}}
     .rec-bubble-icon{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
-    .rec-bubble-label{font-size:calc(10px * var(--fs-scale,1));font-weight:800;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;}
-    .rec-bubble-text{font-size:calc(13px * var(--fs-scale,1));color:var(--ink-2);line-height:1.5;font-weight:500;}
+    .rec-bubble-label{font-size:0.625rem;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:3px;}
+    .rec-bubble-text{font-size:0.8125rem;color:var(--ink-2);line-height:1.5;font-weight:500;}
     .score-bar-row{display:flex;align-items:center;gap:10px;margin-bottom:9px;}
-    .score-bar-name{font-size:calc(12px * var(--fs-scale,1));color:var(--muted);width:150px;flex-shrink:0;}
-    @media(max-width:380px){.score-bar-name{width:104px;font-size:calc(11px * var(--fs-scale,1));}}
+    .score-bar-name{font-size:0.75rem;color:var(--muted);width:150px;flex-shrink:0;}
+    @media(max-width:380px){.score-bar-name{width:104px;font-size:0.6875rem;}}
     .score-bar-track{flex:1;height:5px;background:var(--border-l);border-radius:99px;overflow:hidden;}
     .score-bar-fill{height:100%;background:linear-gradient(90deg,var(--muted-l),var(--muted));border-radius:99px;transition:width var(--t-slow);}
-    .score-bar-pct{font-size:calc(12px * var(--fs-scale,1));color:var(--muted);width:30px;text-align:right;}
+    .score-bar-pct{font-size:0.75rem;color:var(--muted);width:30px;text-align:right;}
     .disclaimer{display:flex;gap:10px;align-items:flex-start;background:var(--amber-l);border:1px solid #f3cf8f;border-radius:var(--radius-s);padding:12px 14px;}
     .disclaimer p{font-size:12px;color:#7a4a09;line-height:1.55;}
     .search-wrap{position:relative;margin-bottom:12px;}
     .search-icon{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted-l);pointer-events:none;}
-    .search-input{width:100%;padding:12px 14px 12px 40px;border:1.5px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:calc(14px * var(--fs-scale,1));color:var(--ink);background:var(--surface);outline:none;transition:border-color var(--t-fast),box-shadow var(--t-fast);min-height:46px;}
+    .search-input{width:100%;padding:12px 14px 12px 40px;border:1.5px solid var(--border);border-radius:var(--radius-s);font-family:var(--font);font-size:0.875rem;color:var(--ink);background:var(--surface);outline:none;transition:border-color var(--t-fast),box-shadow var(--t-fast);min-height:46px;}
     .search-input:focus{border-color:var(--teal);box-shadow:var(--focus-ring);}
     .chip-row{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px;}
-    .chip{padding:7px 14px;border-radius:99px;border:1.5px solid var(--border);font-family:var(--font);font-size:calc(12px * var(--fs-scale,1));font-weight:700;cursor:pointer;transition:all var(--t-fast);background:var(--surface);color:var(--muted);min-height:36px;}
+    .chip{padding:7px 14px;border-radius:99px;border:1.5px solid var(--border);font-family:var(--font);font-size:0.75rem;font-weight:700;cursor:pointer;transition:all var(--t-fast);background:var(--surface);color:var(--muted);min-height:36px;}
     .chip:hover{border-color:var(--muted-l);}
     .chip.on{border-color:var(--teal);background:var(--teal-xl);color:var(--teal-d);}
     .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:56px 24px;gap:10px;text-align:center;}
@@ -1417,14 +1420,6 @@ const injectStyles = () => {
     .theme-preview-swatch.system-sw{background:linear-gradient(135deg,#f4f7f9 50%,#0f161e 50%);color:var(--ink);}
     @media(max-width:480px){.theme-preview-strip{gap:5px;}.theme-preview-swatch{height:38px;font-size:10px;padding:0 6px;gap:4px;}}
     @media(max-width:360px){.theme-preview-swatch{height:36px;font-size:0;gap:0;}.theme-preview-swatch svg{margin:0;}}
-    .fs-slider-row{display:flex;align-items:center;gap:10px;}
-    .fs-slider-a{color:var(--muted);font-weight:700;flex-shrink:0;user-select:none;line-height:1;}
-    .fs-slider{-webkit-appearance:none;appearance:none;flex:1;height:6px;border-radius:999px;outline:none;cursor:pointer;background:linear-gradient(to right,var(--teal) 0%,var(--teal) var(--fs-pct,50%),var(--border) var(--fs-pct,50%),var(--border) 100%);}
-    .fs-slider::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:20px;height:20px;border-radius:50%;background:var(--surface);border:3px solid var(--teal);box-shadow:var(--shadow-s);cursor:pointer;transition:transform var(--t-fast);}
-    .fs-slider::-webkit-slider-thumb:active{transform:scale(1.15);}
-    .fs-slider::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:var(--surface);border:3px solid var(--teal);box-shadow:var(--shadow-s);cursor:pointer;}
-    .fs-slider::-moz-range-track{height:6px;border-radius:999px;background:var(--border);}
-    .fs-slider::-moz-range-progress{height:6px;border-radius:999px;background:var(--teal);}
     @media(max-width:359px){.stats-row{grid-template-columns:1fr 1fr 1fr;}.q-answers{max-width:100%;}.hero-card{padding:20px 16px;}}
     @media(min-width:1280px){.page-head,.page-body{max-width:980px;margin-left:auto;margin-right:auto;width:100%;}}
   `;
@@ -1831,18 +1826,6 @@ export default function App() {
 
   const handleThemeChange = useCallback((t) => setTheme(t), []);
 
-  // ── Font size ──────────────────────────────
-  const [fontSize, setFontSize] = useState(() => {
-    const saved = Store.get("tc_settings");
-    return normalizeFontScale(saved?.fontSize);
-  });
-
-  useEffect(() => {
-    document.documentElement.style.setProperty("--fs-scale", fontSize);
-  }, [fontSize]);
-
-  const handleFontSizeChange = useCallback((fs) => setFontSize(normalizeFontScale(fs)), []);
-
   // ── Language ───────────────────────────────
   // Sets the real <html lang> attribute (used by screen readers and the
   // browser, independent of whether in-app text is translated yet) as soon
@@ -2125,8 +2108,6 @@ export default function App() {
             toast={toast}
             onThemeChange={handleThemeChange}
             currentTheme={theme}
-            onFontSizeChange={handleFontSizeChange}
-            currentFontSize={fontSize}
             focusSection={pageAnchor}
           />
         );
@@ -5637,9 +5618,8 @@ function AboutScreen({ onBack }) {
 // ─────────────────────────────────────────────
 // SETTINGS SCREEN
 // ─────────────────────────────────────────────
-function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSizeChange, currentFontSize, focusSection }) {
+function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, focusSection }) {
   const [theme,    setTheme]    = useState(currentTheme || "light");
-  const [fontSize, setFontSize] = useState(normalizeFontScale(currentFontSize));
   const [notifs,   setNotifs]   = useState(false);
   const [lang,     setLang]     = useState("en");
   const [saved,    setSaved]    = useState(false);
@@ -5683,11 +5663,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
   // Sync if parent-supplied values change
   useEffect(() => {
     if (currentTheme && currentTheme !== theme) setTheme(currentTheme);
-    if (currentFontSize !== undefined) {
-      const n = normalizeFontScale(currentFontSize);
-      if (n !== fontSize) setFontSize(n);
-    }
-  }, [currentTheme, currentFontSize]);
+  }, [currentTheme]);
 
   // Load persisted settings on mount. The `notifications` flag here is
   // shown immediately as an optimistic best-guess (avoids a blank/off
@@ -5698,7 +5674,6 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
     const s = Store.get("tc_settings");
     if (s) {
       if (s.theme)         setTheme(s.theme);
-      if (s.fontSize !== undefined) setFontSize(normalizeFontScale(s.fontSize));
       if (s.notifications !== undefined) setNotifs(s.notifications !== false);
       if (s.language)      setLang(s.language);
     }
@@ -5763,15 +5738,6 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
     if (onThemeChange) onThemeChange(val);
   };
 
-  const applyFontSize = (val) => {
-    const scale = normalizeFontScale(val);
-    setFontSize(scale);
-    setSaved(false);
-    // Apply immediately for live preview
-    document.documentElement.style.setProperty("--fs-scale", scale);
-    if (onFontSizeChange) onFontSizeChange(scale);
-  };
-
   // "System" resolves to whatever the device/browser is set to -- we only
   // ship English and French copy, so anything else falls back to English,
   // same as most apps do when a device language isn't one they support yet.
@@ -5789,9 +5755,8 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
   };
 
   const save = () => {
-    Store.set("tc_settings", { theme, fontSize, notifications: notifs, language: lang });
-    if (onThemeChange)    onThemeChange(theme);
-    if (onFontSizeChange) onFontSizeChange(fontSize);
+    Store.set("tc_settings", { theme, notifications: notifs, language: lang });
+    if (onThemeChange) onThemeChange(theme);
     document.documentElement.setAttribute("lang", lang === "system" ? detectSystemLanguage() : lang);
     setSaved(true);
     toast("Settings saved.");
@@ -5869,29 +5834,6 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, onFontSize
               </div>
             )}
 
-            {/* Font size */}
-            <div style={{ borderTop: "1px solid var(--border)", marginTop: 16, paddingTop: 16 }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-                <div className="t-label" style={{ marginBottom: 0 }}>Text Size</div>
-                <span style={{ fontSize: 12, fontWeight: 700, color: "var(--teal)" }}>{Math.round((fontSize / FS_DEFAULT) * 100)}%</span>
-              </div>
-              <div className="fs-slider-row">
-                <span className="fs-slider-a" style={{ fontSize: 12 }}>A</span>
-                <input
-                  type="range"
-                  className="fs-slider"
-                  min={FS_MIN}
-                  max={FS_MAX}
-                  step={0.01}
-                  value={fontSize}
-                  onChange={(e) => applyFontSize(Number(e.target.value))}
-                  style={{ "--fs-pct": `${((fontSize - FS_MIN) / (FS_MAX - FS_MIN)) * 100}%` }}
-                  aria-label="Text size"
-                  aria-valuetext={`${Math.round((fontSize / FS_DEFAULT) * 100)}%`}
-                />
-                <span className="fs-slider-a" style={{ fontSize: 21 }}>A</span>
-              </div>
-            </div>
           </div>
         </div>
 
