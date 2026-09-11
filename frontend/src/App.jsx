@@ -1786,7 +1786,7 @@ function InstallTopBar({ visible, toast }) {
   // which is what made it feel like nothing had happened before.
   useEffect(() => {
     if (typeof window === "undefined" || !toast) return;
-    const onInstalled = () => toast("Installed! Find TropiCare on your home screen or app list.");
+    const onInstalled = () => toast("TropiCare Installed.");
     window.addEventListener("appinstalled", onInstalled);
     return () => window.removeEventListener("appinstalled", onInstalled);
   }, [toast]);
