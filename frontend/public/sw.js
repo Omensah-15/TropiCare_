@@ -1,93 +1,50 @@
-// TropiCare service worker
+// TropiCare service worker: offline shell caching + Web Push.
 //
-// Two responsibilities:
-//   1. PWA installability shell caching (unchanged from before).
-//   2. Web Push handling — receiving a push event from the browser's
-//      push service and turning it into a visible OS notification, then
-//      routing a tap on that notification back into the app.
-//
-// It does NOT precache the Vite build's hashed JS/CSS bundles -- those
-// filenames change on every deploy, so a hardcoded precache list would
-// go stale and serve outdated code. Vite's own long-lived cache headers
-// already handle those efficiently. This worker only caches the app
-// shell entry points needed to open the app while offline, and it
-// never touches API calls, so diagnostic/session data is always fetched
-// fresh and is never served stale from a cache.
+// Compiled by vite-plugin-pwa's "injectManifest" strategy (see
+// vite.config.js), which replaces self.__WB_MANIFEST below with the real
+// list of hashed files this build produced, generated fresh on every build.
 
-const CACHE_NAME = "tropicare-shell-v2";
-const SHELL_URLS = [
-  "/",
-  "/manifest.json",
-  "/icons/icon-192.png",
-  "/icons/icon-512.png",
-  "/icons/badge-96.png",
-];
+import { precache, matchPrecache, cleanupOutdatedCaches } from "workbox-precaching";
 
-// Must match App.jsx's API_BASE -- used only by the pushsubscriptionchange
-// handler below to re-register a rotated subscription with the backend
-// without requiring the app to be open.
+// precache() only, not precacheAndRoute(): the latter also registers its
+// own 'fetch' listener, which can race the one below and throw
+// "respondWith already called" on navigation. precache() just fills the
+// cache; the listener below is the only thing that ever responds.
+precache(self.__WB_MANIFEST);
+
+// Must match App.jsx's API_BASE -- used by pushsubscriptionchange below.
 const API_BASE = "https://tropicare.onrender.com/api/v1";
 
-self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) =>
-      cache.addAll(SHELL_URLS).catch(() => {
-        // Best-effort: if one shell asset 404s (e.g. icons not deployed
-        // yet), don't fail the whole install.
-      })
-    )
-  );
+self.addEventListener("install", () => {
   self.skipWaiting();
 });
 
 self.addEventListener("activate", (event) => {
-  event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
-      .then(() => self.clients.claim())
-  );
+  event.waitUntil(cleanupOutdatedCaches().then(() => self.clients.claim()));
 });
 
 self.addEventListener("fetch", (event) => {
   const { request } = event;
 
-  // Never intercept API calls -- always hit the network so diagnostic
-  // sessions, auth, and clinic data are never served stale or offline
-  // when they shouldn't be. Adjust this prefix if the API is proxied
-  // under a different path.
+  // Never intercept API calls -- diagnostic/session data must always be fresh.
   if (request.method !== "GET" || new URL(request.url).pathname.startsWith("/api/")) {
     return;
   }
 
-  // Navigations (loading the app itself): try the network first so
-  // users always get the latest deploy, falling back to the cached
-  // shell only when offline.
+  // Navigations: network-first, precached shell as the offline fallback.
   if (request.mode === "navigate") {
-    event.respondWith(
-      fetch(request).catch(() => caches.match("/"))
-    );
+    event.respondWith(fetch(request).catch(() => matchPrecache("index.html")));
     return;
   }
 
-  // Static shell assets (icons, manifest): cache-first, network fallback.
-  if (SHELL_URLS.includes(new URL(request.url).pathname)) {
-    event.respondWith(
-      caches.match(request).then((cached) => cached || fetch(request))
-    );
-  }
+  // Everything else this build produced: cache-first from the precache above.
+  event.respondWith(
+    (async () => (await matchPrecache(request)) || fetch(request))()
+  );
 });
 
-// -----------------------------------------------------------------
-// PUSH -- receiving a Web Push message
-//
-// The backend's _send_web_push() (main.py) sends a JSON payload of the
-// shape { title, body, url } via webpush(). This is the ONLY place that
-// payload is consumed: no title/body defaults are invented here beyond a
-// safe fallback for a malformed or empty push (some push services allow
-// pushes with no body at all).
-// -----------------------------------------------------------------
-
+// ── PUSH ─────────────────────────────────────────────────────────
+// Payload shape { title, body, url } comes from main.py's _send_web_push().
 self.addEventListener("push", (event) => {
   let data = { title: "TropiCare Health Alert", body: "New health update available.", url: "/" };
 
@@ -100,27 +57,17 @@ self.addEventListener("push", (event) => {
         url:   parsed.url   || data.url,
       };
     } catch (e) {
-      // Not valid JSON -- fall back to treating it as plain text for the
-      // body rather than dropping the notification entirely.
       try {
         data.body = event.data.text() || data.body;
-      } catch (_) {
-        // Leave the default fallback in place.
-      }
+      } catch (_) {}
     }
   }
 
   const options = {
     body: data.body,
-    // Large icon shown inside the notification body -- full color is
-    // fine here, this is NOT what renders in the status bar.
     icon: "/icons/icon-192.png",
-    // Status-bar / task-bar glyph. Android and Chrome render this as a
-    // MONOCHROME SILHOUETTE: they discard all color and mask it from
-    // the alpha channel alone. It must be its own dedicated asset --
-    // white artwork on a transparent background -- never the full-color
-    // app icon, or the OS has nothing to carve a shape out of and just
-    // shows a solid block. See /icons/badge-96.png.
+    // Android/Chrome render this as a monochrome silhouette (alpha
+    // channel only) -- must be white-on-transparent, not the color icon.
     badge: "/icons/badge-96.png",
     data: { url: data.url },
     tag: "tropicare-outbreak-news",
@@ -130,14 +77,8 @@ self.addEventListener("push", (event) => {
   event.waitUntil(self.registration.showNotification(data.title, options));
 });
 
-// -----------------------------------------------------------------
-// NOTIFICATION CLICK -- routes a tap back into the app.
-//
-// If a TropiCare tab/window is already open, focuses it and navigates
-// it to the article URL rather than opening a duplicate window. Only
-// opens a new window when none exists.
-// -----------------------------------------------------------------
-
+// ── NOTIFICATION CLICK ───────────────────────────────────────────
+// Focuses an existing tab and navigates it; opens a new one only if none exists.
 self.addEventListener("notificationclick", (event) => {
   const targetUrl = (event.notification.data && event.notification.data.url) || "/";
   event.notification.close();
@@ -147,31 +88,20 @@ self.addEventListener("notificationclick", (event) => {
       for (const client of clientList) {
         if ("focus" in client) {
           client.focus();
-          if ("navigate" in client) {
-            return client.navigate(targetUrl).catch(() => {});
-          }
+          if ("navigate" in client) return client.navigate(targetUrl).catch(() => {});
           return;
         }
       }
-      if (self.clients.openWindow) {
-        return self.clients.openWindow(targetUrl);
-      }
+      if (self.clients.openWindow) return self.clients.openWindow(targetUrl);
     })
   );
 });
 
-// -----------------------------------------------------------------
-// PUSH SUBSCRIPTION CHANGE -- fires when the browser/push service
-// invalidates and rotates a subscription on its own (expiry, browser
-// key rotation, etc.), independent of the user ever touching the
-// Settings toggle. Without handling this, the account's stored
-// PushSubscriptionModel row (main.py) goes stale silently and the
-// person stops receiving alerts with no visible sign why. Re-subscribes
-// with a fresh applicationServerKey fetched from the backend's
-// unauthenticated /push/public-key endpoint, then re-registers it —
-// upserted by endpoint, so this is safe even if it races a foreground
-// subscribe from Settings.
-// -----------------------------------------------------------------
+// ── PUSH SUBSCRIPTION CHANGE ─────────────────────────────────────
+// Fires when the browser/push service rotates a subscription on its own.
+// Re-subscribes and re-registers with the backend so alerts don't silently
+// stop; the /push/subscribe endpoint upserts, so this is safe even if it
+// races a foreground subscribe from Settings.
 
 function urlBase64ToUint8Array(base64String) {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
@@ -196,31 +126,22 @@ self.addEventListener("pushsubscriptionchange", (event) => {
         });
 
         const token = await getStoredToken();
-        if (!token) return; // no signed-in session to attribute this to
+        if (!token) return;
 
         const subJson = newSubscription.toJSON();
         await fetch(`${API_BASE}/push/subscribe`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({ endpoint: subJson.endpoint, keys: subJson.keys }),
         });
       } catch (e) {
-        // Best-effort only -- the next time the app is opened in the
-        // foreground, Settings' own status check (App.jsx) will detect
-        // the mismatch and let the user re-enable manually.
+        // Best-effort -- Settings' own status check will catch the mismatch later.
       }
     })()
   );
 });
 
-// Service workers have no direct access to localStorage. The auth token
-// is read from an open client's storage via postMessage if one exists;
-// if the app isn't open at all when this fires, there is nothing to
-// authenticate the re-subscription with, and it is skipped (safe no-op
-// -- see the comment above).
+// Service workers can't touch localStorage directly -- ask an open client.
 async function getStoredToken() {
   const allClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   if (allClients.length === 0) return null;
