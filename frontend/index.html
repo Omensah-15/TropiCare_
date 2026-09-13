@@ -5,16 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>TropiCare</title>
 
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
+    <meta name="theme-color" content="#f4f7f9" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="TropiCare" />
+
     <!--
-      Sets data-theme (and the theme-color meta below) BEFORE the browser's
-      first paint. This must run here, synchronously, ahead of any stylesheet
-      and ahead of React mounting -- an inline <script> blocks HTML parsing,
-      so by the time the browser paints anything, :root[data-theme="..."]
-      already resolves. Without this, the page always paints light first
-      (no data-theme attribute yet) and only flips once App.jsx's useEffect
-      runs post-mount -- that flash is the "wrong theme on open" bug.
-      Keep this in sync with the two --bg hex values in App.jsx's :root and
-      :root[data-theme="dark"] blocks (#f4f7f9 / #0f161e).
+      Sets data-theme (and corrects the theme-color meta above) BEFORE the
+      browser's first paint. This must run here, synchronously, ahead of any
+      stylesheet and ahead of React mounting -- an inline <script> blocks
+      HTML parsing, so by the time the browser paints anything,
+      :root[data-theme="..."] already resolves and the status-bar meta
+      already carries the right color for an installed Android PWA's launch
+      chrome (which is read very early and does not reliably pick up a
+      correction made later, after React mounts).
+      MUST come after the <meta name="theme-color"> tag above -- an inline
+      script runs the instant the parser reaches it, so if it ran first,
+      document.querySelector would find nothing yet and silently do
+      nothing, which is exactly the bug that caused this to stay stuck on
+      the static light value.
+      Keep the two hex values below in sync with the --bg values in
+      App.jsx's :root and :root[data-theme="dark"] blocks.
     -->
     <script>
       (function () {
@@ -27,20 +40,21 @@
               : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
               ? "dark"
               : "light";
+          var bg = resolved === "dark" ? "#0f161e" : "#f4f7f9";
+
           document.documentElement.setAttribute("data-theme", resolved);
           document.documentElement.style.colorScheme = resolved;
+
           var meta = document.querySelector('meta[name="theme-color"]');
-          if (meta) meta.setAttribute("content", resolved === "dark" ? "#0f161e" : "#f4f7f9");
+          if (!meta) {
+            meta = document.createElement("meta");
+            meta.setAttribute("name", "theme-color");
+            document.head.appendChild(meta);
+          }
+          meta.setAttribute("content", bg);
         } catch (e) {}
       })();
     </script>
-
-    <link rel="manifest" href="/manifest.json" />
-    <link rel="apple-touch-icon" href="/icons/icon-180.png" />
-    <meta name="theme-color" content="#f4f7f9" />
-    <meta name="apple-mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
-    <meta name="apple-mobile-web-app-title" content="TropiCare" />
   </head>
   <body>
     <div id="root"></div>
