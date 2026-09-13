@@ -1179,9 +1179,16 @@ const injectStyles = () => {
     .home-header{display:flex;align-items:center;justify-content:space-between;padding:24px 24px 16px;}
     @media(max-width:767px){.home-header{padding:18px 16px 14px;}}
     .greeting{font-size:12px;color:var(--muted);margin-bottom:3px;font-weight:500;}
-    .hero-card{margin:0 24px 20px;padding:28px;border-radius:var(--radius-l);background:linear-gradient(150deg,var(--teal) 0%,var(--teal-dd) 100%);position:relative;overflow:hidden;box-shadow:0 12px 32px rgba(var(--teal-rgb),0.24);}
+    .hero-card{
+      margin:0 24px 20px;padding:28px;border-radius:var(--radius-l);
+      background:
+        linear-gradient(150deg, rgba(7,58,53,0.88) 0%, rgba(7,58,53,0.35) 45%, rgba(4,36,33,0.82) 100%),
+        url('https://images.unsplash.com/photo-1758691461935-202e2ef6b69f?auto=format&fit=crop&w=1600&q=80') center 30%/cover no-repeat;
+      background-color:var(--teal-dd);
+      position:relative;overflow:hidden;
+      box-shadow:0 12px 32px rgba(var(--teal-rgb),0.24);
+    }
     @media(max-width:767px){.hero-card{margin:0 16px 16px;padding:22px 20px;}}
-    .hero-bg-icon{position:absolute;top:-16px;right:-16px;opacity:0.1;}
     .hero-eyebrow{font-size:11px;color:rgba(255,255,255,0.7);font-weight:700;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;}
     .hero-headline{font-family:var(--display);font-size:22px;color:#fff;line-height:1.3;margin-bottom:18px;}
     @media(max-width:480px){.hero-headline{font-size:19px;}}
@@ -3259,7 +3266,6 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
 
       {/* Hero */}
       <div className="hero-card">
-        <div className="hero-bg-icon"><Icon name="heart" size={110} color="#fff" /></div>
         <div className="hero-eyebrow">Guided Clinical Assessment</div>
         <div className="hero-headline">Check your symptoms in under 2 minutes</div>
         <button className="hero-btn" onClick={() => onStart()}>
@@ -3472,7 +3478,6 @@ function WorkerDashboard({ user, onStart, onNav, toast }) {
           landing here already knows what the tool does and wants to move
           fast. */}
       <div className="hero-card">
-        <div className="hero-bg-icon"><Icon name="activity" size={110} color="#fff" /></div>
         <div className="hero-eyebrow">Health Worker Screening</div>
         <div className="hero-headline">Start a new patient check</div>
         <button className="hero-btn" onClick={() => setView("register")}>
