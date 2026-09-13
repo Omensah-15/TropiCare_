@@ -5,6 +5,36 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>TropiCare</title>
 
+    <!--
+      Sets data-theme (and the theme-color meta below) BEFORE the browser's
+      first paint. This must run here, synchronously, ahead of any stylesheet
+      and ahead of React mounting -- an inline <script> blocks HTML parsing,
+      so by the time the browser paints anything, :root[data-theme="..."]
+      already resolves. Without this, the page always paints light first
+      (no data-theme attribute yet) and only flips once App.jsx's useEffect
+      runs post-mount -- that flash is the "wrong theme on open" bug.
+      Keep this in sync with the two --bg hex values in App.jsx's :root and
+      :root[data-theme="dark"] blocks (#f4f7f9 / #0f161e).
+    -->
+    <script>
+      (function () {
+        try {
+          var saved = JSON.parse(localStorage.getItem("tc_settings") || "null");
+          var theme = saved && saved.theme;
+          var resolved =
+            theme === "dark" || theme === "light"
+              ? theme
+              : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
+              ? "dark"
+              : "light";
+          document.documentElement.setAttribute("data-theme", resolved);
+          document.documentElement.style.colorScheme = resolved;
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute("content", resolved === "dark" ? "#0f161e" : "#f4f7f9");
+        } catch (e) {}
+      })();
+    </script>
+
     <link rel="manifest" href="/manifest.json" />
     <link rel="apple-touch-icon" href="/icons/icon-180.png" />
     <meta name="theme-color" content="#f4f7f9" />
