@@ -80,6 +80,57 @@ function preloadSocialSdks() {
 }
 
 // ─────────────────────────────────────────────
+// HERO CARD BACKGROUND ROTATION
+// ─────────────────────────────────────────────
+// A small curated set of on-brand photos for the Hero card backdrop --
+// real clinical/care moments rather than a stock-icon gradient. Images
+// are self-hosted (served from /public/hero/) rather than hotlinked to
+// a third party: a hotlinked stock-photo URL can be rate-limited, swapped,
+// or taken down outside your control, which is a bad look for a hero
+// banner in production. Drop the 5 files described below into your
+// public/hero/ folder (any static-assets folder your bundler serves
+// works the same way) -- see the chat reply for exactly which photos
+// and where to get them.
+//
+// The active photo is picked deterministically from the current time,
+// not Math.random(), so it: (a) stays identical across every reload/tab
+// within the window (no flicker, no inconsistency between the patient
+// and admin seeing different things at the same moment unless offset
+// on purpose below), and (b) advances on a fixed cadence rather than
+// reshuffling on every visit. HERO_ROTATION_HOURS controls that cadence.
+const HERO_IMAGES = [
+  { file: "/hero/consultation.jpg",  focus: "center 30%" }, // doctor consulting a patient in clinic
+  { file: "/hero/nurse.jpg",         focus: "center 22%" }, // nurse in scrubs, clinic setting
+  { file: "/hero/telehealth.jpg",    focus: "center 35%" }, // telehealth video consultation
+  { file: "/hero/pediatric.jpg",     focus: "center 28%" }, // pediatric check-up with parent present
+  { file: "/hero/chart.jpg",         focus: "center 30%" }, // clinician charting a diagnosis
+];
+const HERO_ROTATION_HOURS = 60; // ~2.5 days per photo ("every 2-3 days")
+
+// offset lets two Hero cards on different screens (patient home vs.
+// health-worker screening) show a different-but-still-curated photo at
+// the same moment, instead of looking identical everywhere in the app.
+function getHeroImage(offset = 0) {
+  const slot = Math.floor(Date.now() / (HERO_ROTATION_HOURS * 60 * 60 * 1000));
+  const idx = ((slot + offset) % HERO_IMAGES.length + HERO_IMAGES.length) % HERO_IMAGES.length;
+  return HERO_IMAGES[idx];
+}
+
+// Builds the inline background style for a Hero card from a curated
+// image entry: a teal-tinted dark gradient layered over the photo so
+// the white headline/eyebrow/button stay readable at any crop.
+function heroBackgroundStyle(offset = 0) {
+  const { file, focus } = getHeroImage(offset);
+  return {
+    backgroundImage:
+      `linear-gradient(150deg, rgba(7,58,53,0.88) 0%, rgba(7,58,53,0.35) 45%, rgba(4,36,33,0.82) 100%), url('${file}')`,
+    backgroundPosition: focus,
+    backgroundSize: "cover",
+    backgroundRepeat: "no-repeat",
+  };
+}
+
+// ─────────────────────────────────────────────
 // API CLIENT
 // ─────────────────────────────────────────────
 const TOKEN_KEY = "tc_token";
@@ -1180,10 +1231,10 @@ const injectStyles = () => {
     @media(max-width:767px){.home-header{padding:18px 16px 14px;}}
     .greeting{font-size:12px;color:var(--muted);margin-bottom:3px;font-weight:500;}
     .hero-card{
+      /* Background image + overlay gradient are applied inline per-instance
+         via heroBackgroundStyle() so the photo can rotate every ~2-3 days.
+         background-color below is just the fallback while the photo loads. */
       margin:0 24px 20px;padding:28px;border-radius:var(--radius-l);
-      background:
-        linear-gradient(150deg, rgba(7,58,53,0.88) 0%, rgba(7,58,53,0.35) 45%, rgba(4,36,33,0.82) 100%),
-        url('https://images.unsplash.com/photo-1758691461935-202e2ef6b69f?auto=format&fit=crop&w=1600&q=80') center 30%/cover no-repeat;
       background-color:var(--teal-dd);
       position:relative;overflow:hidden;
       box-shadow:0 12px 32px rgba(var(--teal-rgb),0.24);
@@ -3264,8 +3315,8 @@ function HomeScreen({ userId, user, onStart, onNav, toast }) {
         <Avatar src={user?.avatar} name={user?.name || "P"} />
       </div>
 
-      {/* Hero */}
-      <div className="hero-card">
+      {/* Hero -- offset 0: rotates through HERO_IMAGES every ~2-3 days */}
+      <div className="hero-card" style={heroBackgroundStyle(0)}>
         <div className="hero-eyebrow">Guided Clinical Assessment</div>
         <div className="hero-headline">Check your symptoms in under 2 minutes</div>
         <button className="hero-btn" onClick={() => onStart()}>
@@ -3477,7 +3528,7 @@ function WorkerDashboard({ user, onStart, onNav, toast }) {
           rather than the Check tab's explainer screen, since a worker
           landing here already knows what the tool does and wants to move
           fast. */}
-      <div className="hero-card">
+      <div className="hero-card" style={heroBackgroundStyle(2)}>
         <div className="hero-eyebrow">Health Worker Screening</div>
         <div className="hero-headline">Start a new patient check</div>
         <button className="hero-btn" onClick={() => setView("register")}>
