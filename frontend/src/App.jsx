@@ -441,10 +441,16 @@ function detectSystemFontScale() {
   return Number.isFinite(scale) ? Math.min(FS_MAX, Math.max(FS_MIN, scale)) : 1;
 }
 
-// Keeps the browser/PWA status bar (the <meta name="theme-color"> the OS
-// reads for the address bar, task-switcher card, and installed-app status
-// bar) matched to whichever theme is actually on screen, instead of the
-// fixed brand teal from manifest.json. It reads the *live* --bg value
+// Keeps <meta name="theme-color"> matched to whichever theme is actually
+// on screen, instead of the fixed brand teal from manifest.json. This is
+// what the OS reads for: the Android/desktop browser address bar, the
+// task-switcher card, and an *installed Android* PWA's status bar -- all
+// of which apply it live, so this alone is enough to make those match the
+// in-app toggle instantly. iOS Safari tabs (not installed) also read it
+// live as of iOS 15. An iOS app added to the home screen is the one
+// exception: WebKit never applies theme-color in that standalone mode at
+// all, which is why .status-bar-safe-area exists above -- see its comment.
+// It reads the *live* --bg value
 // straight off :root -- rather than duplicating the light/dark hex codes
 // here -- so it can never drift out of sync with the real theme CSS.
 // Called right after data-theme is set, so the CSS variable has already
@@ -992,6 +998,16 @@ const injectStyles = () => {
       --muted:#5b6b7c;--muted-l:#90a0ae;
       --border:#dde4ea;--border-l:#eef2f5;
       --surface:#ffffff;--bg:#f4f7f9;
+      /* iOS installs its status bar in "black-translucent" mode (see
+         index.html), which always renders white/light status bar icons
+         and can't be flipped per-theme at runtime -- that's a fixed
+         WebKit constraint, not something any JS here can change. So the
+         strip actually sitting behind the transparent status bar uses
+         its own color rather than the page --bg: dark enough in both
+         themes to keep those white icons legible. Android/desktop never
+         see this var -- their status bar/tab color comes from the fully
+         dynamic <meta name="theme-color"> synced in syncStatusBarColor(). */
+      --status-bar-safe-bg:#073a35;
       --font:'Sora',sans-serif;--display:'Playfair Display',serif;
       --radius-s:10px;--radius:16px;--radius-l:24px;
       --shadow-xs:0 1px 2px rgba(11,23,38,0.05);
@@ -1012,6 +1028,7 @@ const injectStyles = () => {
       --muted:#7c8a99;--muted-l:#4f5d6c;
       --border:#263241;--border-l:#1c2733;
       --surface:#161f29;--bg:#0f161e;
+      --status-bar-safe-bg:var(--bg);
       --teal:#14b8a6;--teal-d:#2dd4bf;--teal-dd:#0e8f80;
       --teal-l:#1b3d35;--teal-xl:#102621;--teal-rgb:20,184,166;
       --red:#f25656;--red-d:#f87171;--red-l:#2c1618;
@@ -1131,6 +1148,15 @@ const injectStyles = () => {
     .nav-item.active::before{content:'';position:absolute;left:-10px;top:8px;bottom:8px;width:3px;background:var(--teal);border-radius:0 4px 4px 0;}
     .sidebar-foot{padding:16px 10px 0;border-top:1px solid var(--border);margin:0 10px;}
     .bottom-nav{position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--border);display:none;z-index:100;padding:6px 0 calc(6px + env(safe-area-inset-bottom));box-shadow:0 -6px 24px rgba(11,23,38,0.06);}
+    /* Paints the OS status-bar area itself on installed iOS PWAs. iOS makes
+       that region transparent in black-translucent mode (see index.html) so
+       whatever is drawn immediately below it shows through -- this div is
+       that drawing. It tracks the theme live via --status-bar-safe-bg, so
+       toggling light/dark updates it exactly like the Android status bar,
+       with no JS involved. env(safe-area-inset-top) collapses to 0 on
+       devices/browsers without a notch/Dynamic Island, so it's a harmless
+       0-height no-op everywhere else. */
+    .status-bar-safe-area{position:fixed;top:0;left:0;right:0;height:env(safe-area-inset-top,0px);background:var(--status-bar-safe-bg);z-index:10000;pointer-events:none;}
     @media(max-width:767px){.bottom-nav{display:flex;}}
     .bnav-item{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 4px;border:none;background:none;font-family:var(--font);font-size:calc(10px * var(--fs-scale,1));font-weight:700;color:var(--muted-l);cursor:pointer;transition:color var(--t-fast),transform var(--t-fast);min-height:48px;justify-content:center;}
     .bnav-item:active{transform:scale(0.94);}
@@ -2486,6 +2512,7 @@ export default function App() {
 
   return (
     <>
+      <div className="status-bar-safe-area" aria-hidden="true" />
       <InstallTopBar visible={!splash} toast={toast} />
       <Notif msg={notif} />
       {renderScreen()}
