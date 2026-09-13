@@ -26,8 +26,15 @@
       document.querySelector would find nothing yet and silently do
       nothing, which is exactly the bug that caused this to stay stuck on
       the static light value.
-      Keep the two hex values below in sync with the --bg values in
-      App.jsx's :root and :root[data-theme="dark"] blocks.
+      Keep the two hex values below in sync with the --status-bar-color
+      values in App.jsx's :root and :root[data-theme="dark"] blocks --
+      NOT --bg. Dark mode deliberately uses a solid brand teal here
+      instead of the near-black page background: Chrome for Android has
+      no reliable way to keep an installed PWA's native status bar in
+      sync with in-app theme toggles at runtime today (open Chromium
+      bug, unresolved as of writing), so this is a fixed, on-brand color
+      chosen to look intentional regardless -- the same teal the splash
+      screen uses, not an attempt to chase the page's own background.
     -->
     <script>
       (function () {
@@ -40,7 +47,7 @@
               : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
               ? "dark"
               : "light";
-          var bg = resolved === "dark" ? "#0f161e" : "#f4f7f9";
+          var bg = resolved === "dark" ? "#0e8f80" : "#f4f7f9";
 
           document.documentElement.setAttribute("data-theme", resolved);
           document.documentElement.style.colorScheme = resolved;
