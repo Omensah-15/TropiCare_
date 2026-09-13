@@ -449,16 +449,29 @@ function detectSystemFontScale() {
 // here -- so it can never drift out of sync with the real theme CSS.
 // Called right after data-theme is set, so the CSS variable has already
 // resolved by the time getComputedStyle reads it.
+//
+// Some PWA starter templates ship index.html with TWO theme-color tags
+// split by a `media="(prefers-color-scheme: ...)"` attribute, meant for
+// sites that never let the user override the OS scheme. That pattern
+// actively fights this app, which *does* let someone pick "dark" while
+// their phone is still in light mode (or vice versa): whichever tag's
+// media condition matches the OS wins, no matter what content either
+// tag holds. So on first run this collapses every existing theme-color
+// tag down to a single one with no media attribute, which this function
+// then owns exclusively -- the app's own theme choice always wins.
 function syncStatusBarColor() {
   if (typeof document === "undefined") return;
   const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
   if (!bg) return;
-  let meta = document.querySelector('meta[name="theme-color"]');
+  const existing = document.querySelectorAll('meta[name="theme-color"]');
+  existing.forEach((el, i) => { if (i > 0) el.remove(); });
+  let meta = existing[0];
   if (!meta) {
     meta = document.createElement("meta");
     meta.setAttribute("name", "theme-color");
     document.head.appendChild(meta);
   }
+  meta.removeAttribute("media");
   meta.setAttribute("content", bg);
 }
 
