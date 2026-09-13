@@ -450,9 +450,10 @@ function detectSystemFontScale() {
 // live as of iOS 15. An iOS app added to the home screen is the one
 // exception: WebKit never applies theme-color in that standalone mode at
 // all, which is why .status-bar-safe-area exists above -- see its comment.
-// It reads the *live* --bg value
-// straight off :root -- rather than duplicating the light/dark hex codes
-// here -- so it can never drift out of sync with the real theme CSS.
+// It reads the *live* --status-bar-color value straight off :root -- a
+// deliberate, fixed brand color per theme (see its definition) rather
+// than the page's own --bg -- so it can never drift out of sync with
+// whatever that's set to.
 // Called right after data-theme is set, so the CSS variable has already
 // resolved by the time getComputedStyle reads it.
 //
@@ -467,8 +468,8 @@ function detectSystemFontScale() {
 // then owns exclusively -- the app's own theme choice always wins.
 function syncStatusBarColor() {
   if (typeof document === "undefined") return;
-  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
-  if (!bg) return;
+  const color = getComputedStyle(document.documentElement).getPropertyValue("--status-bar-color").trim();
+  if (!color) return;
   const existing = document.querySelectorAll('meta[name="theme-color"]');
   existing.forEach((el, i) => { if (i > 0) el.remove(); });
   let meta = existing[0];
@@ -478,7 +479,7 @@ function syncStatusBarColor() {
     document.head.appendChild(meta);
   }
   meta.removeAttribute("media");
-  meta.setAttribute("content", bg);
+  meta.setAttribute("content", color);
 }
 
 // ─────────────────────────────────────────────
@@ -998,6 +999,18 @@ const injectStyles = () => {
       --muted:#5b6b7c;--muted-l:#90a0ae;
       --border:#dde4ea;--border-l:#eef2f5;
       --surface:#ffffff;--bg:#f4f7f9;
+      /* Dedicated status-bar/address-bar color -- deliberately NOT the same
+         as --bg. Chrome for Android currently has no reliable way to keep
+         an installed PWA's native status bar in sync with in-app theme
+         toggles at runtime (open Chromium bug, still unresolved as of
+         writing) -- rather than chase that, this is a fixed, on-brand
+         color chosen to look intentional either way: white in light theme
+         (matches the page, already correct), brand teal in dark theme
+         (same teal as the splash screen, not the near-black page --bg).
+         Read by syncStatusBarColor() in App.jsx and mirrored as static
+         hex values in index.html's preload script and in manifest.json's
+         theme_color -- keep all three in sync if this ever changes. */
+      --status-bar-color:#f4f7f9;
       /* iOS installs its status bar in "black-translucent" mode (see
          index.html), which always renders white/light status bar icons
          and can't be flipped per-theme at runtime -- that's a fixed
@@ -1028,6 +1041,7 @@ const injectStyles = () => {
       --muted:#7c8a99;--muted-l:#4f5d6c;
       --border:#263241;--border-l:#1c2733;
       --surface:#161f29;--bg:#0f161e;
+      --status-bar-color:#0e8f80;
       --status-bar-safe-bg:var(--bg);
       --teal:#14b8a6;--teal-d:#2dd4bf;--teal-dd:#0e8f80;
       --teal-l:#1b3d35;--teal-xl:#102621;--teal-rgb:20,184,166;
