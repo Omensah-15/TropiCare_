@@ -1342,11 +1342,12 @@ const injectStyles = () => {
     @media(max-width:480px){.al-hero{flex-direction:column;text-align:center;padding:22px 18px;}}
     .al-hero-text{flex:1;}
     .al-hero-illus{
-      flex-shrink:0;width:120px;height:120px;border-radius:50%;
+      flex-shrink:0;width:120px;height:120px;border-radius:50%;overflow:hidden;
       background:linear-gradient(150deg,var(--teal-l) 0%,var(--teal-xl) 100%);
       display:flex;align-items:center;justify-content:center;
       box-shadow:0 8px 20px rgba(var(--teal-rgb),0.15);
     }
+    .al-hero-illus img{width:100%;height:100%;object-fit:cover;display:block;}
     @media(max-width:480px){.al-hero-illus{width:92px;height:92px;}}
     .feat-list{display:flex;flex-direction:column;gap:0;}
     .feat-row{display:flex;align-items:flex-start;gap:14px;padding:14px 0;}
@@ -3618,7 +3619,7 @@ function WorkerCheck({ user, onStart, toast }) {
               Register a new patient here, then run the same guided assessment used for individual screenings.
             </div>
           </div>
-          <div className="al-hero-illus"><Icon name="stethoscope" size={52} color="var(--teal-d)" /></div>
+          <div className="al-hero-illus"><img src="/illustrations/health-professional.png" alt="" /></div>
         </div>
       </div>
       <div className="page-body" style={{ flex: 1 }}>
@@ -4317,7 +4318,7 @@ function AssessmentLanding({ onStart }) {
               Answer a short set of questions and receive a detailed assessment with personalised recommendations.
             </div>
           </div>
-          <div className="al-hero-illus"><Icon name="stethoscope" size={52} color="var(--teal-d)" /></div>
+          <div className="al-hero-illus"><img src="/illustrations/health-professional.png" alt="" /></div>
         </div>
       </div>
       <div className="page-body" style={{ flex: 1 }}>
