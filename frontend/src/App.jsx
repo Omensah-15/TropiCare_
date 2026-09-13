@@ -2401,7 +2401,7 @@ export default function App() {
             <div className="brand-mark"><MedicalHeartMark size={20} color="#fff" /></div>
             <div>
               <div className="brand-name">TropiCare</div>
-              <div className="brand-sub">Symptom Checker</div>
+              <div className="brand-sub">AI Consultation Platform</div>
             </div>
           </div>
           <nav className="sidebar-nav">
@@ -2986,7 +2986,7 @@ function AuthScreen({ onLogin, toast, initialResetToken, onResetTokenConsumed })
             </>
           )}
         </div>
-        <div className="auth-foot">TropiCare · Symptom Checker for Tropical Diseases</div>
+        <div className="auth-foot">TropiCare · AI Consultation Platform for Tropical Diseases</div>
       </div>
     </div>
   );
@@ -5252,7 +5252,7 @@ function ProfileScreen({ user, onLogout, onNav, toast, onUserUpdate }) {
           <Icon name="logout" size={15} color="#fff" /> Sign Out
         </button>
         <div className="text-c mt-4" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.7 }}>
-          TropiCare · Symptom Checker for Tropical Diseases
+          TropiCare · AI Consultation Platform for Tropical Diseases
         </div>
       </div>
     </div>
@@ -5734,7 +5734,7 @@ function AboutScreen({ onBack }) {
         </div>
 
         <div className="text-c" style={{ fontSize: 11, color: "var(--muted-l)", lineHeight: 1.8 }}>
-          TropiCare · Symptom Checker for Tropical Diseases<br />
+          TropiCare · AI Consultation Platform for Tropical Diseases<br />
           Kwame Nkrumah University of Science and Technology
         </div>
         <div style={{ height: 24 }} />
