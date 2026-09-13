@@ -441,6 +441,27 @@ function detectSystemFontScale() {
   return Number.isFinite(scale) ? Math.min(FS_MAX, Math.max(FS_MIN, scale)) : 1;
 }
 
+// Keeps the browser/PWA status bar (the <meta name="theme-color"> the OS
+// reads for the address bar, task-switcher card, and installed-app status
+// bar) matched to whichever theme is actually on screen, instead of the
+// fixed brand teal from manifest.json. It reads the *live* --bg value
+// straight off :root -- rather than duplicating the light/dark hex codes
+// here -- so it can never drift out of sync with the real theme CSS.
+// Called right after data-theme is set, so the CSS variable has already
+// resolved by the time getComputedStyle reads it.
+function syncStatusBarColor() {
+  if (typeof document === "undefined") return;
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+  if (!bg) return;
+  let meta = document.querySelector('meta[name="theme-color"]');
+  if (!meta) {
+    meta = document.createElement("meta");
+    meta.setAttribute("name", "theme-color");
+    document.head.appendChild(meta);
+  }
+  meta.setAttribute("content", bg);
+}
+
 // ─────────────────────────────────────────────
 // RISK HELPERS
 // ─────────────────────────────────────────────
@@ -1992,11 +2013,16 @@ export default function App() {
     if (theme === "system") {
       const mq = window.matchMedia("(prefers-color-scheme: dark)");
       root.setAttribute("data-theme", mq.matches ? "dark" : "light");
-      const handler = (e) => root.setAttribute("data-theme", e.matches ? "dark" : "light");
+      syncStatusBarColor();
+      const handler = (e) => {
+        root.setAttribute("data-theme", e.matches ? "dark" : "light");
+        syncStatusBarColor();
+      };
       mq.addEventListener("change", handler);
       return () => mq.removeEventListener("change", handler);
     }
     root.setAttribute("data-theme", theme);
+    syncStatusBarColor();
   }, [theme]);
 
   const handleThemeChange = useCallback((t) => setTheme(t), []);
