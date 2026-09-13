@@ -1341,8 +1341,13 @@ const injectStyles = () => {
     .al-hero{background:linear-gradient(150deg,var(--teal-xl) 0%,#e3f1fb 100%);border-radius:var(--radius-l);padding:28px 24px 24px;margin-bottom:16px;display:flex;gap:20px;align-items:center;border:1px solid var(--teal-l);}
     @media(max-width:480px){.al-hero{flex-direction:column;text-align:center;padding:22px 18px;}}
     .al-hero-text{flex:1;}
-    .al-hero-illus{flex-shrink:0;width:120px;height:140px;}
-    @media(max-width:480px){.al-hero-illus{width:96px;height:112px;}}
+    .al-hero-illus{
+      flex-shrink:0;width:120px;height:120px;border-radius:50%;
+      background:linear-gradient(150deg,var(--teal-l) 0%,var(--teal-xl) 100%);
+      display:flex;align-items:center;justify-content:center;
+      box-shadow:0 8px 20px rgba(var(--teal-rgb),0.15);
+    }
+    @media(max-width:480px){.al-hero-illus{width:92px;height:92px;}}
     .feat-list{display:flex;flex-direction:column;gap:0;}
     .feat-row{display:flex;align-items:flex-start;gap:14px;padding:14px 0;}
     .feat-row+.feat-row{border-top:1px solid var(--border);}
@@ -1555,38 +1560,6 @@ function MedicalHeartSplash() {
   );
 }
 
-function HealthProfessionalIllus({ width = 120, height = 140 }) {
-  return (
-    <svg width={width} height={height} viewBox="0 0 120 140" fill="none">
-      <circle cx="60" cy="70" r="58" fill="#e0f2f1"/>
-      <rect x="30" y="72" width="60" height="60" rx="18" fill="#ffffff"/>
-      <path d="M60 72 L45 80 L45 110 L60 104 L75 110 L75 80 Z" fill="#eefcfa" stroke="#b2dfdb" strokeWidth="1"/>
-      <path d="M48 82 Q44 90 44 98 Q44 106 52 106 Q60 106 60 98" stroke="#0c8a7e" strokeWidth="2.5" fill="none" strokeLinecap="round"/>
-      <circle cx="60" cy="99" r="5" fill="#0c8a7e"/>
-      <circle cx="60" cy="99" r="2.5" fill="#bdf0ea"/>
-      <line x1="48" y1="82" x2="42" y2="76" stroke="#0c8a7e" strokeWidth="2" strokeLinecap="round"/>
-      <circle cx="42" cy="75" r="2" fill="#0c8a7e"/>
-      <rect x="64" y="84" width="18" height="12" rx="3" fill="#e0f2f1" stroke="#b2dfdb" strokeWidth="1"/>
-      <rect x="66" y="86" width="10" height="2" rx="1" fill="#0c8a7e" opacity="0.6"/>
-      <rect x="53" y="58" width="14" height="18" rx="5" fill="#f5cba7"/>
-      <ellipse cx="60" cy="46" rx="22" ry="24" fill="#f5cba7"/>
-      <path d="M38 42 Q38 22 60 22 Q82 22 82 42 Q82 34 60 32 Q38 34 38 42 Z" fill="#4a3728"/>
-      <ellipse cx="52" cy="46" rx="3.5" ry="4" fill="#fff"/>
-      <ellipse cx="68" cy="46" rx="3.5" ry="4" fill="#fff"/>
-      <circle cx="53" cy="47" r="2" fill="#3d2b1f"/>
-      <circle cx="69" cy="47" r="2" fill="#3d2b1f"/>
-      <path d="M53 60 Q60 65 67 60" stroke="#c9785c" strokeWidth="1.5" strokeLinecap="round" fill="none"/>
-      <ellipse cx="38" cy="48" rx="4" ry="6" fill="#f5cba7"/>
-      <ellipse cx="82" cy="48" rx="4" ry="6" fill="#f5cba7"/>
-      <rect x="18" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#dde4ea" strokeWidth="1"/>
-      <rect x="88" y="75" width="14" height="40" rx="7" fill="#ffffff" stroke="#dde4ea" strokeWidth="1"/>
-      <ellipse cx="25" cy="118" rx="7" ry="6" fill="#f5cba7"/>
-      <ellipse cx="95" cy="118" rx="7" ry="6" fill="#f5cba7"/>
-      <rect x="56" y="88" width="8" height="2.5" rx="1.25" fill="#0c8a7e" opacity="0.8"/>
-      <rect x="58.75" y="85.25" width="2.5" height="8" rx="1.25" fill="#0c8a7e" opacity="0.8"/>
-    </svg>
-  );
-}
 
 const IllusGeneral = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
@@ -1737,6 +1710,7 @@ function Icon({ name, size = 18, color = "currentColor", className = "" }) {
     case "camera":    return <svg {...p}><path d="M23 19a2 2 0 01-2 2H3a2 2 0 01-2-2V8a2 2 0 012-2h4l2-3h6l2 3h4a2 2 0 012 2z"/><circle cx="12" cy="13" r="4"/></svg>;
     case "search":    return <svg {...p}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>;
     case "shield":    return <svg {...p}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>;
+    case "stethoscope": return <svg {...p}><path d="M4.5 3v6a4.5 4.5 0 009 0V3"/><path d="M9 13.5V16a6 6 0 006 6 6 6 0 006-6v-2"/><circle cx="21" cy="8" r="2"/><circle cx="6" cy="19" r="2.5"/></svg>;
     case "bell":      return <svg {...p}><path d="M18 8A6 6 0 006 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 01-3.46 0"/></svg>;
     case "globe":     return <svg {...p}><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 014 10 15.3 15.3 0 01-4 10 15.3 15.3 0 01-4-10 15.3 15.3 0 014-10z"/></svg>;
     case "database":  return <svg {...p}><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>;
@@ -3644,7 +3618,7 @@ function WorkerCheck({ user, onStart, toast }) {
               Register a new patient here, then run the same guided assessment used for individual screenings.
             </div>
           </div>
-          <div className="al-hero-illus"><HealthProfessionalIllus width={120} height={140} /></div>
+          <div className="al-hero-illus"><Icon name="stethoscope" size={52} color="var(--teal-d)" /></div>
         </div>
       </div>
       <div className="page-body" style={{ flex: 1 }}>
@@ -4343,7 +4317,7 @@ function AssessmentLanding({ onStart }) {
               Answer a short set of questions and receive a detailed assessment with personalised recommendations.
             </div>
           </div>
-          <div className="al-hero-illus"><HealthProfessionalIllus width={120} height={140} /></div>
+          <div className="al-hero-illus"><Icon name="stethoscope" size={52} color="var(--teal-d)" /></div>
         </div>
       </div>
       <div className="page-body" style={{ flex: 1 }}>
