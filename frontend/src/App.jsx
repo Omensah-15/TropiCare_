@@ -999,14 +999,15 @@ const injectStyles = () => {
       --muted:#5b6b7c;--muted-l:#90a0ae;
       --border:#dde4ea;--border-l:#eef2f5;
       --surface:#ffffff;--bg:#f4f7f9;
-      /* Dedicated status-bar/address-bar color -- deliberately NOT the same
-         as --bg. Chrome for Android currently has no reliable way to keep
-         an installed PWA's native status bar in sync with in-app theme
-         toggles at runtime (open Chromium bug, still unresolved as of
-         writing) -- rather than chase that, this is a fixed, on-brand
-         color chosen to look intentional either way: white in light theme
-         (matches the page, already correct), brand teal in dark theme
-         (same teal as the splash screen, not the near-black page --bg).
+      /* Dedicated status-bar/address-bar color -- deliberately its own
+         variable rather than an alias for --bg, even though it currently
+         matches it: Chrome for Android has no reliable way to keep an
+         installed PWA's native status bar in sync with in-app theme
+         toggles at runtime (open Chromium bug, unresolved as of writing),
+         so this is a fixed value chosen on its own merits -- neutral,
+         blends into the page -- rather than something that happens to
+         track --bg and would silently break that reasoning if --bg's
+         purpose ever changes.
          Read by syncStatusBarColor() in App.jsx and mirrored as static
          hex values in index.html's preload script and in manifest.json's
          theme_color -- keep all three in sync if this ever changes. */
@@ -1041,7 +1042,7 @@ const injectStyles = () => {
       --muted:#7c8a99;--muted-l:#4f5d6c;
       --border:#263241;--border-l:#1c2733;
       --surface:#161f29;--bg:#0f161e;
-      --status-bar-color:#0e8f80;
+      --status-bar-color:#0f161e;
       --status-bar-safe-bg:var(--bg);
       --teal:#14b8a6;--teal-d:#2dd4bf;--teal-dd:#0e8f80;
       --teal-l:#1b3d35;--teal-xl:#102621;--teal-rgb:20,184,166;
