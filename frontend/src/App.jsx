@@ -3171,7 +3171,7 @@ function OutbreakDetailScreen({ itemId, onBack }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0", position: "sticky", top: 0, zIndex: 20, background: "var(--bg)" }}>
         <button onClick={onBack} className="icon-btn"
           style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
@@ -3791,7 +3791,7 @@ function NewPatientForm({ onCancel, onCreated }) {
   return (
     <div>
       <div className="page-head">
-        <div className="form-narrow" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <div className="form-narrow" style={{ display: "flex", alignItems: "center", gap: 10, position: "sticky", top: 0, zIndex: 20, background: "var(--bg)" }}>
           <button onClick={onCancel} className="icon-btn"
             style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
             <Icon name="chevL" size={16} color="var(--ink)" />
@@ -3955,7 +3955,7 @@ function WorkerPatientDetail({ patientId, user, onBack, onStart, toast }) {
   // whether this patient has any history yet.
   const patientHeader = (
     <div className="page-head">
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4, position: "sticky", top: 0, zIndex: 20, background: "var(--bg)" }}>
         <button onClick={onBack} className="icon-btn"
           style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
@@ -4128,7 +4128,7 @@ function WorkerRecordDetail({ record, patient, workerName, onBack, previousAsses
   return (
     <div>
       {!hideHeader && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 20 }}>
           <button onClick={onBack} className="icon-btn"
             style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
             <Icon name="chevL" size={16} color="var(--ink)" />
@@ -4864,7 +4864,7 @@ function RecordDetail({ record, onBack, toast }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "16px 20px", background: "var(--surface)", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 20 }}>
         <button onClick={onBack} className="icon-btn"
           style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
@@ -5307,7 +5307,7 @@ function MyDataScreen({ onBack, toast }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0", position: "sticky", top: 0, zIndex: 20, background: "var(--bg)" }}>
         <button onClick={onBack} className="icon-btn"
           style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
@@ -5446,7 +5446,7 @@ function PrivacySecurityScreen({ onBack, toast, user, onLogout }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0", position: "sticky", top: 0, zIndex: 20, background: "var(--bg)" }}>
         <button onClick={onBack} className="icon-btn"
           style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
@@ -5647,7 +5647,7 @@ function AboutScreen({ onBack }) {
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0", position: "sticky", top: 0, zIndex: 20, background: "var(--bg)" }}>
         <button onClick={onBack} className="icon-btn"
           style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
@@ -5916,7 +5916,7 @@ function SettingsScreen({ onBack, toast, onThemeChange, currentTheme, focusSecti
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "20px 20px 0", position: "sticky", top: 0, zIndex: 20, background: "var(--bg)" }}>
         <button onClick={onBack} className="icon-btn"
           style={{ border: "none", background: "var(--border-l)", borderRadius: 8, padding: 8, cursor: "pointer", display: "flex" }}>
           <Icon name="chevL" size={16} color="var(--ink)" />
