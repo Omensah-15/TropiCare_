@@ -1236,9 +1236,13 @@ const injectStyles = () => {
     .avatar{width:38px;height:38px;border-radius:99px;background:var(--teal-xl);display:flex;align-items:center;justify-content:center;color:var(--teal-d);font-weight:700;font-size:14px;flex-shrink:0;border:1px solid var(--teal-l);}
     .avatar-lg{width:64px;height:64px;font-size:22px;background:linear-gradient(160deg,var(--teal-l),var(--teal-xl));box-shadow:var(--shadow-s);}
     .mx-auto{margin-left:auto;margin-right:auto;}
-    .splash{position:fixed;inset:0;background:linear-gradient(155deg,var(--teal-dd) 0%,#052e2a 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.45s ease;}
+    .splash{position:fixed;inset:0;background:linear-gradient(155deg,var(--teal-dd) 0%,#052e2a 100%);display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:9999;transition:opacity 0.45s ease;overflow:hidden;}
     .splash.fading{opacity:0;pointer-events:none;}
-    .splash-logo{width:76px;height:76px;background:rgba(255,255,255,0.12);border-radius:22px;display:flex;align-items:center;justify-content:center;margin-bottom:20px;border:1px solid rgba(255,255,255,0.18);animation:breathe 2.4s ease-in-out infinite;}
+    .splash-glow{position:absolute;width:320px;height:320px;border-radius:50%;background:radial-gradient(circle,rgba(255,255,255,0.14) 0%,transparent 68%);filter:blur(6px);pointer-events:none;animation:glow-pulse 3.2s ease-in-out infinite;}
+    @keyframes glow-pulse{0%,100%{opacity:0.7;transform:scale(1);}50%{opacity:1;transform:scale(1.08);}}
+    .splash-content{position:relative;display:flex;flex-direction:column;align-items:center;animation:splash-enter 0.7s cubic-bezier(.16,1,.3,1) both;}
+    @keyframes splash-enter{0%{opacity:0;transform:translateY(16px) scale(0.96);}100%{opacity:1;transform:translateY(0) scale(1);}}
+    .splash-logo{width:76px;height:76px;background:rgba(255,255,255,0.12);border-radius:22px;display:flex;align-items:center;justify-content:center;margin-bottom:20px;border:1px solid rgba(255,255,255,0.18);box-shadow:0 10px 32px rgba(0,0,0,0.28);animation:breathe 2.4s ease-in-out infinite;}
     @keyframes breathe{0%,100%{transform:scale(1);}50%{transform:scale(1.04);}}
     .splash-title{font-family:var(--display);font-size:38px;color:#fff;font-weight:700;letter-spacing:-0.5px;}
     @media(max-width:480px){.splash-title{font-size:30px;}}
@@ -2123,21 +2127,38 @@ export default function App() {
   }, []);
 
   // ── Restore session ──────────────────────
+  // The old version held the splash for a fixed 2.3s no matter what --
+  // pure padding, since the actual work below (reading localStorage) is
+  // synchronous and finishes in under a millisecond. That's what made it
+  // feel like stalling rather than a real loading state. This version
+  // does the real work immediately and only holds the splash for a small,
+  // deliberate MIN_SPLASH_MS -- long enough to read as an intentional
+  // brand moment instead of a flash, short enough to never feel like a
+  // wait. FADE_MS mirrors .splash's own `transition:opacity 0.45s ease`
+  // so setSplash(false) unmounts it exactly as the fade-out finishes,
+  // never a hair early (which would show a hard cut, not a fade).
   useEffect(() => {
-    const t1 = setTimeout(() => setSplashFade(true), 1900);
+    const MIN_SPLASH_MS = 550;
+    const FADE_MS = 450;
+    const start = Date.now();
+
+    const saved = Store.get(USER_KEY);
+    const token = localStorage.getItem(TOKEN_KEY);
+    let nextUser = null;
+    if (saved && token && saved.token === token) {
+      _loggingOut = false;
+      nextUser = saved;
+    } else {
+      Store.remove(USER_KEY);
+      localStorage.removeItem(TOKEN_KEY);
+    }
+
+    const remaining = Math.max(MIN_SPLASH_MS - (Date.now() - start), 0);
+    const t1 = setTimeout(() => setSplashFade(true), remaining);
     const t2 = setTimeout(() => {
       setSplash(false);
-      const saved = Store.get(USER_KEY);
-      const token = localStorage.getItem(TOKEN_KEY);
-      if (saved && token && saved.token === token) {
-        _loggingOut = false;
-        setUser(saved);
-      } else {
-        Store.remove(USER_KEY);
-        localStorage.removeItem(TOKEN_KEY);
-        setUser(null);
-      }
-    }, 2300);
+      setUser(nextUser);
+    }, remaining + FADE_MS);
     return () => { clearTimeout(t1); clearTimeout(t2); };
   }, []);
 
@@ -2408,11 +2429,14 @@ export default function App() {
     if (splash) {
       return (
         <div className={`splash${splashFade ? " fading" : ""}`}>
-          <div className="splash-logo"><MedicalHeartSplash /></div>
-          <div className="splash-title">TropiCare</div>
-          <div className="splash-sub">Guided Clinical Assessment</div>
-          <div className="splash-dots">
-            <div className="splash-dot" /><div className="splash-dot" /><div className="splash-dot" />
+          <div className="splash-glow" aria-hidden="true" />
+          <div className="splash-content">
+            <div className="splash-logo"><MedicalHeartSplash /></div>
+            <div className="splash-title">TropiCare</div>
+            <div className="splash-sub">Guided Clinical Assessment</div>
+            <div className="splash-dots">
+              <div className="splash-dot" /><div className="splash-dot" /><div className="splash-dot" />
+            </div>
           </div>
         </div>
       );
