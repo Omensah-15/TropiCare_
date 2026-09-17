@@ -222,17 +222,19 @@ function animateMarkerTo(marker, toLatLng, duration = 650) {
 // ─────────────────────────────────────────────
 // API
 //
-// The backend races 3 upstream mirrors with an 18s internal budget and its
-// own app-wide request timeout sits at 30s, returning a 504 if that budget
-// is exceeded. This client-side fetch is given a matching timeout — long
+// The backend searches Geoapify progressively — a tight radius first, only
+// widening (up to 3 tiers) if that tight radius doesn't have enough
+// facilities — with a worst-case internal budget of ~18s, and its own
+// app-wide request timeout sits at 30s, returning a 504 if that budget is
+// exceeded. This client-side fetch is given a matching timeout — long
 // enough to never cut off a request the backend would have finished, short
 // enough to fail fast if the network itself is the problem — plus a small
 // bounded retry for the specific failure modes that are transient (network
-// blips, 5xx, and the backend's own 504) so a single bad mirror or a brief
-// connectivity hiccup self-heals instead of surfacing as an error the
-// person has to notice and tap through.
+// blips, 5xx, and the backend's own 504) so a brief connectivity hiccup
+// self-heals instead of surfacing as an error the person has to notice and
+// tap through.
 // ─────────────────────────────────────────────
-const FETCH_TIMEOUT_MS = 25000;   // stays above the backend's 18s clinic budget, below its 30s hard cutoff
+const FETCH_TIMEOUT_MS = 25000;   // stays above the backend's ~18s worst-case clinic budget, below its 30s hard cutoff
 const FETCH_MAX_RETRIES = 2;      // total of 3 attempts
 const FETCH_RETRY_BASE_MS = 1200; // backoff: ~1.2s, then ~2.4s
 
