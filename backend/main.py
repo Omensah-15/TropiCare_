@@ -1822,6 +1822,20 @@ def build_recommendation(disease: str, risk: str, ai_result: Optional[dict]) -> 
 # written to the live Redis cache, so the very next request still tries
 # the live API first and switches back automatically the moment it
 # succeeds.
+#
+# FIX (nearest-first correctness): the very first Geoapify version queried
+# every category in one combined request over one flat 15km circle. That
+# silently broke "nearest first" in practice two ways: (a) Geoapify's
+# `limit` caps the whole response rather than each category, so a
+# pharmacy-dense area could fill the entire result budget with pharmacies
+# and never even retrieve a genuinely closer hospital or clinic; and (b)
+# searching one flat 15km circle up front meant a facility 200m away and
+# one 14km away were pulled into the same candidate pool as if both were
+# equally "nearby". _fetch_geoapify_features below now queries each
+# category separately (so none can crowd another out) and searches a
+# tight radius first, only widening it if that tight radius doesn't have
+# enough facilities — the same "close first, far only if needed" behaviour
+# Uber and Google Maps use.
 # -----------------------------------------------------------------
 
 GEOAPIFY_PLACES_URL = "https://api.geoapify.com/v2/places"
@@ -1831,15 +1845,37 @@ GEOAPIFY_PLACES_URL = "https://api.geoapify.com/v2/places"
 # healthcare.dentist is mapped onto the app's "Doctor's Office" label too,
 # since the app has no dedicated "Dentist" type — see
 # _classify_geoapify_facility below.
-GEOAPIFY_CATEGORIES = "healthcare.hospital,healthcare.clinic_or_praxis,healthcare.pharmacy,healthcare.dentist"
+#
+# Queried ONE CATEGORY PER REQUEST (see _fetch_geoapify_category below)
+# rather than as one combined comma-joined string. Geoapify's `limit`
+# parameter caps the WHOLE response, not each category individually, so a
+# single combined request in a pharmacy-dense area could fill its entire
+# result budget with pharmacies and never even retrieve a hospital that was
+# genuinely closer — silently dropping the actual nearest facility out of
+# consideration before distance-ranking ever runs. Querying each category
+# on its own guarantees every category gets a fair, independent shot at the
+# closest matches.
+GEOAPIFY_CATEGORIES = [
+    "healthcare.hospital",
+    "healthcare.clinic_or_praxis",
+    "healthcare.pharmacy",
+    "healthcare.dentist",
+]
 
-CLINIC_SEARCH_RADIUS_M   = 15000   # every facility type is searched over the same radius, so nothing
-                                    # genuinely close to the user is ever silently excluded
-CLINIC_FETCH_LIMIT       = 40      # over-fetch beyond CLINIC_RESULTS_LIMIT so ranking-by-distance has a
-                                    # real pool spanning every category to pick the nearest facilities
-                                    # from, instead of just whatever page the API happened to return first
-CLINIC_SOURCE_TIMEOUT_S  = 8       # a single authenticated call now — no per-mirror racing budget needed
-                                    # — stays comfortably under the 30s app-wide request timeout
+# Uber/Google-Maps-style PROGRESSIVE radius search: try a tight radius
+# first, and only widen it if that tight radius doesn't turn up enough
+# facilities. This is what makes "nearest first" actually true end to end —
+# a single flat 15km search circle can return a facility 200m away and one
+# 14km away side by side as if both were equally "nearby"; searching close
+# first and expanding only when needed means the wide radius is never even
+# consulted unless the person genuinely has nothing closer.
+CLINIC_RADIUS_TIERS_M = [3000, 7000, 15000]
+
+CLINIC_FETCH_LIMIT_PER_CATEGORY = 20   # per category, per radius tier searched — see GEOAPIFY_CATEGORIES above
+CLINIC_SOURCE_TIMEOUT_S  = 6       # per individual category request; worst case is 3 radius tiers run in
+                                    # sequence (each tier's 4 categories run concurrently), so the true
+                                    # worst-case network budget is 3 x 6s = 18s, comfortably under both the
+                                    # frontend's fetch timeout and the app-wide 30s request timeout
 CLINIC_CACHE_TTL_S       = 21600   # 6 hours, unchanged
 CLINIC_RESULTS_LIMIT     = 15      # "genuinely nearby, combined across every category"
 
@@ -1963,66 +1999,124 @@ def _classify_geoapify_facility(properties: dict) -> str:
     return "Health Facility"
 
 
+async def _fetch_geoapify_category(
+    session: aiohttp.ClientSession, category: str, lat: float, lon: float, radius_m: int
+) -> List[dict]:
+    """
+    Single Geoapify Places call scoped to ONE category and ONE radius tier.
+    Returns raw GeoJSON features for that category, or an empty list on any
+    failure — one category (or one tier) failing must never take the whole
+    search down; the other categories/tiers still get a result.
+    """
+    params = {
+        "categories": category,
+        "filter": f"circle:{lon},{lat},{radius_m}",
+        "bias": f"proximity:{lon},{lat}",
+        "limit": str(CLINIC_FETCH_LIMIT_PER_CATEGORY),
+        "apiKey": settings.geoapify_api_key,
+    }
+    try:
+        async with session.get(
+            GEOAPIFY_PLACES_URL,
+            params=params,
+            timeout=aiohttp.ClientTimeout(total=CLINIC_SOURCE_TIMEOUT_S),
+        ) as resp:
+            if resp.status != 200:
+                body_snippet = (await resp.text())[:300]
+                CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason=f"http_{resp.status}").inc()
+                logger.warning({
+                    "event": "geoapify_error",
+                    "reason": f"http_{resp.status}",
+                    "status": resp.status,
+                    "category": category, "radius_m": radius_m,
+                    "lat": lat, "lon": lon,
+                    "body": body_snippet,
+                })
+                return []
+            data = await resp.json()
+            return data.get("features", [])
+    except asyncio.TimeoutError:
+        CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="timeout").inc()
+        logger.warning({
+            "event": "geoapify_error", "reason": "timeout",
+            "category": category, "radius_m": radius_m, "lat": lat, "lon": lon,
+        })
+        return []
+    except Exception as e:
+        CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="error").inc()
+        logger.warning({
+            "event": "geoapify_error", "reason": "error", "error": str(e),
+            "category": category, "radius_m": radius_m, "lat": lat, "lon": lon,
+        })
+        return []
+
+
 async def _fetch_geoapify_features(lat: float, lon: float) -> List[dict]:
     """
-    Single call to Geoapify Places — replaces the old multi-mirror Overpass
-    race entirely (see HISTORY above). No IPv4 forcing, no per-mirror
-    timeout budget, no User-Agent spoofing needed: Geoapify is a normal
-    key-authenticated HTTPS API, so one aiohttp call with one timeout is
-    all this needs. Returns raw GeoJSON features (or an empty list on any
-    failure) — extraction into the app's place shape happens separately in
-    _extract_geoapify_places, mirroring the old two-step fetch/extract
-    pattern.
+    Progressive, per-category fetch from Geoapify Places — replaces the old
+    single combined-category call (see HISTORY above for why Overpass was
+    dropped in favour of Geoapify in the first place). Two changes from that
+    original single-call version, both aimed at the same problem: the old
+    version could rank a facility as "nearby" without it actually being the
+    closest thing available.
+
+      1. PER-CATEGORY REQUESTS (see GEOAPIFY_CATEGORIES above). Run
+         concurrently per radius tier so this costs no extra wall-clock time
+         over a single combined call.
+
+      2. PROGRESSIVE RADIUS (see CLINIC_RADIUS_TIERS_M above). Starts at a
+         tight 3km circle; only widens to 7km, then 15km, if the tighter
+         radius didn't turn up at least CLINIC_RESULTS_LIMIT facilities.
+         Exactly like Uber/Google Maps: look close first, and only look
+         further away if there's genuinely nothing closer.
+
+    Returns raw GeoJSON features from whichever radius tier satisfied the
+    search (or the widest tier's results if none fully did) — deduping and
+    shaping into the app's place format happens downstream in
+    _extract_geoapify_places, unchanged.
     """
     if not settings.geoapify_api_key:
         CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="missing_api_key").inc()
         logger.warning({"event": "geoapify_error", "reason": "missing_api_key", "lat": lat, "lon": lon})
         return []
 
-    params = {
-        "categories": GEOAPIFY_CATEGORIES,
-        "filter": f"circle:{lon},{lat},{CLINIC_SEARCH_RADIUS_M}",
-        "bias": f"proximity:{lon},{lat}",
-        "limit": str(CLINIC_FETCH_LIMIT),
-        "apiKey": settings.geoapify_api_key,
-    }
+    features: List[dict] = []
+    async with aiohttp.ClientSession() as session:
+        for radius_m in CLINIC_RADIUS_TIERS_M:
+            per_category_results = await asyncio.gather(
+                *(
+                    _fetch_geoapify_category(session, category, lat, lon, radius_m)
+                    for category in GEOAPIFY_CATEGORIES
+                ),
+                return_exceptions=True,
+            )
+            tier_features: List[dict] = []
+            for result in per_category_results:
+                if isinstance(result, list):
+                    tier_features.extend(result)
 
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                GEOAPIFY_PLACES_URL,
-                params=params,
-                timeout=aiohttp.ClientTimeout(total=CLINIC_SOURCE_TIMEOUT_S),
-            ) as resp:
-                if resp.status != 200:
-                    body_snippet = (await resp.text())[:300]
-                    CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason=f"http_{resp.status}").inc()
-                    logger.warning({
-                        "event": "geoapify_error",
-                        "reason": f"http_{resp.status}",
-                        "status": resp.status,
-                        "lat": lat, "lon": lon,
-                        "body": body_snippet,
-                    })
-                    return []
+            # A wider tier's circle fully contains every narrower tier's
+            # circle, so its per-category results are effectively a superset
+            # (each category call is itself proximity-biased and returns the
+            # closest matches first up to its own limit) — replace rather
+            # than merge, which keeps this simple and avoids re-processing
+            # duplicates. Fall back to whatever the previous tier found if
+            # this wider tier's calls all happened to fail, rather than
+            # discarding a perfectly good narrower-radius result.
+            if tier_features:
+                features = tier_features
 
-                data = await resp.json()
-                features = data.get("features", [])
-                if not features:
-                    # A genuinely empty result for this area is not an
-                    # error — no separate geoapify_error log for this case,
-                    # same nuance the old Overpass code applied to a
-                    # remark-free empty response.
-                    CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="empty").inc()
-                return features
-    except asyncio.TimeoutError:
-        CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="timeout").inc()
-        logger.warning({"event": "geoapify_error", "reason": "timeout", "lat": lat, "lon": lon})
-        return []
-    except Exception as e:
-        CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="error").inc()
-        logger.warning({"event": "geoapify_error", "reason": "error", "error": str(e), "lat": lat, "lon": lon})
-        return []
+            if len(tier_features) >= CLINIC_RESULTS_LIMIT or radius_m == CLINIC_RADIUS_TIERS_M[-1]:
+                break
+
+    if not features:
+        # A genuinely empty result even at the widest tier is not an error —
+        # no separate geoapify_error log for this case, same nuance the
+        # original single-call version applied to a remark-free empty
+        # response.
+        CLINIC_SOURCE_ERRORS.labels(source="geoapify", reason="empty").inc()
+
+    return features
 
 
 def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -2097,10 +2191,10 @@ def _rank_places_by_distance(
     and sorts by it. Called on every request — cache hit or miss — so
     "nearest" is always correct for wherever the person actually is right
     now, never a stale distance from whatever coordinates first populated
-    the cache. Both hospitals and local facilities are now fetched over the
-    same radius (see FIX #2 above), so ranking is purely by actual
-    distance — exactly like Google Maps / Uber do — with no category ever
-    silently excluded from consideration.
+    the cache. This is the final, authoritative ordering step — regardless
+    of which radius tier or category a place was actually found at (see
+    _fetch_geoapify_features above), every candidate is ranked here purely
+    by its real distance from the user, exactly like Google Maps / Uber do.
     """
     ranked = [
         {**p, "distance_km": round(_haversine_km(user_lat, user_lon, p["lat"], p["lon"]), 2)}
@@ -4371,11 +4465,12 @@ async def clinics_nearby(
     if not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
         raise HTTPException(status_code=400, detail="Invalid coordinates")
 
-    # Cache key bumped to v4: the underlying data source changed from
-    # Overpass to Geoapify, so any entries written under the old v3
-    # key/logic must never be served — they were generated by a different
-    # provider with different place IDs and coverage.
-    cache_key = f"clinics:elements:v4:{round(lat, 2)}:{round(lon, 2)}"
+    # Cache key bumped to v5: the fetch strategy changed from one combined
+    # flat-15km call to a progressive, per-category search (see
+    # _fetch_geoapify_features above), so any v4 entries — built from the
+    # old strategy's candidate pool, which could miss a genuinely closer
+    # facility that lost out to a crowded category — must never be served.
+    cache_key = f"clinics:elements:v5:{round(lat, 2)}:{round(lon, 2)}"
     cached = await cache_get(cache_key, key_type="clinics")
 
     raw_places: Optional[List[dict]] = None
