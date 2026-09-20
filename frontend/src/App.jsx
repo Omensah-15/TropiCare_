@@ -1453,6 +1453,13 @@ const injectStyles = () => {
     .q-illus{width:160px;height:160px;margin-bottom:24px;}
     @media(max-width:480px){.q-illus{width:128px;height:128px;margin-bottom:18px;}}
     .q-illus-svg{width:100%;height:100%;}
+    .illus-photo{
+      width:100%;height:100%;border-radius:50%;overflow:hidden;
+      background:linear-gradient(150deg,var(--teal-l) 0%,var(--teal-xl) 100%);
+      display:flex;align-items:center;justify-content:center;
+      box-shadow:0 6px 16px rgba(var(--teal-rgb),0.15);
+    }
+    .illus-photo img{width:100%;height:100%;object-fit:cover;display:block;user-select:none;}
     .q-text{font-family:var(--display);font-size:calc(22px * var(--fs-scale,1));font-weight:700;color:var(--ink);text-align:center;line-height:1.35;margin-bottom:32px;max-width:320px;}
     @media(max-width:480px){.q-text{font-size:calc(19px * var(--fs-scale,1));margin-bottom:24px;}}
     .q-answers{display:flex;flex-direction:column;gap:10px;width:100%;max-width:340px;}
@@ -1641,6 +1648,10 @@ function MedicalHeartSplash() {
 }
 
 
+// Served from public/illustrations/ -- one source of truth so the Check hero
+// and every doctor illustration stay on the same asset.
+const HEALTH_PRO_ILLUS = "/illustrations/health-professional.png";
+
 const IllusGeneral = () => (
   <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
     <circle cx="100" cy="100" r="90" fill="#fdecec"/>
@@ -1723,19 +1734,14 @@ const IllusAnalysis = () => (
   </svg>
 );
 
+// The same health-professional photo used on the Check hero, reused wherever
+// a doctor figure is needed. It fills whatever box the parent gives it, so the
+// existing 56px / 80px empty states and the 160px question slot all work
+// unchanged.
 const IllusDoctor = () => (
-  <svg viewBox="0 0 200 200" fill="none" className="q-illus-svg">
-    <circle cx="100" cy="100" r="90" fill="#eefcfa"/>
-    <ellipse cx="100" cy="158" rx="42" ry="28" fill="#0c8a7e"/>
-    <circle cx="100" cy="72" r="28" fill="#fde8d8"/>
-    <rect x="72" y="96" width="56" height="62" rx="20" fill="#0c8a7e"/>
-    <circle cx="88" cy="68" r="4" fill="#5b3a29"/>
-    <circle cx="112" cy="68" r="4" fill="#5b3a29"/>
-    <path d="M90 83 Q100 91 110 83" stroke="#5b3a29" strokeWidth="2" fill="none" strokeLinecap="round"/>
-    <rect x="91" y="116" width="18" height="4" rx="2" fill="#fff"/>
-    <rect x="98" y="109" width="4" height="18" rx="2" fill="#fff"/>
-    <ellipse cx="100" cy="44" rx="30" ry="20" fill="#1a2a3c"/>
-  </svg>
+  <div className="illus-photo">
+    <img src={HEALTH_PRO_ILLUS} alt="" aria-hidden="true" draggable={false} />
+  </div>
 );
 
 const CATEGORY_ILLUS = {
@@ -3724,7 +3730,7 @@ function WorkerCheck({ user, onStart, toast }) {
               Register a new patient here, then run the same guided assessment used for individual screenings.
             </div>
           </div>
-          <div className="al-hero-illus"><img src="/illustrations/health-professional.png" alt="" /></div>
+          <div className="al-hero-illus"><img src={HEALTH_PRO_ILLUS} alt="" /></div>
         </div>
       </div>
       <div className="page-body" style={{ flex: 1 }}>
@@ -4423,7 +4429,7 @@ function AssessmentLanding({ onStart }) {
               Answer a short set of questions and receive a detailed assessment with personalised recommendations.
             </div>
           </div>
-          <div className="al-hero-illus"><img src="/illustrations/health-professional.png" alt="" /></div>
+          <div className="al-hero-illus"><img src={HEALTH_PRO_ILLUS} alt="" /></div>
         </div>
       </div>
       <div className="page-body" style={{ flex: 1 }}>
