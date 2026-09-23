@@ -3704,7 +3704,7 @@ function WorkerCheck({ user, onStart, toast }) {
   const features = [
     { icon: "user",     title: "Register a Patient", desc: "Add the patient's name and basic details in a few seconds.",              color: "var(--teal)",   bg: "var(--teal-xl)"  },
     { icon: "shield",   title: "Confirm Consent",     desc: "Every patient's consent is recorded before their first assessment begins.", color: "var(--blue)",   bg: "var(--blue-l)"   },
-    { icon: "activity", title: "Guided Assessment",   desc: "The same adaptive, up-to-15-question assessment used for individual checks.",color: "var(--purple)", bg: "var(--purple-l)" },
+    { icon: "activity", title: "Guided Assessment",   desc: "Adaptive assessment of up to 15 questions to evaluate their symptoms.",color: "var(--purple)", bg: "var(--purple-l)" },
   ];
 
   return (
@@ -3758,13 +3758,6 @@ function WorkerCheck({ user, onStart, toast }) {
 
 // ─────────────────────────────────────────────
 // WORKER RECORDS (Records tab)
-// The full, browsable patient roster -- search plus risk-tier filter
-// chips, mirroring RecordsScreen's pattern for individual users but
-// scoped to patient.latest_risk instead of an assessment's own risk.
-// This is the only place a worker selects an existing patient, whether
-// to review their history or start a new assessment for them -- the
-// Check tab handles brand-new patients only, so patient selection is
-// not duplicated between the two tabs.
 // ─────────────────────────────────────────────
 function WorkerRecords({ user, onStart, onNav, toast }) {
   const { patients, loading, error, reload } = useWorkerPatients();
