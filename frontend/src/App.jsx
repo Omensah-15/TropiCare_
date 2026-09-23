@@ -3727,7 +3727,7 @@ function WorkerCheck({ user, onStart, toast }) {
               Start a check for a new patient
             </div>
             <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.6, marginBottom: 16 }}>
-              Register a new patient here, then run the same guided assessment used for individual screenings.
+              Register a new patient, then begin a guided assessment to screen the patient for potential health risks.
             </div>
           </div>
           <div className="al-hero-illus"><img src={HEALTH_PRO_ILLUS} alt="" /></div>
