@@ -3542,10 +3542,6 @@ function WorkerPatientRow({ patient, onClick }) {
 
 // ─────────────────────────────────────────────
 // WORKER DASHBOARD (Home tab)
-// A snapshot, not the full roster: quick stats, the highest-risk /
-// most-recently-screened patients, and fast paths into registering a
-// patient or starting a new check. The full patient list lives on the
-// Records tab (WorkerRecords) instead of being duplicated here.
 // ─────────────────────────────────────────────
 function WorkerDashboard({ user, onStart, onNav, toast }) {
   const { patients, loading, error, reload } = useWorkerPatients();
@@ -3689,10 +3685,6 @@ function WorkerDashboard({ user, onStart, onNav, toast }) {
 
 // ─────────────────────────────────────────────
 // WORKER CHECK (Check tab)
-// Exists to answer one question fast -- "who am I screening right now."
-// No dashboard framing: search or register a patient, then go straight
-// into the assessment for them. Tapping a row starts their assessment
-// directly rather than opening their history.
 // ─────────────────────────────────────────────
 function WorkerCheck({ user, onStart, toast }) {
   const [view, setView] = useState("intro"); // "intro" | "new"
