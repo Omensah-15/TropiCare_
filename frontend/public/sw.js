@@ -142,16 +142,25 @@ self.addEventListener("pushsubscriptionchange", (event) => {
 });
 
 // Service workers can't touch localStorage directly -- ask an open client.
+// Tries every open tab/window in turn (not just the first) until one
+// responds with a token: the first client in the list is whichever tab
+// happened to open first, and has no guarantee of being logged in --
+// querying only it meant a device could silently fail to re-register on
+// pushsubscriptionchange whenever that particular tab was signed out,
+// even though another open tab on the same device had a valid session.
 async function getStoredToken() {
   const allClients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-  if (allClients.length === 0) return null;
-  return new Promise((resolve) => {
-    const channel = new MessageChannel();
-    const timeout = setTimeout(() => resolve(null), 1500);
-    channel.port1.onmessage = (e) => {
-      clearTimeout(timeout);
-      resolve(e.data || null);
-    };
-    allClients[0].postMessage({ type: "TC_GET_TOKEN" }, [channel.port2]);
-  });
+  for (const client of allClients) {
+    const token = await new Promise((resolve) => {
+      const channel = new MessageChannel();
+      const timeout = setTimeout(() => resolve(null), 1500);
+      channel.port1.onmessage = (e) => {
+        clearTimeout(timeout);
+        resolve(e.data || null);
+      };
+      client.postMessage({ type: "TC_GET_TOKEN" }, [channel.port2]);
+    });
+    if (token) return token;
+  }
+  return null;
 }
